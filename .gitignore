@@ -34,3 +34,12 @@ ssh-debug.out
 
 __pycache__/
 *.pyc
+
+# Desktop build
+dist/
+build/
+*.spec.bak
+
+# Bundled binaries (sing-box etc.)
+tools/*
+!tools/.gitkeep

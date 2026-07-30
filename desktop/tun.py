@@ -1,0 +1,455 @@
+"""TUN-over-SOCKS via sing-box (Windows / Linux)."""
+
+from __future__ import annotations
+
+import json
+import os
+import platform
+import shutil
+import socket
+import subprocess
+import sys
+import tarfile
+import time
+import urllib.request
+import zipfile
+from pathlib import Path
+from typing import Any, Callable
+
+from desktop import procutil
+
+LogFn = Callable[[str], None]
+
+SING_BOX_VERSION = "1.11.15"
+
+
+def _noop(msg: str) -> None:
+    pass
+
+
+def _resolve_host(host: str) -> str | None:
+    host = (host or "").strip()
+    if not host:
+        return None
+    try:
+        socket.inet_aton(host)
+        return host
+    except OSError:
+        pass
+    try:
+        return socket.gethostbyname(host)
+    except OSError:
+        return None
+
+
+def _arch_tag() -> str:
+    m = platform.machine().lower()
+    if m in ("x86_64", "amd64"):
+        return "amd64"
+    if m in ("aarch64", "arm64"):
+        return "arm64"
+    return "amd64"
+
+
+class TunManager:
+    """Start/stop sing-box TUN that forwards into an existing local SOCKS5."""
+
+    def __init__(self, var_dir: Path, tools_dir: Path, logs_dir: Path, log: LogFn = _noop) -> None:
+        self.var_dir = var_dir
+        self.tools_dir = tools_dir
+        self.log = log
+        self.config_path = var_dir / "sing-box-tun.json"
+        self.pid_path = var_dir / "sing-box.pid"
+        self.log_path = logs_dir / "sing-box.log"
+
+    def _bin_name(self) -> str:
+        return "sing-box.exe" if sys.platform == "win32" else "sing-box"
+
+    def find_sing_box(self, explicit: str = "") -> Path | None:
+        candidates: list[Path] = []
+        if explicit:
+            candidates.append(Path(explicit))
+        env = (os.environ.get("SING_BOX_PATH") or "").strip()
+        if env:
+            candidates.append(Path(env))
+        name = self._bin_name()
+        candidates.append(self.tools_dir / name)
+        candidates.append(self.tools_dir / "sing-box" / name)
+        # Also accept either name in tools/
+        candidates.append(self.tools_dir / "sing-box.exe")
+        candidates.append(self.tools_dir / "sing-box")
+        which = shutil.which("sing-box") or shutil.which("sing-box.exe")
+        if which:
+            candidates.append(Path(which))
+        for c in candidates:
+            if c.is_file() and os.access(c, os.X_OK if sys.platform != "win32" else os.F_OK):
+                return c.resolve()
+            if c.is_file():
+                return c.resolve()
+        return None
+
+    def build_config(
+        self,
+        *,
+        socks_host: str,
+        socks_port: int,
+        exclude_ips: list[str],
+    ) -> dict[str, Any]:
+        route_exclude = [
+            "10.0.0.0/8",
+            "172.16.0.0/12",
+            "192.168.0.0/16",
+            "127.0.0.0/8",
+            "169.254.0.0/16",
+            "224.0.0.0/4",
+        ]
+        proc_names = [
+            "sing-box",
+            "sing-box.exe",
+            "ssh",
+            "ssh.exe",
+            "OpsContent.exe",
+            "python",
+            "python3",
+            "python.exe",
+            "pythonw.exe",
+        ]
+        rules: list[dict[str, Any]] = [
+            {"ip_is_private": True, "outbound": "direct"},
+            {"process_name": proc_names, "outbound": "direct"},
+        ]
+        ips = [ip for ip in exclude_ips if ip]
+        if ips:
+            rules.insert(0, {"ip_cidr": [f"{ip}/32" for ip in ips], "outbound": "direct"})
+
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        return {
+            "log": {
+                "level": "info",
+                "timestamp": True,
+                "output": str(self.log_path).replace("\\", "/"),
+            },
+            "dns": {
+                "servers": [
+                    {"tag": "dns-proxy", "address": "8.8.8.8", "detour": "socks-out"},
+                    {"tag": "dns-local", "address": "local", "detour": "direct"},
+                ],
+                "final": "dns-proxy",
+                "strategy": "prefer_ipv4",
+            },
+            "inbounds": [
+                {
+                    "type": "tun",
+                    "tag": "tun-in",
+                    "interface_name": "ops-content-tun",
+                    "address": ["172.19.0.1/30"],
+                    "mtu": 1500,
+                    "auto_route": True,
+                    "strict_route": False,
+                    "stack": "system",
+                    "sniff": True,
+                    "route_exclude_address": route_exclude,
+                }
+            ],
+            "outbounds": [
+                {
+                    "type": "socks",
+                    "tag": "socks-out",
+                    "server": socks_host,
+                    "server_port": int(socks_port),
+                    "version": "5",
+                },
+                {"type": "direct", "tag": "direct"},
+                {"type": "block", "tag": "block"},
+            ],
+            "route": {
+                "auto_detect_interface": True,
+                "final": "socks-out",
+                "rules": rules,
+            },
+        }
+
+    def running(self) -> bool:
+        return self.pid() is not None
+
+    def pid(self) -> int | None:
+        if self.pid_path.is_file():
+            try:
+                pid = int(self.pid_path.read_text(encoding="utf-8").strip())
+            except ValueError:
+                pid = None
+            if pid and procutil.pid_alive(pid):
+                return pid
+        found = self._find_sing_box_pid()
+        if found:
+            self.pid_path.write_text(str(found), encoding="utf-8")
+            return found
+        return None
+
+    def start(
+        self,
+        *,
+        socks_port: int,
+        corporate_proxy: str,
+        ssh_host: str,
+        sing_box_path: str = "",
+        elevate: bool = True,
+    ) -> None:
+        if self.running():
+            self.log(f"TUN already running (pid={self.pid()})")
+            return
+
+        exe = self.find_sing_box(sing_box_path)
+        if not exe:
+            raise RuntimeError(
+                "sing-box не найден. Положите бинарник в tools/ "
+                "или выполните: ops-content download-sing-box"
+            )
+
+        try:
+            with socket.create_connection(("127.0.0.1", int(socks_port)), timeout=1.0):
+                pass
+        except OSError as exc:
+            raise RuntimeError(
+                f"SOCKS 127.0.0.1:{socks_port} недоступен — сначала включите туннель"
+            ) from exc
+
+        exclude: list[str] = []
+        corp = (corporate_proxy or "").replace("http://", "").replace("https://", "").split(":")[0]
+        for h in (corp, ssh_host):
+            ip = _resolve_host(h)
+            if ip:
+                exclude.append(ip)
+
+        cfg = self.build_config(
+            socks_host="127.0.0.1",
+            socks_port=int(socks_port),
+            exclude_ips=exclude,
+        )
+        self.var_dir.mkdir(parents=True, exist_ok=True)
+        self.config_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+
+        self.log(f"Starting TUN (sing-box) → socks5://127.0.0.1:{socks_port}")
+        if elevate:
+            self.log("Нужны права администратора для виртуального адаптера")
+
+        pid = self._launch(exe, elevate=elevate)
+        if pid:
+            self.pid_path.write_text(str(pid), encoding="utf-8")
+
+        for _ in range(40):
+            time.sleep(0.25)
+            if self.running() or self._tun_iface_present():
+                if not self.running():
+                    found = self._find_sing_box_pid()
+                    if found:
+                        self.pid_path.write_text(str(found), encoding="utf-8")
+                self.log("TUN активен (система → SOCKS → VPS)")
+                return
+        raise RuntimeError(
+            "sing-box не поднял TUN. Нужен admin/sudo (или TUN_ELEVATE=1). "
+            f"См. logs/sing-box.log. exe={exe}"
+        )
+
+    def stop(self) -> None:
+        pid = self.pid()
+        if pid:
+            procutil.kill_pid(pid)
+            self.log(f"sing-box pid={pid} stopped")
+        # Best-effort cleanup of our config process
+        if sys.platform == "win32":
+            procutil.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    "Get-CimInstance Win32_Process -Filter \"Name='sing-box.exe'\" | "
+                    "Where-Object { $_.CommandLine -like '*sing-box-tun.json*' } | "
+                    "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
+                ]
+            )
+        else:
+            procutil.run(["pkill", "-f", "sing-box-tun.json"])
+        self.pid_path.unlink(missing_ok=True)
+        self.log("TUN выключен")
+
+    def _launch(self, exe: Path, *, elevate: bool) -> int | None:
+        args = [str(exe), "run", "-c", str(self.config_path)]
+        if sys.platform == "win32" and elevate:
+            return self._start_elevated_win(exe, self.config_path)
+
+        if sys.platform != "win32" and elevate and hasattr(os, "geteuid") and os.geteuid() != 0:
+            return self._start_elevated_linux(args)
+
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_f = open(self.log_path, "a", encoding="utf-8")  # noqa: SIM115
+        proc = subprocess.Popen(
+            args,
+            stdin=subprocess.DEVNULL,
+            stdout=log_f,
+            stderr=subprocess.STDOUT,
+            creationflags=procutil.creationflags(),
+        )
+        return proc.pid
+
+    def _start_elevated_win(self, exe: Path, config: Path) -> int | None:
+        import ctypes
+
+        params = f'run -c "{config}"'
+        rc = int(
+            ctypes.windll.shell32.ShellExecuteW(  # type: ignore[attr-defined]
+                None, "runas", str(exe), params, str(exe.parent), 0
+            )
+        )
+        if rc <= 32:
+            raise RuntimeError(
+                f"Не удалось запустить sing-box с UAC (код {rc}). "
+                "Запустите от администратора или TUN_ELEVATE=0 от admin-сессии."
+            )
+        time.sleep(1.0)
+        return self._find_sing_box_pid()
+
+    def _start_elevated_linux(self, args: list[str]) -> int | None:
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_f = open(self.log_path, "a", encoding="utf-8")  # noqa: SIM115
+        for wrapper in (
+            ["pkexec", *args],
+            ["sudo", "-n", *args],
+            ["sudo", *args],
+        ):
+            try:
+                proc = subprocess.Popen(
+                    wrapper,
+                    stdin=subprocess.DEVNULL,
+                    stdout=log_f,
+                    stderr=subprocess.STDOUT,
+                )
+                time.sleep(0.5)
+                if proc.poll() is None or self._find_sing_box_pid():
+                    self.log(f"TUN via {wrapper[0]}")
+                    return proc.pid if proc.poll() is None else self._find_sing_box_pid()
+            except FileNotFoundError:
+                continue
+        raise RuntimeError(
+            "Не удалось запустить sing-box с правами root (pkexec/sudo). "
+            "Установите polkit или выполните: sudo ops-content tun-on"
+        )
+
+    def _find_sing_box_pid(self) -> int | None:
+        if sys.platform == "win32":
+            r = procutil.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    "Get-CimInstance Win32_Process -Filter \"Name='sing-box.exe'\" | "
+                    "Where-Object { $_.CommandLine -like '*sing-box-tun.json*' } | "
+                    "Select-Object -ExpandProperty ProcessId",
+                ]
+            )
+            for line in (r.stdout or "").splitlines():
+                line = line.strip()
+                if line.isdigit():
+                    return int(line)
+            return None
+        r = procutil.run(["pgrep", "-f", "sing-box-tun.json"])
+        for line in (r.stdout or "").splitlines():
+            line = line.strip()
+            if line.isdigit():
+                return int(line)
+        return None
+
+    def _tun_iface_present(self) -> bool:
+        if sys.platform == "win32":
+            r = procutil.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-Command",
+                    "(Get-NetAdapter -ErrorAction SilentlyContinue | "
+                    "Where-Object { $_.Name -like '*ops-content*' -or $_.InterfaceDescription -like '*Wintun*' }).Count",
+                ]
+            )
+            try:
+                return int((r.stdout or "0").strip() or "0") > 0
+            except ValueError:
+                return False
+        r = procutil.run(["ip", "link", "show", "ops-content-tun"])
+        return r.returncode == 0
+
+    def ensure_downloaded(self, proxy_url: str | None = None) -> Path:
+        """Download sing-box for current OS/arch into tools/."""
+        existing = self.find_sing_box()
+        if existing:
+            return existing
+        self.tools_dir.mkdir(parents=True, exist_ok=True)
+        ver = SING_BOX_VERSION
+        arch = _arch_tag()
+        if sys.platform == "win32":
+            asset = f"sing-box-{ver}-windows-{arch}.zip"
+            url = f"https://github.com/SagerNet/sing-box/releases/download/v{ver}/{asset}"
+            archive = self.tools_dir / asset
+            target = self.tools_dir / "sing-box.exe"
+            self.log(f"Downloading {asset}…")
+            self._download_file(url, archive, proxy_url=proxy_url)
+            with zipfile.ZipFile(archive, "r") as zf:
+                for name in zf.namelist():
+                    if name.endswith("sing-box.exe"):
+                        with zf.open(name) as src, open(target, "wb") as dst:
+                            shutil.copyfileobj(src, dst)
+                        break
+                else:
+                    raise RuntimeError("sing-box.exe not found in zip")
+            archive.unlink(missing_ok=True)
+        else:
+            asset = f"sing-box-{ver}-linux-{arch}.tar.gz"
+            url = f"https://github.com/SagerNet/sing-box/releases/download/v{ver}/{asset}"
+            archive = self.tools_dir / asset
+            target = self.tools_dir / "sing-box"
+            self.log(f"Downloading {asset}…")
+            self._download_file(url, archive, proxy_url=proxy_url)
+            with tarfile.open(archive, "r:gz") as tf:
+                member = next(
+                    (
+                        m
+                        for m in tf.getmembers()
+                        if m.name.endswith("/sing-box") or m.name == "sing-box"
+                    ),
+                    None,
+                )
+                if not member:
+                    raise RuntimeError("sing-box not found in tar.gz")
+                f = tf.extractfile(member)
+                if not f:
+                    raise RuntimeError("cannot extract sing-box")
+                with open(target, "wb") as dst:
+                    shutil.copyfileobj(f, dst)
+            target.chmod(0o755)
+            archive.unlink(missing_ok=True)
+        self.log(f"sing-box → {target}")
+        return target
+
+    def _download_file(self, url: str, dest: Path, *, proxy_url: str | None = None) -> None:
+        curl = shutil.which("curl.exe") or shutil.which("curl")
+        if curl:
+            args = [curl, "-fsSL", "--connect-timeout", "30", "--max-time", "180", "-o", str(dest), url]
+            if sys.platform == "win32":
+                args.insert(1, "--ssl-no-revoke")
+            if proxy_url:
+                args[1:1] = ["--proxy", proxy_url]
+            else:
+                try:
+                    with socket.create_connection(("127.0.0.1", 1080), timeout=0.3):
+                        args[1:1] = ["--proxy", "socks5h://127.0.0.1:1080"]
+                except OSError:
+                    pass
+            r = procutil.run(args, timeout=200)
+            if r.returncode == 0 and dest.is_file() and dest.stat().st_size > 1000:
+                return
+            self.log(f"curl download failed (exit={r.returncode})")
+        handlers = []
+        if proxy_url:
+            handlers.append(urllib.request.ProxyHandler({"http": proxy_url, "https": proxy_url}))
+        opener = urllib.request.build_opener(*handlers)
+        with opener.open(url, timeout=120) as resp, open(dest, "wb") as out:  # noqa: S310
+            shutil.copyfileobj(resp, out)
