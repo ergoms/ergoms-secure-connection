@@ -1,0 +1,36 @@
+# Live site config (keep local)
+config.json
+
+# Tooling
+.tools/
+node_modules/
+package-lock.json
+package.json
+
+# Secrets
+creds/*
+!creds/.gitkeep
+!creds/certs/
+creds/certs/*
+!creds/certs/.gitkeep
+
+# Logs
+logs/*
+!logs/.gitkeep
+
+# Runtime state
+var/*
+!var/.gitkeep
+
+# Legacy root leftovers (if any)
+.env
+.cf_token
+.deno_token
+.netlify_token
+.netlify_site_id
+.ops-content.*
+ssh-debug.log
+ssh-debug.out
+
+__pycache__/
+*.pyc
