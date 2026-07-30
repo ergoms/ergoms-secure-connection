@@ -27,5 +27,8 @@
     "*.local",
     "*.lan"
   ],
-  "proxy_bypass_via": "direct"
+  "proxy_bypass_via": "direct",
+  "tun": {
+    "sing_box_path": ""
+  }
 }

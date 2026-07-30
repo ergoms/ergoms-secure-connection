@@ -30,6 +30,55 @@ bash modes/vps/bootstrap_sshd_443.sh
 
 ---
 
+## Десктопное приложение (Windows EXE)
+
+Полный клиент с окном и иконкой в трее — без вызова `ops-content.ps1`. Нужны системные `ssh`, `git`, `curl` (как и для скрипта).
+
+Сборка:
+
+```powershell
+cd c:\projects\ops-content
+.\build-desktop.ps1
+```
+
+Результат: `dist\OpsContent.exe`. Запуск двойным щелчком или:
+
+```powershell
+.\dist\OpsContent.exe
+```
+
+Рядом с exe (или в корне репозитория при запуске из исходников) должны лежать `config.json`, `.env`, ключ SSH. При первом старте GUI создаст файлы из образцов, если их ещё нет.
+
+В трее: Включить / Выключить / Открыть / Выход. Закрытие окна сворачивает в трей; полный выход — через меню трея.
+
+Служебные режимы того же exe:
+
+```text
+OpsContent.exe connect HOST PORT
+OpsContent.exe on|off|status|probe|tun-on|tun-off|download-sing-box …
+```
+
+Разработка без сборки: `python -m desktop` (нужны `pip install -r requirements-desktop.txt`).
+
+### TUN (как VPN поверх SOCKS)
+
+Управляется из `.env` и `config.json` (GUI → Настройки тоже пишет туда же).
+
+| Файл | Ключи |
+|------|--------|
+| `.env` | `TUN=0\|1` — автоподъём TUN после `on`; `TUN_ELEVATE=0\|1` — UAC; кнопки TUN вкл/выкл пишут `TUN` |
+| `config.json` | `tun.sing_box_path` — путь к `sing-box.exe` (пусто = `tools/sing-box.exe`) |
+
+Когда SSH-туннель уже поднят (SOCKS `127.0.0.1:1080`):
+
+1. **Скачать sing-box** или положить exe в `tools\` / указать `tun.sing_box_path`.
+2. Либо **TUN вкл** в GUI, либо `TUN=1` в `.env` и обычное **Включить** — TUN поднимется сам (UAC).
+3. **TUN выкл** → процесс стоп + `TUN=0` в `.env`.
+
+Частные сети, Squid и VPS в TUN не заворачиваются, чтобы не зациклить SSH.
+
+---
+
 ## Быстрый старт на Windows
 
 ```powershell
@@ -113,10 +162,13 @@ SOCKS_SCOPE=full
 
 Клиент и выкладка на сервер:
 
-| Система | Клиент | Выкладка HTTPS-посредника на сервер |
-|---------|--------|-------------------------------------|
-| Windows | `.\ops-content.ps1` | `.\deploy.ps1` |
-| Linux | `./ops-content.sh` | `./deploy.sh` |
+| Система | Клиент (один и тот же Python-бэкенд) | Выкладка |
+|---------|--------------------------------------|----------|
+| Windows | `.\ops-content.ps1 <cmd>` или `OpsContent.exe <cmd>` / GUI | `.\deploy.ps1` |
+| Linux | `./ops-content.sh <cmd>` или `python -m desktop <cmd>` | `./deploy.sh` |
+| Любая | `python -m desktop on\|off\|status\|tun-on\|…` | |
+
+Команды `on` / `off` / `status` / `probe` / `tun-on` / `tun-off` и т.д. одинаковы везде; `.env` и `config.json` общие.
 
 ---
 
@@ -158,19 +210,29 @@ SOCKS_SCOPE=full
 
 ## Команды клиента
 
-На Windows: `.\ops-content.ps1 <команда>`. На Linux: `./ops-content.sh <команда>`.
+Одинаково на Windows и Linux (и через EXE):
+
+```text
+python -m desktop <команда>
+./ops-content.sh <команда>          # Linux-обёртка
+.\ops-content.ps1 <команда>         # Windows-обёртка
+OpsContent.exe <команда>            # Windows EXE
+```
 
 | Команда | Смысл |
 |---------|--------|
 | `init` | Создать рабочие файлы из образцов |
-| `on` / `off` | Включить или выключить режим из `MODE` |
-| `start` / `stop` | То же для SSH-туннеля |
+| `on` / `off` | Включить или выключить режим из `MODE` (+ `TUN=1` → TUN) |
+| `start` / `stop` | Только SSH-туннель |
 | `probe ХОСТ [ПОРТ]` | Проверить CONNECT через Squid |
 | `status` | Текущее состояние |
 | `test` | Простая проверка обхода |
 | `relay-on` / `relay-off` | Только HTTPS-посредник для git (`MODE=vps`) |
-| `install-service` / `uninstall-service` | Служба пользователя на Linux |
-| `deploy` | Выкладка посредника на сервер (режим `vps`) |
+| `tun-on` / `tun-off` | TUN поверх SOCKS (sing-box; Windows UAC / Linux sudo) |
+| `download-sing-box` | Скачать sing-box в `tools/` |
+| `gui` | Окно (нужен дисплей) |
+| `install-service` / `uninstall-service` | Служба пользователя на Linux (только `.sh`) |
+| `deploy` | Выкладка посредника на сервер |
 | `help` | Краткая справка |
 
 ---
@@ -222,7 +284,9 @@ OPS_CONTENT_SECRET=тот_же_секрет_что_на_сервере
 ops-content/
 ├── .env                  режим работы (локально)
 ├── config.json           рабочие параметры (локально)
-├── ops-content.ps1/.sh   клиент
+├── ops-content.ps1/.sh   клиент (CLI)
+├── build-desktop.ps1     сборка Windows EXE
+├── desktop/              GUI-клиент (Python → OpsContent.exe)
 ├── deploy.ps1/.sh        выкладка на сервер
 ├── config/               образцы настроек
 ├── creds/                ключи и known_hosts (локально)
