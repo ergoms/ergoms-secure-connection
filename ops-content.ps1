@@ -410,6 +410,55 @@ function Disable-BrowserProxy {
     Restore-WinProxy
 }
 
+function Write-CliEnv([int]$HttpPort) {
+    # gh / curl / many CLIs ignore git http.proxy — need process env
+    $proxy = "http://127.0.0.1:$HttpPort"
+    $noproxy = 'localhost,127.0.0.1,::1'
+    Ensure-DataDirs
+    @(
+        "# ops-content CLI proxy (bash / Git Bash): source ./var/cli.env"
+        "export HTTP_PROXY=$proxy"
+        "export HTTPS_PROXY=$proxy"
+        "export http_proxy=$proxy"
+        "export https_proxy=$proxy"
+        "export ALL_PROXY=$proxy"
+        "export NO_PROXY=$noproxy"
+        "export no_proxy=$noproxy"
+    ) -join "`n" | Set-Content -Path $EnvExportPath -Encoding UTF8
+
+    $ps1 = Join-Path $VarDir 'cli.ps1'
+    @(
+        '# ops-content CLI proxy (PowerShell): . .\var\cli.ps1'
+        "`$env:HTTP_PROXY = '$proxy'"
+        "`$env:HTTPS_PROXY = '$proxy'"
+        "`$env:http_proxy = '$proxy'"
+        "`$env:https_proxy = '$proxy'"
+        "`$env:ALL_PROXY = '$proxy'"
+        "`$env:NO_PROXY = '$noproxy'"
+        "`$env:no_proxy = '$noproxy'"
+    ) -join "`r`n" | Set-Content -Path $ps1 -Encoding UTF8
+
+    # Current PowerShell session (so gh works right after on)
+    $env:HTTP_PROXY = $proxy
+    $env:HTTPS_PROXY = $proxy
+    $env:http_proxy = $proxy
+    $env:https_proxy = $proxy
+    $env:ALL_PROXY = $proxy
+    $env:NO_PROXY = $noproxy
+    $env:no_proxy = $noproxy
+}
+
+function Clear-CliEnvProxy {
+    Remove-Item -Path $EnvExportPath -ErrorAction SilentlyContinue
+    Remove-Item -Path (Join-Path $VarDir 'cli.ps1') -ErrorAction SilentlyContinue
+    foreach ($name in @('HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy', 'ALL_PROXY')) {
+        $cur = [Environment]::GetEnvironmentVariable($name, 'Process')
+        if ($cur -and $cur -match '127\.0\.0\.1:(1088|8877)') {
+            Remove-Item -Path "Env:$name" -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Set-GitSocks([object]$cfg) {
     # GCM (.NET) rejects socks5h:// — use local HTTP CONNECT bridge instead.
     $httpPort = Start-HttpBridge $cfg
@@ -418,13 +467,16 @@ function Set-GitSocks([object]$cfg) {
     git config --global http.proxy $proxy
     git config --global https.proxy $proxy
     git config --global credential.https://github.com.provider generic 2>$null
+    Write-CliEnv $httpPort
     Write-Ok "git http(s).proxy = $proxy (via SOCKS $($cfg.ssh.local_socks_port), scope=$(Get-SocksScope))"
+    Write-Info 'CLI (gh/curl): already set in this session; new shells: . .\var\cli.ps1'
     Enable-BrowserProxy $cfg
 }
 
 function Clear-GitProxy {
     git config --global --unset http.proxy 2>$null
     git config --global --unset https.proxy 2>$null
+    Clear-CliEnvProxy
 }
 
 function Clear-InsteadOf {
