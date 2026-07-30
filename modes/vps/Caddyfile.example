@@ -1,0 +1,25 @@
+# Пример для VPS. Замените домен. Запуск: caddy run --config Caddyfile
+#
+# ВАЖНО: sshd на :443 и Caddy на :443 на одном IP несовместимы.
+# Варианты: второй IP, sslh/SNI-мультиплексор, либо только туннель (socks),
+# либо только HTTPS-релей (этот файл) без sshd:443.
+#
+# На сервере задайте тот же секрет, что и в корневом .env клиента:
+#   export OPS_CONTENT_SECRET='длинная_случайная_строка'
+#   python3 github_proxy.py --port 8080
+#
+# Клиент при relay-on подставит заголовок X-Ops-Content-Token.
+
+git-proxy.example.com {
+	# Только HTTPS снаружи; приложение слушает loopback
+	encode zstd gzip
+	header {
+		-Server
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+	}
+	reverse_proxy 127.0.0.1:8080 {
+		# не пробрасывать лишнее
+		header_up Host {host}
+	}
+}

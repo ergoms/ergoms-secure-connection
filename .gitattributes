@@ -1,0 +1,9 @@
+# Keep Unix line endings for scripts run on Linux
+*.sh   text eol=lf
+*.bash text eol=lf
+*.py   text eol=lf
+
+# Windows helpers may stay CRLF-friendly for editors, but normalize on commit
+*.ps1  text eol=crlf
+*.bat  text eol=crlf
+*.cmd  text eol=crlf

@@ -1,0 +1,31 @@
+{
+  "corporate_proxy": "192.0.2.10:3128",
+  "ssh": {
+    "host": "YOUR_VPS_IP_OR_HOSTNAME",
+    "user": "root",
+    "port": 443,
+    "identity_file": "",
+    "local_socks_port": 1080
+  },
+  "worker_base_url": "",
+  "blocked_hosts": [
+    "github.com",
+    "www.github.com",
+    "api.github.com",
+    "codeload.github.com",
+    "ssh.github.com",
+    "gist.github.com",
+    "ghcr.io",
+    "objects.githubusercontent.com",
+    "raw.githubusercontent.com",
+    "github.githubassets.com",
+    "avatars.githubusercontent.com",
+    "packages.github.com"
+  ],
+  "proxy_bypass": [
+    "*.intranet.example",
+    "*.local",
+    "*.lan"
+  ],
+  "proxy_bypass_via": "direct"
+}
