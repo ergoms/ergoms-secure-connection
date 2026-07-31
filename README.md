@@ -34,20 +34,24 @@ bash modes/vps/bootstrap_sshd_443.sh
 
 Полный клиент с окном и иконкой в трее — без вызова `ops-content.ps1`. Нужны системные `ssh`, `git`, `curl` (как и для скрипта).
 
-Сборка:
+### Установщик (рекомендуется)
 
 ```powershell
 cd c:\projects\ops-content
+.\build-installer.ps1
+```
+
+Нужен [Inno Setup](https://jrsoftware.org/isinfo.php) 6+ (скрипт при отсутствии поставит через winget). Результат: `dist\OpsContent-Setup-1.0.0.exe`.
+
+Установка кладёт программу в `Program Files\ops-content`, ярлыки в меню Пуск; рабочие файлы (`config.json`, `.env`, ключи, логи, `tools\`) — в `%LOCALAPPDATA%\ops-content`.
+
+### Portable EXE
+
+```powershell
 .\build-desktop.ps1
 ```
 
-Результат: `dist\OpsContent.exe`. Запуск двойным щелчком или:
-
-```powershell
-.\dist\OpsContent.exe
-```
-
-Рядом с exe (или в корне репозитория при запуске из исходников) должны лежать `config.json`, `.env`, ключ SSH. При первом старте GUI создаст файлы из образцов, если их ещё нет.
+Результат: `dist\OpsContent.exe`. Рядом с exe (или в корне репозитория при запуске из исходников) должны лежать `config.json`, `.env`, ключ SSH. При первом старте GUI создаст файлы из образцов, если их ещё нет.
 
 В трее: Включить / Выключить / Открыть / Выход. Закрытие окна сворачивает в трей; полный выход — через меню трея.
 

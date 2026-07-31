@@ -568,13 +568,17 @@ class OpsClient:
             except Exception:  # noqa: BLE001
                 pass
 
-    def status(self) -> dict[str, Any]:
+    def status(self, *, include_git: bool = True) -> dict[str, Any]:
+        """Snapshot of tunnel state.
+
+        include_git=False skips spawning `git config` (faster for GUI polling).
+        """
         self.reload_env()
         info: dict[str, Any] = {
             "mode": get_mode(),
             "socks_scope": get_socks_scope() if get_mode() == "socks" else "",
-            "git_http_proxy": git_get("http.proxy"),
-            "git_https_proxy": git_get("https.proxy"),
+            "git_http_proxy": "",
+            "git_https_proxy": "",
             "ssh_running": False,
             "ssh_pid": None,
             "bridge_running": False,
@@ -593,8 +597,11 @@ class OpsClient:
         if info["mode"] == "socks":
             lines.append(f"SOCKS_SCOPE       = {info['socks_scope']}")
         lines.append(f"TUN (.env)        = {1 if info['tun_env'] else 0}")
-        lines.append(f"git http.proxy  = {info['git_http_proxy']}")
-        lines.append(f"git https.proxy = {info['git_https_proxy']}")
+        if include_git:
+            info["git_http_proxy"] = git_get("http.proxy")
+            info["git_https_proxy"] = git_get("https.proxy")
+            lines.append(f"git http.proxy  = {info['git_http_proxy']}")
+            lines.append(f"git https.proxy = {info['git_https_proxy']}")
 
         if self.paths.ssh_pid.is_file():
             try:

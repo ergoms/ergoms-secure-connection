@@ -1,7 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 # PyInstaller spec for OpsContent.exe — run from repo root via build-desktop.ps1
 
-import sys
 from pathlib import Path
 
 block_cipher = None
@@ -11,6 +10,7 @@ datas = [
     (str(ROOT / "config" / "config.example.json"), "config"),
     (str(ROOT / "config" / ".env.example"), "config"),
     (str(ROOT / "desktop" / "app_icon.ico"), "desktop"),
+    (str(ROOT / "lib" / "connect_proxy.py"), "lib"),
 ]
 
 hiddenimports = [
@@ -39,7 +39,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=["customtkinter", "darkdetect"],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,

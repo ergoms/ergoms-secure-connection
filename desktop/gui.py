@@ -1,4 +1,4 @@
-"""Tkinter GUI + system tray for ops-content."""
+"""Lightweight tkinter VPN-style GUI + system tray for ops-content."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Any, Callable
 
+from desktop import __version__
 from desktop.client import OpsClient
 from desktop.config_io import (
     apply_dotenv,
@@ -21,13 +22,172 @@ from desktop.config_io import (
 from desktop.paths import Paths, bundle_dir
 
 
-BG = "#1e1e1e"
-BG2 = "#2a2a2a"
-FG = "#e8e8e8"
-MUTED = "#9a9a9a"
-ACCENT = "#3d7a5a"
-DANGER = "#8b4a4a"
-OK = "#5a9a6a"
+C_BG = "#10141a"
+C_SURFACE = "#1a2030"
+C_SURFACE2 = "#252d3d"
+C_BTN = "#343e52"
+C_BTN_HOVER = "#44506a"
+C_BORDER = "#7a869c"
+C_TEXT = "#f2f4f8"
+C_MUTED = "#9aa3b5"
+C_ACCENT = "#2dd4a8"
+C_ACCENT_DIM = "#1a9e7a"
+C_DANGER = "#f07178"
+C_WARN = "#e6c07b"
+C_OK = "#2dd4a8"
+C_SELECT = "#1f6b55"
+
+WIN_W = 400
+WIN_H = 640
+
+# UI labels → stored values
+CHOICES: dict[str, list[tuple[str, str]]] = {
+    "MODE": [("Туннель", "socks"), ("VPS", "vps")],
+    "SOCKS_SCOPE": [("Всё", "full"), ("Только GitHub", "github")],
+    "TUN": [("Выкл", "0"), ("Вкл", "1")],
+    "TUN_ELEVATE": [("Нет", "0"), ("Да", "1")],
+    "proxy_bypass_via": [("Напрямую", "direct"), ("Через Squid", "corporate")],
+}
+
+
+def _bind_clipboard(widget: tk.Widget) -> None:
+    """Make Ctrl+C/V/X/A work reliably on Windows (incl. Russian layout)."""
+
+    def _copy(_event: tk.Event | None = None) -> str | None:
+        try:
+            if isinstance(widget, (tk.Entry, ttk.Entry)):
+                if widget.selection_present():
+                    widget.clipboard_clear()
+                    widget.clipboard_append(widget.selection_get())
+            elif isinstance(widget, tk.Text):
+                widget.clipboard_clear()
+                widget.clipboard_append(widget.get("sel.first", "sel.last"))
+        except tk.TclError:
+            pass
+        return "break"
+
+    def _cut(event: tk.Event | None = None) -> str | None:
+        _copy(event)
+        try:
+            if isinstance(widget, (tk.Entry, ttk.Entry)):
+                if widget.selection_present():
+                    widget.delete("sel.first", "sel.last")
+            elif isinstance(widget, tk.Text):
+                widget.delete("sel.first", "sel.last")
+        except tk.TclError:
+            pass
+        return "break"
+
+    def _paste(_event: tk.Event | None = None) -> str | None:
+        try:
+            data = widget.clipboard_get()
+        except tk.TclError:
+            return "break"
+        try:
+            if isinstance(widget, (tk.Entry, ttk.Entry)):
+                try:
+                    if widget.selection_present():
+                        widget.delete("sel.first", "sel.last")
+                except tk.TclError:
+                    pass
+                widget.insert("insert", data)
+            elif isinstance(widget, tk.Text):
+                try:
+                    widget.delete("sel.first", "sel.last")
+                except tk.TclError:
+                    pass
+                widget.insert("insert", data)
+        except tk.TclError:
+            pass
+        return "break"
+
+    def _select_all(_event: tk.Event | None = None) -> str | None:
+        try:
+            if isinstance(widget, (tk.Entry, ttk.Entry)):
+                widget.selection_range(0, "end")
+                widget.icursor("end")
+            elif isinstance(widget, tk.Text):
+                widget.tag_add("sel", "1.0", "end-1c")
+        except tk.TclError:
+            pass
+        return "break"
+
+    for seq, fn in (
+        ("<Control-c>", _copy),
+        ("<Control-C>", _copy),
+        ("<<Copy>>", _copy),
+        ("<Control-x>", _cut),
+        ("<Control-X>", _cut),
+        ("<<Cut>>", _cut),
+        ("<Control-v>", _paste),
+        ("<Control-V>", _paste),
+        ("<<Paste>>", _paste),
+        ("<Control-a>", _select_all),
+        ("<Control-A>", _select_all),
+        # Russian layout: same physical keys
+        ("<Control-KeyPress>", None),
+    ):
+        if fn is not None:
+            widget.bind(seq, fn)
+
+    def _ru_keys(event: tk.Event) -> str | None:
+        # Cyrillic counterparts of c/v/x/a on Russian keyboard
+        key = (event.keysym or "").lower()
+        char = event.char or ""
+        if key in ("c",) or char in ("с", "С"):
+            return _copy(event)
+        if key in ("v",) or char in ("м", "М"):
+            return _paste(event)
+        if key in ("x",) or char in ("ч", "Ч"):
+            return _cut(event)
+        if key in ("a",) or char in ("ф", "Ф"):
+            return _select_all(event)
+        return None
+
+    widget.bind("<Control-KeyPress>", _ru_keys)
+
+
+class Segment(tk.Frame):
+    """Two/three option toggle — no dropdowns."""
+
+    def __init__(
+        self,
+        master: tk.Misc,
+        choices: list[tuple[str, str]],
+        variable: tk.StringVar,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(master, bg=C_SURFACE2, highlightthickness=0, **kwargs)
+        self._var = variable
+        self._choices = choices
+        self._btns: list[tk.Label] = []
+        for i, (label, value) in enumerate(choices):
+            lbl = tk.Label(
+                self,
+                text=label,
+                bg=C_BTN,
+                fg=C_TEXT,
+                font=("Segoe UI", 10, "bold"),
+                padx=10,
+                pady=8,
+                cursor="hand2",
+            )
+            lbl.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0 if i == 0 else 1, 0))
+            lbl.bind("<Button-1>", lambda _e, v=value: self._pick(v))
+            self._btns.append(lbl)
+        self._var.trace_add("write", lambda *_: self._paint())
+        self._paint()
+
+    def _pick(self, value: str) -> None:
+        self._var.set(value)
+
+    def _paint(self) -> None:
+        cur = self._var.get()
+        for lbl, (_label, value) in zip(self._btns, self._choices):
+            if value == cur:
+                lbl.configure(bg=C_SELECT, fg=C_TEXT)
+            else:
+                lbl.configure(bg=C_BTN, fg=C_MUTED)
 
 
 class App:
@@ -37,32 +197,61 @@ class App:
         apply_dotenv(self.paths.env_path)
         self.log_q: queue.Queue[str] = queue.Queue()
         self.client = OpsClient(paths=self.paths, log=self._enqueue_log)
+
         self._busy = False
         self._tray = None
         self._tray_thread: threading.Thread | None = None
         self._closing = False
+        self._active = False
+        self._tun = False
+        self._page = "home"
+        self._last_status_sig = ""
+        self._status_busy = False
+        self._pulse_job: str | None = None
+        self._pulse_on = False
+        self._pages: dict[str, tk.Frame] = {}
+        self._nav: dict[str, tk.Label] = {}
 
         self.root = tk.Tk()
         self.root.title("ops-content")
-        self.root.geometry("720x560")
-        self.root.minsize(560, 420)
-        self.root.configure(bg=BG)
-        # Same backend as CLI (Linux/Windows); GUI is only a front-end
-        self._enqueue_log(f"platform={sys.platform} — команды те же, что у CLI/EXE")
+        self.root.geometry(f"{WIN_W}x{WIN_H}")
+        self.root.minsize(WIN_W, WIN_H)
+        self.root.maxsize(WIN_W, WIN_H)
+        self.root.resizable(False, False)
+        self.root.configure(bg=C_BG)
+        self.root.option_add("*Font", "{Segoe UI} 10")
+        self._disable_maximize()
         self._set_icon()
         self._style()
         self._build()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
-        self.root.after(200, self._drain_log)
-        self.root.after(500, self._refresh_status)
-        self.root.after(800, self._start_tray)
-        # Ensure config exists
+
+        self._enqueue_log(f"ops-content {__version__}")
+        self._enqueue_log(f"данные: {self.paths.root}")
+
         if not self.paths.config_path.is_file() or not self.paths.env_path.is_file():
             try:
                 self.client.init()
-                self._enqueue_log("Инициализация: созданы config.json / .env при необходимости")
+                self._enqueue_log("Созданы config.json и .env")
             except Exception as exc:  # noqa: BLE001
-                self._enqueue_log(f"init: {exc}")
+                self._enqueue_log(f"инициализация: {exc}")
+
+        self.root.after(150, self._drain_log)
+        self.root.after(300, self._refresh_status)
+        self.root.after(700, self._start_tray)
+
+    def _disable_maximize(self) -> None:
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+
+            self.root.update_idletasks()
+            hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
+            style = ctypes.windll.user32.GetWindowLongW(hwnd, -16)
+            ctypes.windll.user32.SetWindowLongW(hwnd, -16, style & ~0x00010000)
+        except Exception:
+            pass
 
     def _set_icon(self) -> None:
         ico = Path(__file__).with_name("app_icon.ico")
@@ -80,89 +269,236 @@ class App:
             style.theme_use("clam")
         except tk.TclError:
             pass
-        style.configure(".", background=BG, foreground=FG, fieldbackground=BG2)
-        style.configure("TFrame", background=BG)
-        style.configure("TLabel", background=BG, foreground=FG)
-        style.configure("TNotebook", background=BG)
-        style.configure("TNotebook.Tab", background=BG2, foreground=FG, padding=[10, 4])
-        style.map("TNotebook.Tab", background=[("selected", "#3a3a3a")])
-        style.configure("TButton", background=BG2, foreground=FG, padding=6)
-        style.map("TButton", background=[("active", "#3a3a3a")])
-        style.configure("TEntry", fieldbackground=BG2, foreground=FG)
-        style.configure("TCombobox", fieldbackground=BG2, foreground=FG)
-        style.configure("Status.TLabel", font=("Segoe UI", 11, "bold"))
+        style.configure("TScrollbar", background=C_BTN, troughcolor=C_BG, bordercolor=C_BG, arrowcolor=C_TEXT)
+        style.map("TScrollbar", background=[("active", C_BORDER)])
+
+    # ── chrome ──────────────────────────────────────────────────────────
 
     def _build(self) -> None:
-        nb = ttk.Notebook(self.root)
-        nb.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
-        self.tab_main = ttk.Frame(nb)
-        self.tab_settings = ttk.Frame(nb)
-        nb.add(self.tab_main, text="Управление")
-        nb.add(self.tab_settings, text="Настройки")
-        self._build_main(self.tab_main)
-        self._build_settings(self.tab_settings)
-
-    def _build_main(self, parent: ttk.Frame) -> None:
-        top = ttk.Frame(parent)
-        top.pack(fill=tk.X, pady=(4, 8))
-        self.status_dot = tk.Canvas(top, width=16, height=16, bg=BG, highlightthickness=0)
-        self.status_dot.pack(side=tk.LEFT, padx=(0, 8))
-        self._dot_id = self.status_dot.create_oval(2, 2, 14, 14, fill=MUTED, outline="")
-        self.status_lbl = ttk.Label(top, text="Статус: …", style="Status.TLabel")
-        self.status_lbl.pack(side=tk.LEFT)
-        self.meta_lbl = ttk.Label(top, text="", foreground=MUTED)
-        self.meta_lbl.pack(side=tk.RIGHT)
-
-        btns = ttk.Frame(parent)
-        btns.pack(fill=tk.X, pady=4)
-        self.btn_on = ttk.Button(btns, text="Включить", command=lambda: self._run_bg(self.client.enable))
-        self.btn_on.pack(side=tk.LEFT, padx=(0, 6))
-        self.btn_off = ttk.Button(btns, text="Выключить", command=lambda: self._run_bg(self.client.disable))
-        self.btn_off.pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(btns, text="Обновить", command=self._refresh_status).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(btns, text="Probe", command=self._probe).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(btns, text="Тест", command=lambda: self._run_bg(self.client.test_bypass)).pack(
-            side=tk.LEFT
-        )
-
-        tun_row = ttk.Frame(parent)
-        tun_row.pack(fill=tk.X, pady=(6, 4))
-        ttk.Label(tun_row, text="TUN (как VPN через SOCKS):", foreground=MUTED).pack(
-            side=tk.LEFT, padx=(0, 8)
-        )
-        self.btn_tun_on = ttk.Button(
-            tun_row, text="TUN вкл", command=lambda: self._run_bg(self.client.enable_tun)
-        )
-        self.btn_tun_on.pack(side=tk.LEFT, padx=(0, 6))
-        self.btn_tun_off = ttk.Button(
-            tun_row, text="TUN выкл", command=lambda: self._run_bg(self.client.disable_tun)
-        )
-        self.btn_tun_off.pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(
-            tun_row,
-            text="Скачать sing-box",
-            command=lambda: self._run_bg(self.client.download_sing_box),
+        top = tk.Frame(self.root, bg=C_BG)
+        top.pack(fill=tk.X, padx=20, pady=(14, 6))
+        tk.Label(
+            top, text="ops-content", bg=C_BG, fg=C_TEXT, font=("Segoe UI", 16, "bold")
         ).pack(side=tk.LEFT)
+        tk.Label(
+            top, text=f"v{__version__}", bg=C_BG, fg=C_MUTED, font=("Segoe UI", 10)
+        ).pack(side=tk.RIGHT)
 
-        ttk.Label(parent, text="Журнал", foreground=MUTED).pack(anchor=tk.W, pady=(10, 2))
-        self.log_text = tk.Text(
+        self.body = tk.Frame(self.root, bg=C_BG)
+        self.body.pack(fill=tk.BOTH, expand=True)
+
+        for key, builder in (
+            ("home", self._build_home),
+            ("settings", self._build_settings),
+            ("log", self._build_log),
+        ):
+            fr = tk.Frame(self.body, bg=C_BG)
+            fr.place(relx=0, rely=0, relwidth=1, relheight=1)
+            builder(fr)
+            self._pages[key] = fr
+
+        nav = tk.Frame(self.root, bg=C_SURFACE, height=56)
+        nav.pack(fill=tk.X, side=tk.BOTTOM)
+        nav.pack_propagate(False)
+        for i, (key, label) in enumerate(
+            (("home", "Домой"), ("settings", "Настройки"), ("log", "Журнал"))
+        ):
+            cell = tk.Frame(nav, bg=C_SURFACE)
+            cell.place(relx=i / 3, rely=0, relwidth=1 / 3, relheight=1)
+            lbl = tk.Label(
+                cell,
+                text=label,
+                bg=C_SURFACE,
+                fg=C_MUTED,
+                font=("Segoe UI", 10, "bold"),
+                cursor="hand2",
+                pady=16,
+            )
+            lbl.pack(fill=tk.BOTH, expand=True, padx=6, pady=8)
+            lbl.bind("<Button-1>", lambda _e, k=key: self._show_page(k))
+            self._nav[key] = lbl
+
+        self._show_page("home")
+
+    def _show_page(self, key: str) -> None:
+        self._page = key
+        self._pages[key].lift()
+        for k, lbl in self._nav.items():
+            if k == key:
+                lbl.configure(bg=C_BTN, fg=C_TEXT)
+            else:
+                lbl.configure(bg=C_SURFACE, fg=C_MUTED)
+
+    def _card(self, parent: tk.Misc) -> tk.Frame:
+        return tk.Frame(parent, bg=C_SURFACE, highlightthickness=0, bd=0)
+
+    def _btn(
+        self,
+        parent: tk.Misc,
+        text: str,
+        command: Callable[[], None],
+        *,
+        primary: bool = False,
+        danger: bool = False,
+        fill: bool = True,
+    ) -> tk.Label:
+        if danger:
+            bg, fg, hover = C_DANGER, C_TEXT, "#c45c63"
+        elif primary:
+            bg, fg, hover = C_ACCENT, "#04140f", C_ACCENT_DIM
+        else:
+            bg, fg, hover = C_BTN, C_TEXT, C_BTN_HOVER
+        lbl = tk.Label(
             parent,
-            height=18,
-            bg=BG2,
-            fg=FG,
-            insertbackground=FG,
-            relief=tk.FLAT,
-            wrap=tk.WORD,
-            font=("Consolas", 9),
+            text=text,
+            bg=bg,
+            fg=fg,
+            font=("Segoe UI", 11, "bold"),
+            padx=12,
+            pady=12,
+            cursor="hand2",
+            highlightthickness=1 if not primary and not danger else 0,
+            highlightbackground=C_BORDER,
+            highlightcolor=C_BORDER,
         )
-        self.log_text.pack(fill=tk.BOTH, expand=True)
-        self.log_text.configure(state=tk.DISABLED)
+        if fill:
+            lbl.pack(fill=tk.X)
 
-    def _build_settings(self, parent: ttk.Frame) -> None:
-        form = ttk.Frame(parent)
-        form.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        def enter(_e: tk.Event) -> None:
+            if not self._busy or lbl is self.btn_power:
+                lbl.configure(bg=hover)
 
-        self.vars: dict[str, tk.Variable] = {
+        def leave(_e: tk.Event) -> None:
+            lbl.configure(bg=bg)
+
+        def click(_e: tk.Event) -> None:
+            if getattr(lbl, "_disabled", False):
+                return
+            command()
+
+        lbl.bind("<Enter>", enter)
+        lbl.bind("<Leave>", leave)
+        lbl.bind("<Button-1>", click)
+        # store colors for later reconfigure
+        lbl._bg = bg  # type: ignore[attr-defined]
+        lbl._fg = fg  # type: ignore[attr-defined]
+        lbl._hover = hover  # type: ignore[attr-defined]
+        return lbl
+
+    def _recolor_btn(self, lbl: tk.Label, *, primary: bool = False, danger: bool = False, text: str) -> None:
+        if danger:
+            bg, fg, hover = C_DANGER, C_TEXT, "#c45c63"
+        elif primary:
+            bg, fg, hover = C_ACCENT, "#04140f", C_ACCENT_DIM
+        else:
+            bg, fg, hover = C_BTN, C_TEXT, C_BTN_HOVER
+        lbl._bg = bg  # type: ignore[attr-defined]
+        lbl._fg = fg  # type: ignore[attr-defined]
+        lbl._hover = hover  # type: ignore[attr-defined]
+        lbl.configure(
+            text=text,
+            bg=bg,
+            fg=fg,
+            highlightthickness=0 if primary or danger else 1,
+        )
+
+    # ── pages ───────────────────────────────────────────────────────────
+
+    def _build_home(self, parent: tk.Frame) -> None:
+        wrap = tk.Frame(parent, bg=C_BG)
+        wrap.pack(fill=tk.BOTH, expand=True, padx=22, pady=8)
+
+        card = self._card(wrap)
+        card.pack(fill=tk.X, pady=(4, 14))
+
+        self.ring = tk.Label(card, text="●", bg=C_SURFACE, fg=C_MUTED, font=("Segoe UI", 42))
+        self.ring.pack(pady=(22, 2))
+        self.status_title = tk.Label(
+            card, text="Отключено", bg=C_SURFACE, fg=C_TEXT, font=("Segoe UI", 22, "bold")
+        )
+        self.status_title.pack()
+        self.status_sub = tk.Label(
+            card, text="Нажмите «Подключить»", bg=C_SURFACE, fg=C_MUTED, font=("Segoe UI", 10)
+        )
+        self.status_sub.pack(pady=(2, 20))
+
+        self.btn_power = self._btn(wrap, "Подключить", self._toggle_connection, primary=True)
+        self.btn_power.configure(pady=14, font=("Segoe UI", 13, "bold"))
+
+        meta = self._card(wrap)
+        meta.pack(fill=tk.X, pady=(14, 10))
+        self.meta_rows: dict[str, tk.Label] = {}
+        for i, (key, label) in enumerate(
+            (("mode", "Режим"), ("target", "Сервер"), ("scope", "Область"))
+        ):
+            row = tk.Frame(meta, bg=C_SURFACE)
+            row.pack(fill=tk.X, padx=16, pady=(12 if i == 0 else 4, 12 if i == 2 else 4))
+            tk.Label(row, text=label, bg=C_SURFACE, fg=C_MUTED, font=("Segoe UI", 10)).pack(
+                side=tk.LEFT
+            )
+            val = tk.Label(row, text="—", bg=C_SURFACE, fg=C_TEXT, font=("Segoe UI", 10))
+            val.pack(side=tk.RIGHT)
+            self.meta_rows[key] = val
+
+        quick = tk.Frame(wrap, bg=C_BG)
+        quick.pack(fill=tk.X, pady=(4, 0))
+        for i in range(3):
+            quick.columnconfigure(i, weight=1)
+
+        self.btn_tun = self._mk_quick(quick, 0, "TUN вкл", self._toggle_tun)
+        self._mk_quick(quick, 1, "Проверка", self._probe)
+        self._mk_quick(quick, 2, "Тест", lambda: self._run_bg(self.client.test_bypass))
+
+        self.busy_lbl = tk.Label(wrap, text="", bg=C_BG, fg=C_MUTED, font=("Segoe UI", 10))
+        self.busy_lbl.pack(pady=(14, 0))
+
+    def _mk_quick(self, parent: tk.Frame, col: int, text: str, cmd: Callable[[], None]) -> tk.Label:
+        cell = tk.Frame(parent, bg=C_BG)
+        cell.grid(row=0, column=col, sticky="ew", padx=(0 if col == 0 else 4, 0 if col == 2 else 4))
+        btn = self._btn(cell, text, cmd, primary=False)
+        return btn
+
+    def _build_settings(self, parent: tk.Frame) -> None:
+        bar = tk.Frame(parent, bg=C_BG)
+        bar.pack(side=tk.BOTTOM, fill=tk.X, padx=14, pady=(6, 10))
+        bar.columnconfigure(0, weight=1)
+        bar.columnconfigure(1, weight=1)
+        left = tk.Frame(bar, bg=C_BG)
+        left.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        right = tk.Frame(bar, bg=C_BG)
+        right.grid(row=0, column=1, sticky="ew", padx=(4, 0))
+        self._btn(left, "Загрузить", self._load_settings)
+        self._btn(right, "Сохранить", self._save_settings, primary=True)
+
+        canvas = tk.Canvas(parent, bg=C_BG, highlightthickness=0, bd=0)
+        sb = ttk.Scrollbar(parent, orient=tk.VERTICAL, command=canvas.yview)
+        canvas.configure(yscrollcommand=sb.set)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(14, 0), pady=(4, 0))
+
+        form = tk.Frame(canvas, bg=C_BG)
+        win = canvas.create_window((0, 0), window=form, anchor="nw")
+
+        def _form_cfg(_e: tk.Event | None = None) -> None:
+            canvas.configure(scrollregion=canvas.bbox("all"))
+
+        def _canvas_cfg(e: tk.Event) -> None:
+            canvas.itemconfigure(win, width=e.width)
+
+        form.bind("<Configure>", _form_cfg)
+        canvas.bind("<Configure>", _canvas_cfg)
+
+        def _wheel(e: tk.Event) -> None:
+            if self._page != "settings":
+                return
+            delta = getattr(e, "delta", 0)
+            if delta:
+                canvas.yview_scroll(int(-delta / 120), "units")
+
+        canvas.bind("<Enter>", lambda _e: canvas.bind_all("<MouseWheel>", _wheel))
+        canvas.bind("<Leave>", lambda _e: canvas.unbind_all("<MouseWheel>"))
+
+        self.vars: dict[str, tk.StringVar] = {
             "MODE": tk.StringVar(value="socks"),
             "SOCKS_SCOPE": tk.StringVar(value="full"),
             "TUN": tk.StringVar(value="0"),
@@ -182,57 +518,152 @@ class App:
             "sing_box_path": tk.StringVar(value=""),
         }
 
-        rows: list[tuple[str, str, Any]] = [
-            ("MODE (.env)", "MODE", ("socks", "vps")),
-            ("SOCKS_SCOPE (.env)", "SOCKS_SCOPE", ("full", "github")),
-            ("TUN (.env)", "TUN", ("0", "1")),
-            ("TUN_ELEVATE (.env)", "TUN_ELEVATE", ("0", "1")),
-            ("HTTP_BRIDGE_PORT (.env)", "HTTP_BRIDGE_PORT", None),
-            ("OPS_CONTENT_SECRET (.env)", "OPS_CONTENT_SECRET", None),
-            ("CORPORATE_PROXY (.env, опц.)", "CORPORATE_PROXY", None),
-            ("corporate_proxy (config)", "corporate_proxy", None),
-            ("SSH host (config)", "ssh_host", None),
-            ("SSH user (config)", "ssh_user", None),
-            ("SSH port (config)", "ssh_port", None),
-            ("SSH key (config)", "ssh_identity", "file"),
-            ("SOCKS port (config)", "ssh_socks", None),
-            ("worker_base_url (config)", "worker_base_url", None),
-            ("proxy_bypass (config)", "proxy_bypass", None),
-            ("proxy_bypass_via (config)", "proxy_bypass_via", ("direct", "corporate")),
-            ("sing-box path (config)", "sing_box_path", "file"),
+        sections: list[tuple[str, list[tuple[str, str, Any]]]] = [
+            (
+                "Режим",
+                [
+                    ("Режим работы", "MODE", "choice"),
+                    ("Область трафика", "SOCKS_SCOPE", "choice"),
+                    ("TUN автоматически", "TUN", "choice"),
+                    ("Запрос прав админа", "TUN_ELEVATE", "choice"),
+                    ("Порт HTTP-моста", "HTTP_BRIDGE_PORT", None),
+                ],
+            ),
+            (
+                "Сервер",
+                [
+                    ("Адрес сервера", "ssh_host", None),
+                    ("Пользователь SSH", "ssh_user", None),
+                    ("Порт SSH", "ssh_port", None),
+                    ("Ключ SSH", "ssh_identity", "file"),
+                    ("Локальный порт SOCKS", "ssh_socks", None),
+                ],
+            ),
+            (
+                "Прокси и исключения",
+                [
+                    ("Секрет", "OPS_CONTENT_SECRET", None),
+                    ("Корп. прокси (.env)", "CORPORATE_PROXY", None),
+                    ("Корп. прокси (config)", "corporate_proxy", None),
+                    ("Исключения (через запятую)", "proxy_bypass", None),
+                    ("Исключения идут", "proxy_bypass_via", "choice"),
+                    ("Адрес воркера", "worker_base_url", None),
+                    ("Путь к sing-box", "sing_box_path", "file"),
+                ],
+            ),
         ]
 
-        for i, (label, key, kind) in enumerate(rows):
-            ttk.Label(form, text=label).grid(row=i, column=0, sticky=tk.W, pady=3, padx=(0, 8))
-            if kind == "file":
-                fr = ttk.Frame(form)
-                fr.grid(row=i, column=1, sticky=tk.EW, pady=3)
-                ttk.Entry(fr, textvariable=self.vars[key], width=48).pack(
-                    side=tk.LEFT, fill=tk.X, expand=True
-                )
-                ttk.Button(
-                    fr, text="…", width=3, command=lambda k=key: self._pick_file(k)
-                ).pack(side=tk.LEFT, padx=4)
-            elif isinstance(kind, tuple):
-                cb = ttk.Combobox(
-                    form, textvariable=self.vars[key], values=kind, state="readonly", width=46
-                )
-                cb.grid(row=i, column=1, sticky=tk.EW, pady=3)
-            else:
-                ttk.Entry(form, textvariable=self.vars[key], width=50).grid(
-                    row=i, column=1, sticky=tk.EW, pady=3
-                )
-        form.columnconfigure(1, weight=1)
+        for title, fields in sections:
+            tk.Label(
+                form, text=title.upper(), bg=C_BG, fg=C_MUTED, font=("Segoe UI", 9, "bold"), anchor="w"
+            ).pack(fill=tk.X, pady=(12, 6), padx=2)
+            card = self._card(form)
+            card.pack(fill=tk.X, pady=(0, 4))
+            for fi, (label, key, kind) in enumerate(fields):
+                tk.Label(
+                    card, text=label, bg=C_SURFACE, fg=C_MUTED, font=("Segoe UI", 9), anchor="w"
+                ).pack(fill=tk.X, padx=14, pady=(12 if fi == 0 else 8, 2))
+                if kind == "choice":
+                    Segment(card, CHOICES[key], self.vars[key]).pack(
+                        fill=tk.X, padx=14, pady=(0, 10)
+                    )
+                elif kind == "file":
+                    fr = tk.Frame(card, bg=C_SURFACE)
+                    fr.pack(fill=tk.X, padx=14, pady=(0, 10))
+                    ent = tk.Entry(
+                        fr,
+                        textvariable=self.vars[key],
+                        bg=C_SURFACE2,
+                        fg=C_TEXT,
+                        insertbackground=C_TEXT,
+                        relief=tk.FLAT,
+                        font=("Segoe UI", 10),
+                    )
+                    ent.pack(side=tk.LEFT, fill=tk.X, expand=True, ipady=8, padx=(0, 8))
+                    _bind_clipboard(ent)
+                    pick = tk.Label(
+                        fr,
+                        text="…",
+                        bg=C_BTN,
+                        fg=C_TEXT,
+                        font=("Segoe UI", 11, "bold"),
+                        padx=12,
+                        pady=8,
+                        cursor="hand2",
+                        highlightthickness=1,
+                        highlightbackground=C_BORDER,
+                    )
+                    pick.pack(side=tk.RIGHT)
+                    pick.bind("<Button-1>", lambda _e, k=key: self._pick_file(k))
+                else:
+                    ent = tk.Entry(
+                        card,
+                        textvariable=self.vars[key],
+                        bg=C_SURFACE2,
+                        fg=C_TEXT,
+                        insertbackground=C_TEXT,
+                        relief=tk.FLAT,
+                        font=("Segoe UI", 10),
+                    )
+                    ent.pack(fill=tk.X, padx=14, pady=(0, 10), ipady=8)
+                    _bind_clipboard(ent)
 
-        bar = ttk.Frame(parent)
-        bar.pack(fill=tk.X, pady=8)
-        ttk.Button(bar, text="Загрузить", command=self._load_settings).pack(side=tk.LEFT, padx=(0, 6))
-        ttk.Button(bar, text="Сохранить", command=self._save_settings).pack(side=tk.LEFT)
+        tk.Label(
+            form,
+            text=str(self.paths.root),
+            bg=C_BG,
+            fg=C_MUTED,
+            font=("Segoe UI", 8),
+            anchor="w",
+            wraplength=340,
+            justify=tk.LEFT,
+        ).pack(fill=tk.X, pady=(10, 8), padx=2)
 
         self._load_settings()
 
+    def _build_log(self, parent: tk.Frame) -> None:
+        wrap = tk.Frame(parent, bg=C_BG)
+        wrap.pack(fill=tk.BOTH, expand=True, padx=14, pady=(6, 10))
+        self.log_text = tk.Text(
+            wrap,
+            bg=C_SURFACE,
+            fg=C_TEXT,
+            insertbackground=C_TEXT,
+            selectbackground=C_SELECT,
+            selectforeground=C_TEXT,
+            relief=tk.FLAT,
+            wrap=tk.WORD,
+            font=("Consolas", 9),
+            padx=10,
+            pady=10,
+            state=tk.DISABLED,
+        )
+        sb = ttk.Scrollbar(wrap, orient=tk.VERTICAL, command=self.log_text.yview)
+        self.log_text.configure(yscrollcommand=sb.set)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        _bind_clipboard(self.log_text)
+
+    # ── actions ─────────────────────────────────────────────────────────
+
+    def _toggle_connection(self) -> None:
+        if self._busy:
+            return
+        if self._active:
+            self._run_bg(self.client.disable, waiting="Отключение…")
+        else:
+            self._run_bg(self.client.enable, waiting="Подключение…")
+
+    def _toggle_tun(self) -> None:
+        if self._busy:
+            return
+        if self._tun:
+            self._run_bg(self.client.disable_tun, waiting="Выключаю TUN…")
+        else:
+            self._run_bg(self.client.enable_tun, waiting="Включаю TUN…")
+
     def _pick_file(self, key: str) -> None:
-        title = "sing-box.exe" if key == "sing_box_path" else "SSH private key"
+        title = "Файл sing-box" if key == "sing_box_path" else "Приватный ключ SSH"
         path = filedialog.askopenfilename(title=title)
         if path:
             self.vars[key].set(path)
@@ -275,7 +706,6 @@ class App:
             }
             save_dotenv(self.paths.env_path, env_vals)
             apply_dotenv(self.paths.env_path)
-
             if self.paths.config_path.is_file():
                 cfg = load_config(self.paths.config_path)
             else:
@@ -296,12 +726,12 @@ class App:
             cfg.setdefault("tun", {})
             cfg["tun"]["sing_box_path"] = self.vars["sing_box_path"].get().strip()
             save_config(self.paths.config_path, cfg)
-            self._enqueue_log("Сохранено: .env + config.json")
+            self._enqueue_log("Настройки сохранены")
             messagebox.showinfo(
                 "ops-content",
-                "Сохранено в .env и config.json.\nПерезапустите туннель (Выкл → Вкл).",
+                "Сохранено.\nЕсли туннель был включён — выключите и включите снова.",
             )
-            self._refresh_status()
+            self._refresh_status(force=True)
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror("ops-content", str(exc))
 
@@ -309,38 +739,68 @@ class App:
         self.log_q.put(msg)
 
     def _drain_log(self) -> None:
+        batch: list[str] = []
         try:
-            while True:
-                msg = self.log_q.get_nowait()
-                self.log_text.configure(state=tk.NORMAL)
-                self.log_text.insert(tk.END, msg + "\n")
-                self.log_text.see(tk.END)
-                self.log_text.configure(state=tk.DISABLED)
+            while len(batch) < 50:
+                batch.append(self.log_q.get_nowait())
         except queue.Empty:
             pass
+        if batch:
+            self.log_text.configure(state=tk.NORMAL)
+            self.log_text.insert(tk.END, "\n".join(batch) + "\n")
+            self.log_text.see(tk.END)
+            self.log_text.configure(state=tk.DISABLED)
         if not self._closing:
-            self.root.after(200, self._drain_log)
+            self.root.after(400 if batch else 700, self._drain_log)
 
-    def _set_busy(self, busy: bool) -> None:
+    def _start_pulse(self, text: str) -> None:
+        self._stop_pulse()
+        self.busy_lbl.configure(text=text)
+        self.status_sub.configure(text=text)
+
+        def tick() -> None:
+            if not self._busy or self._closing:
+                return
+            self._pulse_on = not self._pulse_on
+            self.ring.configure(fg=C_ACCENT if self._pulse_on else C_ACCENT_DIM)
+            self._pulse_job = self.root.after(280, tick)
+
+        self._pulse_job = self.root.after(0, tick)
+
+    def _stop_pulse(self) -> None:
+        if self._pulse_job is not None:
+            try:
+                self.root.after_cancel(self._pulse_job)
+            except Exception:
+                pass
+            self._pulse_job = None
+        self._pulse_on = False
+
+    def _set_busy(self, busy: bool, waiting: str = "Подождите…") -> None:
         self._busy = busy
-        state = tk.DISABLED if busy else tk.NORMAL
-        for b in (self.btn_on, self.btn_off, self.btn_tun_on, self.btn_tun_off):
-            b.configure(state=state)
+        for b in (self.btn_power, self.btn_tun):
+            b._disabled = busy  # type: ignore[attr-defined]
+            b.configure(cursor="watch" if busy else "hand2")
+        if busy:
+            self._start_pulse(waiting)
+        else:
+            self._stop_pulse()
+            self.busy_lbl.configure(text="")
 
-    def _run_bg(self, fn: Callable[[], None]) -> None:
+    def _run_bg(self, fn: Callable[[], None], waiting: str = "Подождите…") -> None:
         if self._busy:
             return
 
         def work() -> None:
-            self.root.after(0, lambda: self._set_busy(True))
+            self.root.after(0, lambda: self._set_busy(True, waiting))
             try:
                 fn()
             except Exception as exc:  # noqa: BLE001
-                self._enqueue_log(f"ERROR: {exc}")
+                self._enqueue_log(f"ошибка: {exc}")
                 self.root.after(0, lambda: messagebox.showerror("ops-content", str(exc)))
             finally:
                 self.root.after(0, lambda: self._set_busy(False))
-                self.root.after(0, self._refresh_status)
+                self.root.after(0, lambda: self._refresh_status(force=True))
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -353,47 +813,103 @@ class App:
             messagebox.showerror("ops-content", str(exc))
             return
         if not host or "YOUR_VPS" in host:
-            messagebox.showwarning("ops-content", "Укажите ssh.host в настройках")
+            messagebox.showwarning("ops-content", "Укажите адрес сервера в настройках")
+            self._show_page("settings")
             return
-        self._run_bg(lambda: self.client.probe(host, port))
+        self._run_bg(lambda: self.client.probe(host, port), waiting="Проверка…")
 
-    def _refresh_status(self) -> None:
-        try:
-            st = self.client.status()
-        except Exception as exc:  # noqa: BLE001
-            self.status_lbl.configure(text=f"Ошибка: {exc}")
+    def _mode_label(self, mode: str) -> str:
+        return {"socks": "Туннель", "vps": "VPS"}.get(mode, mode or "—")
+
+    def _scope_label(self, scope: str) -> str:
+        return {"full": "Всё", "github": "GitHub"}.get(scope, scope or "—")
+
+    def _apply_status_ui(self, st: dict[str, Any]) -> None:
+        ssh = bool(st.get("ssh_running"))
+        tun = bool(st.get("tun_running"))
+        active = bool(st.get("active")) or ssh
+        self._active = active
+        self._tun = tun
+
+        mode = self._mode_label(str(st.get("mode") or ""))
+        scope = self._scope_label(str(st.get("socks_scope") or ""))
+        target = str(st.get("ssh_target") or "—")
+        sig = f"{ssh}|{tun}|{active}|{mode}|{scope}|{target}|{(st.get('state') or {}).get('mode')}"
+        if sig == self._last_status_sig or self._busy:
             return
-        active = bool(st.get("active"))
-        color = OK if active else MUTED
-        if st.get("tun_running"):
-            color = ACCENT
-        self.status_dot.itemconfigure(self._dot_id, fill=color)
-        label = "Выключено"
-        if st.get("tun_running") and st.get("ssh_running"):
-            label = "Туннель + TUN"
-        elif st.get("tun_running"):
-            label = "TUN активен"
-        elif st.get("ssh_running"):
-            label = "Туннель активен"
+        self._last_status_sig = sig
+
+        if tun and ssh:
+            title, sub, color = "Защищено", "Туннель и TUN активны", C_ACCENT
+            self._recolor_btn(self.btn_power, danger=True, text="Отключить")
+        elif tun:
+            title, sub, color = "TUN", "Без SSH-туннеля", C_WARN
+            self._recolor_btn(self.btn_power, danger=True, text="Отключить")
+        elif ssh:
+            title, sub, color = "Подключено", "Туннель активен", C_OK
+            self._recolor_btn(self.btn_power, danger=True, text="Отключить")
         elif (st.get("state") or {}).get("mode") == "relay":
-            label = "Relay активен"
+            title, sub, color = "Relay", "Режим relay", C_WARN
+            self._recolor_btn(self.btn_power, danger=True, text="Отключить")
         elif active:
-            label = "Включено"
-        self.status_lbl.configure(text=f"Статус: {label}")
-        meta = f"{st.get('mode')} | {st.get('ssh_target') or '—'}"
-        if st.get("socks_scope"):
-            meta = f"{st.get('mode')}/{st.get('socks_scope')} | {st.get('ssh_target') or '—'}"
-        if st.get("tun_running"):
-            meta += " | TUN"
-        self.meta_lbl.configure(text=meta)
-        if not self._closing:
-            self.root.after(3000, self._refresh_status)
+            title, sub, color = "Включено", "Активно", C_OK
+            self._recolor_btn(self.btn_power, danger=True, text="Отключить")
+        else:
+            title, sub, color = "Отключено", "Нажмите «Подключить»", C_MUTED
+            self._recolor_btn(self.btn_power, primary=True, text="Подключить")
+
+        self.status_title.configure(text=title)
+        self.status_sub.configure(text=sub)
+        self.ring.configure(fg=color)
+        self.btn_tun.configure(
+            text="TUN выкл" if tun else "TUN вкл",
+            fg=C_ACCENT if tun else C_TEXT,
+            highlightbackground=C_ACCENT if tun else C_BORDER,
+        )
+        self.meta_rows["mode"].configure(text=mode)
+        self.meta_rows["scope"].configure(text=scope)
+        self.meta_rows["target"].configure(text=target)
+
+    def _refresh_status(self, force: bool = False) -> None:
+        if self._closing:
+            return
+        if self._status_busy:
+            self.root.after(1000, self._refresh_status)
+            return
+
+        def work() -> None:
+            self._status_busy = True
+            try:
+                st = self.client.status(include_git=False)
+            except Exception as exc:  # noqa: BLE001
+                def err() -> None:
+                    if not self._busy:
+                        self.status_title.configure(text="Ошибка")
+                        self.status_sub.configure(text=str(exc)[:80])
+                        self.ring.configure(fg=C_DANGER)
+
+                self.root.after(0, err)
+            else:
+                def ok() -> None:
+                    if force:
+                        self._last_status_sig = ""
+                    self._apply_status_ui(st)
+
+                self.root.after(0, ok)
+            finally:
+                self._status_busy = False
+                if not self._closing:
+                    delay = 5000 if self._page == "home" and not self._busy else 10000
+                    self.root.after(delay, self._refresh_status)
+
+        threading.Thread(target=work, daemon=True).start()
 
     def _on_close(self) -> None:
         self.root.withdraw()
 
     def _quit_app(self) -> None:
         self._closing = True
+        self._stop_pulse()
         try:
             st = self.client.status()
             if st.get("ssh_running") or st.get("bridge_running"):
@@ -423,9 +939,9 @@ class App:
 
         img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
         d = ImageDraw.Draw(img)
-        d.ellipse((8, 8, 56, 56), fill=(61, 122, 90, 255))
-        d.rectangle((28, 18, 36, 46), fill=(30, 30, 30, 255))
-        d.rectangle((20, 28, 44, 36), fill=(30, 30, 30, 255))
+        d.ellipse((8, 8, 56, 56), fill=(45, 212, 168, 255))
+        d.rectangle((28, 18, 36, 46), fill=(16, 20, 26, 255))
+        d.rectangle((20, 28, 44, 36), fill=(16, 20, 26, 255))
         return img
 
     def _start_tray(self) -> None:
@@ -433,42 +949,19 @@ class App:
             import pystray
             from pystray import MenuItem as Item
         except ImportError:
-            self._enqueue_log("pystray не установлен — трей отключён (pip install pystray pillow)")
+            self._enqueue_log("трей недоступен (нужен pystray)")
             return
 
-        def on_on(icon, item):  # noqa: ARG001
-            self.root.after(0, lambda: self._run_bg(self.client.enable))
-
-        def on_off(icon, item):  # noqa: ARG001
-            self.root.after(0, lambda: self._run_bg(self.client.disable))
-
-        def on_open(icon, item):  # noqa: ARG001
-            self._show_window()
-
-        def on_quit(icon, item):  # noqa: ARG001
-            self.root.after(0, self._quit_app)
-
-        def on_tun_on(icon, item):  # noqa: ARG001
-            self.root.after(0, lambda: self._run_bg(self.client.enable_tun))
-
-        def on_tun_off(icon, item):  # noqa: ARG001
-            self.root.after(0, lambda: self._run_bg(self.client.disable_tun))
-
         menu = pystray.Menu(
-            Item("Открыть", on_open, default=True),
-            Item("Включить", on_on),
-            Item("Выключить", on_off),
-            Item("TUN вкл", on_tun_on),
-            Item("TUN выкл", on_tun_off),
-            Item("Выход", on_quit),
+            Item("Открыть", lambda _i, _j: self._show_window(), default=True),
+            Item("Подключить", lambda _i, _j: self.root.after(0, lambda: self._run_bg(self.client.enable, "Подключение…"))),
+            Item("Отключить", lambda _i, _j: self.root.after(0, lambda: self._run_bg(self.client.disable, "Отключение…"))),
+            Item("TUN вкл", lambda _i, _j: self.root.after(0, lambda: self._run_bg(self.client.enable_tun, "Включаю TUN…"))),
+            Item("TUN выкл", lambda _i, _j: self.root.after(0, lambda: self._run_bg(self.client.disable_tun, "Выключаю TUN…"))),
+            Item("Выход", lambda _i, _j: self.root.after(0, self._quit_app)),
         )
         self._tray = pystray.Icon("ops-content", self._tray_icon_image(), "ops-content", menu)
-
-        def run_tray() -> None:
-            assert self._tray is not None
-            self._tray.run()
-
-        self._tray_thread = threading.Thread(target=run_tray, daemon=True)
+        self._tray_thread = threading.Thread(target=self._tray.run, daemon=True)
         self._tray_thread.start()
 
     def run(self) -> None:
