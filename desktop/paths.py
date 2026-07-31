@@ -1,7 +1,8 @@
-"""Resolve data root (next to exe) and bundled resource paths."""
+"""Resolve data root (next to exe / AppData) and bundled resource paths."""
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -21,10 +22,53 @@ def bundle_dir() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def _under_program_files(path: Path) -> bool:
+    if sys.platform != "win32":
+        return False
+    try:
+        resolved = str(path.resolve()).lower()
+    except OSError:
+        resolved = str(path).lower()
+    candidates = [
+        os.environ.get("ProgramFiles"),
+        os.environ.get("ProgramFiles(x86)"),
+        os.environ.get("ProgramW6432"),
+    ]
+    for base in candidates:
+        if not base:
+            continue
+        try:
+            prefix = str(Path(base).resolve()).lower()
+        except OSError:
+            prefix = base.lower()
+        if resolved == prefix or resolved.startswith(prefix + os.sep):
+            return True
+    return False
+
+
+def _appdata_root() -> Path:
+    local = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
+    return Path(local) / "ops-content"
+
+
 def data_root() -> Path:
-    """Writable project root: directory of the exe, or repo root when running from source."""
+    """Writable project root.
+
+    - Dev: repository root
+    - Portable frozen: directory next to the exe
+    - Installed (Program Files / installed.flag): %LOCALAPPDATA%\\ops-content
+    - Override: OPS_CONTENT_DATA
+    """
+    override = (os.environ.get("OPS_CONTENT_DATA") or "").strip()
+    if override:
+        return Path(override).expanduser()
+
     if is_frozen():
-        return Path(sys.executable).resolve().parent
+        exe_dir = Path(sys.executable).resolve().parent
+        if (exe_dir / "installed.flag").is_file() or _under_program_files(exe_dir):
+            return _appdata_root()
+        return exe_dir
+
     return Path(__file__).resolve().parent.parent
 
 
@@ -61,5 +105,6 @@ class Paths:
         self.var_dir.mkdir(parents=True, exist_ok=True)
         self.config_dir.mkdir(parents=True, exist_ok=True)
         self.tools_dir.mkdir(parents=True, exist_ok=True)
+        (self.root / "lib").mkdir(parents=True, exist_ok=True)
         if not self.known_hosts.exists():
             self.known_hosts.touch()
