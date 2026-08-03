@@ -23,9 +23,6 @@ ENV_KEYS = [
     "CORPORATE_PROXY",
     "TUN",
     "TUN_ELEVATE",
-    "WATCHDOG",
-    "WATCHDOG_INTERVAL",
-    "WATCHDOG_MAX_RETRIES",
 ]
 
 
@@ -77,11 +74,6 @@ def _default_env_text(values: dict[str, str]) -> str:
         f"TUN={tun}",
         "# Request UAC when starting sing-box TUN",
         f"TUN_ELEVATE={elevate}",
-        "",
-        "# Auto-reconnect if SSH SOCKS dies (GUI / `watch`)",
-        f"WATCHDOG={values.get('WATCHDOG', '1') or '1'}",
-        f"WATCHDOG_INTERVAL={values.get('WATCHDOG_INTERVAL', '20') or '20'}",
-        f"WATCHDOG_MAX_RETRIES={values.get('WATCHDOG_MAX_RETRIES', '5') or '5'}",
         "",
     ]
     if values.get("HTTP_BRIDGE_PORT"):
@@ -235,31 +227,6 @@ def get_tun_elevate() -> bool:
     if raw is None or raw.strip() == "":
         return True
     return _truthy(raw)
-
-
-def get_watchdog_enabled() -> bool:
-    raw = os.environ.get("WATCHDOG")
-    if raw is None or raw.strip() == "":
-        return True
-    return _truthy(raw)
-
-
-def get_watchdog_interval() -> int:
-    raw = (os.environ.get("WATCHDOG_INTERVAL") or "").strip()
-    try:
-        n = int(raw) if raw else 20
-    except ValueError:
-        n = 20
-    return max(5, min(n, 600))
-
-
-def get_watchdog_max_retries() -> int:
-    raw = (os.environ.get("WATCHDOG_MAX_RETRIES") or "").strip()
-    try:
-        n = int(raw) if raw else 5
-    except ValueError:
-        n = 5
-    return max(1, min(n, 50))
 
 
 def resolve_corporate_proxy(cfg: dict[str, Any] | None = None) -> str:

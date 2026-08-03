@@ -26,7 +26,6 @@ COMMANDS = (
     "tun-off",
     "download-sing-box",
     "sing-box",
-    "watch",
     "gui",
     "help",
 )
@@ -71,7 +70,6 @@ def _show_help() -> int:
   relay-on / relay-off MODE=vps git relay
   tun-on / tun-off     TUN поверх SOCKS (sing-box)
   download-sing-box    скачать sing-box в tools/
-  watch                следить за SOCKS и переподключать (Ctrl+C)
   gui                  окно (нужен дисплей)
   help
 
@@ -127,13 +125,6 @@ def _run_cli(cmd: str, rest: list[str]) -> int:
             client.disable_tun()
         elif cmd in ("download-sing-box", "sing-box"):
             client.download_sing_box()
-        elif cmd == "watch":
-            from desktop.watchdog import run_watch_forever
-
-            daemon = "--daemon" in rest or os.environ.get(
-                "OPS_CONTENT_WATCHDOG_CHILD", ""
-            ).strip() in ("1", "true", "yes")
-            return run_watch_forever(client, log=log, daemon=daemon)
         elif cmd in ("help", "-h", "--help"):
             return _show_help()
         else:
