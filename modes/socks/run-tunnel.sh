@@ -123,6 +123,8 @@ seen = set()
 for h in list(cfg.get("blocked_hosts") or []) + [
     "github.com", "*.github.com", "*.githubusercontent.com",
     "*.githubassets.com", "*.github.io", "ghcr.io", "*.ghcr.io",
+    "cursor.com", "*.cursor.com", "*.cursor.sh", "*.cursor-cdn.com",
+    "*.cursorapi.com", "*.cursorvm.com", "downloads.cursor.com",
 ]:
     k = h.lower()
     if k not in seen:

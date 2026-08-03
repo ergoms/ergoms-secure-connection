@@ -20,7 +20,21 @@
     "raw.githubusercontent.com",
     "github.githubassets.com",
     "avatars.githubusercontent.com",
-    "packages.github.com"
+    "packages.github.com",
+    "cursor.com",
+    "*.cursor.com",
+    "*.cursor.sh",
+    "*.cursor-cdn.com",
+    "*.cursorapi.com",
+    "*.cursorvm.com",
+    "downloads.cursor.com",
+    "marketplace.cursorapi.com",
+    "api2.cursor.sh",
+    "api3.cursor.sh",
+    "api4.cursor.sh",
+    "api5.cursor.sh",
+    "authenticate.cursor.sh",
+    "authenticator.cursor.sh"
   ],
   "proxy_bypass": [
     "*.intranet.example",

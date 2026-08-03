@@ -43,7 +43,7 @@ WIN_H = 640
 # UI labels → stored values
 CHOICES: dict[str, list[tuple[str, str]]] = {
     "MODE": [("Туннель", "socks"), ("VPS", "vps")],
-    "SOCKS_SCOPE": [("Всё", "full"), ("Только GitHub", "github")],
+    "SOCKS_SCOPE": [("Всё", "full"), ("GitHub + Cursor", "github")],
     "TUN": [("Выкл", "0"), ("Вкл", "1")],
     "TUN_ELEVATE": [("Нет", "0"), ("Да", "1")],
     "proxy_bypass_via": [("Напрямую", "direct"), ("Через Squid", "corporate")],

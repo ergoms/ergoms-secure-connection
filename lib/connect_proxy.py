@@ -130,20 +130,33 @@ def pump_windows(sock: socket.socket) -> int:
 
 
 def pump_posix(sock: socket.socket) -> int:
-    stdin = sys.stdin.buffer
-    stdout = sys.stdout.buffer
-    while True:
-        readable, _, _ = select.select([sock, stdin], [], [])
+    # Same pitfall as Windows: BufferedReader.read(n) on a pipe issues a second
+    # raw read that blocks until more data or EOF. OpenSSH writes a short banner
+    # then waits for the remote banner on our stdout → deadlock / banner timeout.
+    stdin = open(sys.stdin.fileno(), "rb", closefd=False, buffering=0)
+    stdout = open(sys.stdout.fileno(), "wb", closefd=False, buffering=0)
+    rlist: list = [sock, stdin]
+    while rlist:
+        readable, _, _ = select.select(rlist, [], [])
         if sock in readable:
             data = sock.recv(65536)
             if not data:
                 return 0
-            stdout.write(data)
-            stdout.flush()
+            try:
+                stdout.write(data)
+                stdout.flush()
+            except BrokenPipeError:
+                return 1
         if stdin in readable:
             data = stdin.read(65536)
             if not data:
-                return 0
+                # SSH closed stdin; half-close toward the server, keep reading sock.
+                rlist = [sock]
+                try:
+                    sock.shutdown(socket.SHUT_WR)
+                except OSError:
+                    pass
+                continue
             sock.sendall(data)
 
 
