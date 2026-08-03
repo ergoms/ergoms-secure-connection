@@ -104,6 +104,23 @@ class TunManager:
     def _bin_name(self) -> str:
         return "sing-box.exe" if sys.platform == "win32" else "sing-box"
 
+    @staticmethod
+    def _is_native_sing_box(path: Path) -> bool:
+        """Reject wrong-OS leftovers (e.g. Windows PE on Linux tools/)."""
+        if not path.is_file():
+            return False
+        try:
+            with open(path, "rb") as fh:
+                magic = fh.read(4)
+        except OSError:
+            return False
+        if sys.platform == "win32":
+            return magic[:2] == b"MZ"
+        # Linux/macOS: ELF; never treat PE (.exe) as usable
+        if magic[:2] == b"MZ" or path.suffix.lower() == ".exe":
+            return False
+        return magic == b"\x7fELF" or sys.platform == "darwin"
+
     def find_sing_box(self, explicit: str = "") -> Path | None:
         candidates: list[Path] = []
         if explicit:
@@ -114,16 +131,27 @@ class TunManager:
         name = self._bin_name()
         candidates.append(self.tools_dir / name)
         candidates.append(self.tools_dir / "sing-box" / name)
-        # Also accept either name in tools/
-        candidates.append(self.tools_dir / "sing-box.exe")
-        candidates.append(self.tools_dir / "sing-box")
-        which = shutil.which("sing-box") or shutil.which("sing-box.exe")
+        if sys.platform == "win32":
+            candidates.append(self.tools_dir / "sing-box.exe")
+        else:
+            candidates.append(self.tools_dir / "sing-box")
+        which = shutil.which(name)
         if which:
             candidates.append(Path(which))
+        seen: set[str] = set()
         for c in candidates:
-            if c.is_file() and os.access(c, os.X_OK if sys.platform != "win32" else os.F_OK):
-                return c.resolve()
-            if c.is_file():
+            key = str(c.resolve()) if c.exists() else str(c)
+            if key in seen:
+                continue
+            seen.add(key)
+            if not self._is_native_sing_box(c):
+                continue
+            if sys.platform != "win32" and not os.access(c, os.X_OK):
+                try:
+                    c.chmod(c.stat().st_mode | 0o111)
+                except OSError:
+                    continue
+            if sys.platform == "win32" or os.access(c, os.X_OK):
                 return c.resolve()
         return None
 

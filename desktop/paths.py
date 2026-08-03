@@ -92,9 +92,10 @@ class Paths:
         self.known_hosts = self.creds_dir / "ssh_known_hosts"
         self.ssh_pid = self.var_dir / "ssh.pid"
         self.bridge_pid = self.var_dir / "bridge.pid"
-        self.watchdog_pid = self.var_dir / "watchdog.pid"
         self.state_path = self.var_dir / "state.json"
         self.proxy_backup = self.var_dir / _proxy_backup_name()
+        # Backup of /etc/environment proxy keys while SOCKS bridge is active
+        self.env_proxy_backup = self.var_dir / "linuxenv.proxy.bak.json"
         self.cli_env = self.var_dir / "cli.env"
         self.cli_ps1 = self.var_dir / "cli.ps1"
         self.proxy_cmd = self.var_dir / "proxy.cmd"

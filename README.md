@@ -81,19 +81,6 @@ OpsContent.exe on|off|status|probe|tun-on|tun-off|download-sing-box …
 
 Частные сети, Squid и VPS в TUN не заворачиваются, чтобы не зациклить SSH.
 
-### Автопереподключение (watchdog)
-
-Если SSH SOCKS на `127.0.0.1:1080` падает, а TUN остаётся живым, трафик сыпется ошибками `connection refused`. Watchdog это ловит и поднимает туннель снова.
-
-| Где | Как |
-|-----|-----|
-| `on` | При `WATCHDOG=1` сам поднимает фоновый сторож (`var/watchdog.pid`, лог `logs/watchdog.log`) |
-| `off` | Останавливает сторож |
-| GUI / трей | Свой сторож в процессе GUI (если фоновый от `on` уже есть — не дублирует) |
-| Вручную | `.\ops-content.ps1 watch` — на переднем плане (Ctrl+C) |
-
-В `.env`: `WATCHDOG=0\|1`, `WATCHDOG_INTERVAL` (сек), `WATCHDOG_MAX_RETRIES`. В GUI → Настройки → «Автопереподключение».
-
 ---
 
 ## Быстрый старт на Windows
@@ -173,9 +160,6 @@ MODE=socks
 # github — только узлы, связанные с GitHub; остальное — как в сети обычно
 SOCKS_SCOPE=full
 
-# Автопереподключение при падении SOCKS (GUI / watch)
-WATCHDOG=1
-
 # Порт локального HTTP-моста (по умолчанию 1088)
 # HTTP_BRIDGE_PORT=1088
 ```
@@ -250,8 +234,7 @@ OpsContent.exe <команда>            # Windows EXE
 | `relay-on` / `relay-off` | Только HTTPS-посредник для git (`MODE=vps`) |
 | `tun-on` / `tun-off` | TUN поверх SOCKS (sing-box; Windows UAC / Linux sudo) |
 | `download-sing-box` | Скачать sing-box в `tools/` |
-| `watch` | Следить за SOCKS и автоматически переподключать (Ctrl+C) |
-| `gui` | Окно (нужен дисплей; watchdog в трее) |
+| `gui` | Окно (нужен дисплей) |
 | `install-service` / `uninstall-service` | Служба пользователя на Linux (только `.sh`) |
 | `deploy` | Выкладка посредника на сервер |
 | `help` | Краткая справка |
