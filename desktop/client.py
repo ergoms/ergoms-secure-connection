@@ -23,6 +23,7 @@ from desktop.config_io import (
     get_socks_scope,
     get_tun_elevate,
     get_tun_enabled,
+    get_watchdog_enabled,
     invoke_init,
     load_config,
     resolve_corporate_proxy,
@@ -538,13 +539,74 @@ class OpsClient:
             self.log(f"TUN auto-start failed: {exc}")
             self.log("Туннель оставлен включённым. Нужен sing-box: download-sing-box / tools/")
 
-    def enable(self) -> None:
+    def watchdog_daemon_alive(self) -> bool:
+        if not self.paths.watchdog_pid.is_file():
+            return False
+        try:
+            pid = int(self.paths.watchdog_pid.read_text().strip())
+        except ValueError:
+            return False
+        return bool(pid and procutil.pid_alive(pid))
+
+    def stop_watchdog_daemon(self) -> None:
+        if not self.paths.watchdog_pid.is_file():
+            return
+        try:
+            pid = int(self.paths.watchdog_pid.read_text().strip())
+        except ValueError:
+            pid = 0
+        if pid and pid != os.getpid() and procutil.pid_alive(pid):
+            procutil.kill_pid(pid)
+            self.log(f"watchdog pid={pid} stopped")
+        self.paths.watchdog_pid.unlink(missing_ok=True)
+
+    def ensure_watchdog_daemon(self) -> None:
+        """Spawn background `watch --daemon` so CLI `on` keeps monitoring after exit."""
+        self.reload_env()
+        if not get_watchdog_enabled():
+            self.log("WATCHDOG=0 — фоновый сторож не запускаем")
+            return
+        if self.watchdog_daemon_alive():
+            try:
+                pid = int(self.paths.watchdog_pid.read_text().strip())
+            except ValueError:
+                pid = 0
+            self.log(f"watchdog already running (pid={pid})")
+            return
+
+        args = [*self_command(), "watch", "--daemon"]
+        if not is_frozen():
+            pyw = _find_pythonw()
+            if pyw and Path(args[0]).name.lower().startswith("python"):
+                args[0] = pyw
+
+        env = os.environ.copy()
+        root = str(self.paths.root)
+        prev = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = root if not prev else f"{root}{os.pathsep}{prev}"
+        env["OPS_CONTENT_WATCHDOG_CHILD"] = "1"
+
+        proc = procutil.popen(args, env=env, cwd=root, detached=True)
+        self.paths.watchdog_pid.write_text(str(proc.pid), encoding="utf-8")
+        time.sleep(0.4)
+        if proc.poll() is not None:
+            self.paths.watchdog_pid.unlink(missing_ok=True)
+            self.log(
+                f"watchdog exited immediately (code={proc.returncode}); "
+                "see logs/watchdog.log"
+            )
+            return
+        self.log(f"watchdog pid={proc.pid} (logs/watchdog.log)")
+
+    def enable(self, *, spawn_watchdog: bool = True) -> None:
         self.reload_env()
         mode = get_mode()
         self.log(f"MODE={mode} TUN={1 if get_tun_enabled() else 0}")
         if mode == "socks":
             self.start_tunnel()
             self._maybe_autostart_tun()
+            if spawn_watchdog:
+                self.ensure_watchdog_daemon()
             return
         if mode == "vps":
             cfg = self.config()
@@ -559,6 +621,8 @@ class OpsClient:
             else:
                 self.start_tunnel()
                 self._maybe_autostart_tun()
+            if spawn_watchdog:
+                self.ensure_watchdog_daemon()
             return
         raise RuntimeError(f"Unknown MODE={mode} (use socks|vps)")
 
@@ -566,6 +630,7 @@ class OpsClient:
         self.reload_env()
         mode = get_mode()
         self.log(f"MODE={mode} -> off")
+        self.stop_watchdog_daemon()
         # stop_tunnel already stops TUN process; keep TUN= flag in .env as user preference
         self.stop_tunnel()
         if mode == "vps":
@@ -645,19 +710,49 @@ class OpsClient:
             else:
                 lines.append(f"bridge pid={bpid} dead")
 
+        socks_port = 1080
+        if self.paths.config_path.is_file():
+            try:
+                socks_port = int((self.config().get("ssh") or {}).get("local_socks_port") or 1080)
+            except Exception:  # noqa: BLE001
+                socks_port = 1080
+        info["socks_port"] = socks_port
+        info["socks_listening"] = _port_open("127.0.0.1", socks_port)
         info["tun_running"] = self.tun.running()
         info["tun_pid"] = self.tun.pid()
+
+        if self.paths.state_path.is_file():
+            try:
+                info["state"] = json.loads(self.paths.state_path.read_text(encoding="utf-8-sig"))
+            except json.JSONDecodeError:
+                info["state"] = None
+
+        if info["socks_listening"]:
+            lines.append(f"SOCKS            = 127.0.0.1:{socks_port} open")
+        elif info["ssh_running"] or info["tun_running"] or info.get("state"):
+            lines.append(f"SOCKS            = 127.0.0.1:{socks_port} CLOSED")
+
         if info["tun_running"]:
             lines.append(f"TUN (sing-box) pid={info['tun_pid']} running")
         else:
             lines.append("TUN (sing-box)   = off")
 
-        if self.paths.state_path.is_file():
+        info["watchdog_running"] = self.watchdog_daemon_alive()
+        info["watchdog_pid"] = None
+        if self.paths.watchdog_pid.is_file():
             try:
-                info["state"] = json.loads(self.paths.state_path.read_text(encoding="utf-8-sig"))
-                lines.append(f"state: {json.dumps(info['state'])}")
-            except json.JSONDecodeError:
-                lines.append("state: (invalid)")
+                info["watchdog_pid"] = int(self.paths.watchdog_pid.read_text().strip())
+            except ValueError:
+                info["watchdog_pid"] = None
+        if info["watchdog_running"]:
+            lines.append(f"watchdog pid={info['watchdog_pid']} running")
+        elif get_watchdog_enabled() and (info["ssh_running"] or info.get("state")):
+            lines.append("watchdog         = off")
+
+        if info.get("state"):
+            lines.append(f"state: {json.dumps(info['state'])}")
+        elif self.paths.state_path.is_file() and info.get("state") is None:
+            lines.append("state: (invalid)")
 
         if self.paths.config_path.is_file():
             cfg = self.config()

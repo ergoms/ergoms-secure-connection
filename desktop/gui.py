@@ -20,6 +20,7 @@ from desktop.config_io import (
     save_dotenv,
 )
 from desktop.paths import Paths, bundle_dir
+from desktop.watchdog import TunnelWatchdog, infer_desired_on
 
 
 C_BG = "#10141a"
@@ -46,6 +47,7 @@ CHOICES: dict[str, list[tuple[str, str]]] = {
     "SOCKS_SCOPE": [("Всё", "full"), ("GitHub + Cursor", "github")],
     "TUN": [("Выкл", "0"), ("Вкл", "1")],
     "TUN_ELEVATE": [("Нет", "0"), ("Да", "1")],
+    "WATCHDOG": [("Выкл", "0"), ("Вкл", "1")],
     "proxy_bypass_via": [("Напрямую", "direct"), ("Через Squid", "corporate")],
 }
 
@@ -211,6 +213,12 @@ class App:
         self._pulse_on = False
         self._pages: dict[str, tk.Frame] = {}
         self._nav: dict[str, tk.Label] = {}
+        self.watchdog = TunnelWatchdog(
+            self.client,
+            log=self._enqueue_log,
+            on_notify=self._tray_notify,
+            should_skip=lambda: self._busy or self._closing,
+        )
 
         self.root = tk.Tk()
         self.root.title("ops-content")
@@ -239,6 +247,7 @@ class App:
         self.root.after(150, self._drain_log)
         self.root.after(300, self._refresh_status)
         self.root.after(700, self._start_tray)
+        self.root.after(1200, self._start_watchdog)
 
     def _disable_maximize(self) -> None:
         if sys.platform != "win32":
@@ -503,6 +512,7 @@ class App:
             "SOCKS_SCOPE": tk.StringVar(value="full"),
             "TUN": tk.StringVar(value="0"),
             "TUN_ELEVATE": tk.StringVar(value="1"),
+            "WATCHDOG": tk.StringVar(value="1"),
             "HTTP_BRIDGE_PORT": tk.StringVar(value="1088"),
             "OPS_CONTENT_SECRET": tk.StringVar(value=""),
             "CORPORATE_PROXY": tk.StringVar(value=""),
@@ -526,6 +536,7 @@ class App:
                     ("Область трафика", "SOCKS_SCOPE", "choice"),
                     ("TUN автоматически", "TUN", "choice"),
                     ("Запрос прав админа", "TUN_ELEVATE", "choice"),
+                    ("Автопереподключение", "WATCHDOG", "choice"),
                     ("Порт HTTP-моста", "HTTP_BRIDGE_PORT", None),
                 ],
             ),
@@ -646,13 +657,22 @@ class App:
 
     # ── actions ─────────────────────────────────────────────────────────
 
+    def _do_enable(self) -> None:
+        # In-process watchdog in GUI; skip second detached daemon
+        self.client.enable(spawn_watchdog=False)
+        self.watchdog.set_desired(True)
+
+    def _do_disable(self) -> None:
+        self.watchdog.set_desired(False)
+        self.client.disable()
+
     def _toggle_connection(self) -> None:
         if self._busy:
             return
         if self._active:
-            self._run_bg(self.client.disable, waiting="Отключение…")
+            self._run_bg(self._do_disable, waiting="Отключение…")
         else:
-            self._run_bg(self.client.enable, waiting="Подключение…")
+            self._run_bg(self._do_enable, waiting="Подключение…")
 
     def _toggle_tun(self) -> None:
         if self._busy:
@@ -674,6 +694,7 @@ class App:
         self.vars["SOCKS_SCOPE"].set(env.get("SOCKS_SCOPE", "full") or "full")
         self.vars["TUN"].set(env.get("TUN", "0") or "0")
         self.vars["TUN_ELEVATE"].set(env.get("TUN_ELEVATE", "1") or "1")
+        self.vars["WATCHDOG"].set(env.get("WATCHDOG", "1") or "1")
         self.vars["HTTP_BRIDGE_PORT"].set(env.get("HTTP_BRIDGE_PORT", "1088") or "1088")
         self.vars["OPS_CONTENT_SECRET"].set(env.get("OPS_CONTENT_SECRET", "") or "")
         self.vars["CORPORATE_PROXY"].set(env.get("CORPORATE_PROXY", "") or "")
@@ -700,6 +721,7 @@ class App:
                 "SOCKS_SCOPE": self.vars["SOCKS_SCOPE"].get().strip(),
                 "TUN": self.vars["TUN"].get().strip() or "0",
                 "TUN_ELEVATE": self.vars["TUN_ELEVATE"].get().strip() or "1",
+                "WATCHDOG": self.vars["WATCHDOG"].get().strip() or "1",
                 "HTTP_BRIDGE_PORT": self.vars["HTTP_BRIDGE_PORT"].get().strip(),
                 "OPS_CONTENT_SECRET": self.vars["OPS_CONTENT_SECRET"].get().strip(),
                 "CORPORATE_PROXY": self.vars["CORPORATE_PROXY"].get().strip(),
@@ -827,6 +849,7 @@ class App:
     def _apply_status_ui(self, st: dict[str, Any]) -> None:
         ssh = bool(st.get("ssh_running"))
         tun = bool(st.get("tun_running"))
+        socks = bool(st.get("socks_listening"))
         active = bool(st.get("active")) or ssh
         self._active = active
         self._tun = tun
@@ -834,19 +857,31 @@ class App:
         mode = self._mode_label(str(st.get("mode") or ""))
         scope = self._scope_label(str(st.get("socks_scope") or ""))
         target = str(st.get("ssh_target") or "—")
-        sig = f"{ssh}|{tun}|{active}|{mode}|{scope}|{target}|{(st.get('state') or {}).get('mode')}"
+        sig = (
+            f"{ssh}|{tun}|{socks}|{active}|{mode}|{scope}|{target}|"
+            f"{(st.get('state') or {}).get('mode')}|{self.watchdog.desired}"
+        )
         if sig == self._last_status_sig or self._busy:
             return
         self._last_status_sig = sig
 
-        if tun and ssh:
+        if (tun or ssh or self.watchdog.desired) and not socks and st.get("mode") != "vps":
+            title, sub, color = "Сбой", "SOCKS недоступен — переподключение…", C_DANGER
+            self._recolor_btn(self.btn_power, danger=True, text="Отключить")
+        elif tun and ssh and socks:
             title, sub, color = "Защищено", "Туннель и TUN активны", C_ACCENT
+            self._recolor_btn(self.btn_power, danger=True, text="Отключить")
+        elif tun and socks:
+            title, sub, color = "TUN", "TUN через SOCKS", C_WARN
             self._recolor_btn(self.btn_power, danger=True, text="Отключить")
         elif tun:
             title, sub, color = "TUN", "Без SSH-туннеля", C_WARN
             self._recolor_btn(self.btn_power, danger=True, text="Отключить")
-        elif ssh:
+        elif ssh and socks:
             title, sub, color = "Подключено", "Туннель активен", C_OK
+            self._recolor_btn(self.btn_power, danger=True, text="Отключить")
+        elif ssh:
+            title, sub, color = "Подключено", "SSH есть, SOCKS закрыт", C_WARN
             self._recolor_btn(self.btn_power, danger=True, text="Отключить")
         elif (st.get("state") or {}).get("mode") == "relay":
             title, sub, color = "Relay", "Режим relay", C_WARN
@@ -910,9 +945,11 @@ class App:
     def _quit_app(self) -> None:
         self._closing = True
         self._stop_pulse()
+        self.watchdog.set_desired(False)
+        self.watchdog.stop()
         try:
             st = self.client.status()
-            if st.get("ssh_running") or st.get("bridge_running"):
+            if st.get("ssh_running") or st.get("bridge_running") or st.get("tun_running"):
                 self.client.disable()
         except Exception:  # noqa: BLE001
             try:
@@ -954,8 +991,8 @@ class App:
 
         menu = pystray.Menu(
             Item("Открыть", lambda _i, _j: self._show_window(), default=True),
-            Item("Подключить", lambda _i, _j: self.root.after(0, lambda: self._run_bg(self.client.enable, "Подключение…"))),
-            Item("Отключить", lambda _i, _j: self.root.after(0, lambda: self._run_bg(self.client.disable, "Отключение…"))),
+            Item("Подключить", lambda _i, _j: self.root.after(0, lambda: self._run_bg(self._do_enable, "Подключение…"))),
+            Item("Отключить", lambda _i, _j: self.root.after(0, lambda: self._run_bg(self._do_disable, "Отключение…"))),
             Item("TUN вкл", lambda _i, _j: self.root.after(0, lambda: self._run_bg(self.client.enable_tun, "Включаю TUN…"))),
             Item("TUN выкл", lambda _i, _j: self.root.after(0, lambda: self._run_bg(self.client.disable_tun, "Выключаю TUN…"))),
             Item("Выход", lambda _i, _j: self.root.after(0, self._quit_app)),
@@ -963,6 +1000,32 @@ class App:
         self._tray = pystray.Icon("ops-content", self._tray_icon_image(), "ops-content", menu)
         self._tray_thread = threading.Thread(target=self._tray.run, daemon=True)
         self._tray_thread.start()
+
+    def _tray_notify(self, title: str, message: str) -> None:
+        def show() -> None:
+            tray = self._tray
+            if tray is None:
+                return
+            try:
+                tray.notify(message, title)
+            except Exception:  # noqa: BLE001
+                pass
+
+        try:
+            self.root.after(0, show)
+        except Exception:  # noqa: BLE001
+            show()
+
+    def _start_watchdog(self) -> None:
+        if self.client.watchdog_daemon_alive():
+            # CLI `on` already spawned a background watchdog
+            if infer_desired_on(self.client) or self._active:
+                self.watchdog.set_desired(True)
+            self._enqueue_log("watchdog: фоновый процесс уже запущен (после on)")
+            return
+        if infer_desired_on(self.client) or self._active:
+            self.watchdog.set_desired(True)
+        self.watchdog.start()
 
     def run(self) -> None:
         self.root.mainloop()
