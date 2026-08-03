@@ -51,6 +51,45 @@ def _arch_tag() -> str:
     return "amd64"
 
 
+def _direct_python_paths() -> list[str]:
+    """Only interpreters used by ProxyCommand / HTTP bridge (avoid TUN loops).
+
+    Other Python installs (pip, poetry, venv) stay on the default socks-out path.
+    """
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def add(p: Path | None) -> None:
+        if p is None or not p.is_file():
+            return
+        resolved = p.resolve()
+        key = str(resolved).lower()
+        if key in seen or "WindowsApps" in str(resolved):
+            return
+        seen.add(key)
+        found.append(str(resolved))
+
+    exe = Path(sys.executable)
+    add(exe)
+    if sys.platform == "win32":
+        siblings = [exe.with_name(n) for n in ("pythonw.exe", "python.exe", "python3.exe")]
+        for sib in siblings:
+            add(sib)
+        # Frozen OpsContent.exe: ProxyCommand falls back to PATH pythonw
+        if not any(s.is_file() for s in siblings):
+            for name in ("pythonw.exe", "python.exe", "python3.exe"):
+                w = shutil.which(name)
+                if w and "WindowsApps" not in w:
+                    add(Path(w))
+                    break
+    else:
+        for name in ("python3", "python"):
+            w = shutil.which(name)
+            if w:
+                add(Path(w))
+    return found
+
+
 class TunManager:
     """Start/stop sing-box TUN that forwards into an existing local SOCKS5."""
 
@@ -103,21 +142,22 @@ class TunManager:
             "169.254.0.0/16",
             "224.0.0.0/4",
         ]
+        # ssh / sing-box / GUI — by name. Python — only ops-content's interpreter
+        # (process_path), so pip/poetry in other installs go through TUN.
         proc_names = [
             "sing-box",
             "sing-box.exe",
             "ssh",
             "ssh.exe",
             "OpsContent.exe",
-            "python",
-            "python3",
-            "python.exe",
-            "pythonw.exe",
         ]
         rules: list[dict[str, Any]] = [
             {"ip_is_private": True, "outbound": "direct"},
             {"process_name": proc_names, "outbound": "direct"},
         ]
+        py_paths = _direct_python_paths()
+        if py_paths:
+            rules.append({"process_path": py_paths, "outbound": "direct"})
         ips = [ip for ip in exclude_ips if ip]
         if ips:
             rules.insert(0, {"ip_cidr": [f"{ip}/32" for ip in ips], "outbound": "direct"})

@@ -200,6 +200,11 @@ def build_pac(
                 'host == "github.com" || shExpMatch(host, "*.github.com")',
                 'shExpMatch(host, "*.githubusercontent.com")',
                 'shExpMatch(host, "*.githubassets.com")',
+                'host == "cursor.com" || shExpMatch(host, "*.cursor.com")',
+                'shExpMatch(host, "*.cursor.sh")',
+                'shExpMatch(host, "*.cursor-cdn.com")',
+                'shExpMatch(host, "*.cursorapi.com")',
+                'shExpMatch(host, "*.cursorvm.com")',
             ]
         tunnel_body = " ||\n        ".join(tunnel_conds)
         pac = f"""function FindProxyForURL(url, host) {{

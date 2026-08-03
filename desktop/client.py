@@ -269,6 +269,14 @@ class OpsClient:
                 "*.github.io",
                 "ghcr.io",
                 "*.ghcr.io",
+                # Cursor (Anysphere) — enterprise network allowlist
+                "cursor.com",
+                "*.cursor.com",
+                "*.cursor.sh",
+                "*.cursor-cdn.com",
+                "*.cursorapi.com",
+                "*.cursorvm.com",
+                "downloads.cursor.com",
             ]
             seen_t: set[str] = set()
             for h in list(cfg.get("blocked_hosts") or []) + extra:
