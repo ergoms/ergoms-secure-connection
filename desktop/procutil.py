@@ -97,3 +97,74 @@ def kill_pid(pid: int) -> None:
         os.kill(pid, 15)
     except OSError:
         pass
+
+
+def pids_listening_on(port: int, host: str = "127.0.0.1") -> list[int]:
+    """PIDs with a TCP LISTEN socket on host:port (best-effort)."""
+    if port <= 0:
+        return []
+    found: list[int] = []
+    if sys.platform == "win32":
+        # OwnProcess may repeat for IPv4/IPv6; keep order stable / unique.
+        ps = (
+            f"$h='{host}'; $p={int(port)}; "
+            "Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | "
+            "Where-Object { $_.LocalPort -eq $p -and ($_.LocalAddress -eq $h -or $_.LocalAddress -eq '0.0.0.0' -or $_.LocalAddress -eq '::') } | "
+            "Select-Object -ExpandProperty OwningProcess -Unique"
+        )
+        r = run(["powershell", "-NoProfile", "-Command", ps])
+        for line in (r.stdout or "").splitlines():
+            line = line.strip()
+            if line.isdigit():
+                found.append(int(line))
+        return found
+    # ss: users:(("ssh",pid=123,fd=3))
+    r = run(["ss", "-ltnp", f"sport = :{int(port)}"])
+    import re
+
+    for m in re.finditer(r"pid=(\d+)", r.stdout or ""):
+        pid = int(m.group(1))
+        if pid not in found:
+            found.append(pid)
+    return found
+
+
+def pids_cmdline_match(substr: str) -> list[int]:
+    """PIDs whose command line contains substr (case-insensitive on Windows)."""
+    if not substr:
+        return []
+    found: list[int] = []
+    if sys.platform == "win32":
+        # Escape single quotes for PowerShell string literal.
+        needle = substr.replace("'", "''")
+        ps = (
+            "Get-CimInstance Win32_Process | "
+            f"Where-Object {{ $_.CommandLine -and $_.CommandLine -like '*{needle}*' }} | "
+            "Select-Object -ExpandProperty ProcessId"
+        )
+        r = run(["powershell", "-NoProfile", "-Command", ps])
+        for line in (r.stdout or "").splitlines():
+            line = line.strip()
+            if line.isdigit():
+                found.append(int(line))
+        return found
+    r = run(["pgrep", "-f", substr])
+    for line in (r.stdout or "").splitlines():
+        line = line.strip()
+        if line.isdigit():
+            found.append(int(line))
+    return found
+
+
+def kill_pids(pids: Sequence[int], *, exclude: int = 0) -> list[int]:
+    """Kill unique PIDs; return those that were targeted."""
+    killed: list[int] = []
+    seen: set[int] = set()
+    for pid in pids:
+        if pid <= 0 or pid == exclude or pid in seen:
+            continue
+        seen.add(pid)
+        if pid_alive(pid):
+            kill_pid(pid)
+            killed.append(pid)
+    return killed

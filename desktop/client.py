@@ -358,15 +358,24 @@ class OpsClient:
 
     def stop_http_bridge(self) -> None:
         self.bridge.stop(log=self.log)
+        http_port = get_http_bridge_port()
+        targets: list[int] = []
         if self.paths.bridge_pid.is_file():
             try:
                 old = int(self.paths.bridge_pid.read_text().strip())
             except ValueError:
                 old = 0
-            if old and old != os.getpid() and procutil.pid_alive(old):
-                procutil.kill_pid(old)
-                self.log(f"http-bridge pid={old} stopped")
+            if old:
+                targets.append(old)
             self.paths.bridge_pid.unlink(missing_ok=True)
+        # Reap orphans: previous `on` can leave a bridge if pid-file was overwritten
+        # while the old listener kept 1088 open.
+        targets.extend(procutil.pids_listening_on(http_port))
+        targets.extend(procutil.pids_cmdline_match("desktop bridge"))
+        targets.extend(procutil.pids_cmdline_match("-m desktop bridge"))
+        killed = procutil.kill_pids(targets, exclude=os.getpid())
+        for pid in killed:
+            self.log(f"http-bridge pid={pid} stopped")
 
     def set_git_socks(self, cfg: dict[str, Any]) -> int:
         http_port = self.start_http_bridge(cfg)
@@ -406,22 +415,32 @@ class OpsClient:
                 "On the VPS run: bash modes/vps/bootstrap_sshd_443.sh"
             )
 
+        socks_port = int(ssh.get("local_socks_port") or 1080)
         if self.paths.ssh_pid.is_file():
             try:
                 old = int(self.paths.ssh_pid.read_text().strip())
             except ValueError:
                 old = 0
-            if old and procutil.pid_alive(old):
+            listeners = procutil.pids_listening_on(socks_port)
+            if (
+                old
+                and procutil.pid_alive(old)
+                and _port_open("127.0.0.1", socks_port)
+                and (not listeners or old in listeners)
+            ):
                 self.log(f"Tunnel already running (pid={old})")
                 self.set_git_socks(cfg)
                 return
+
+        # Stale pid-file / orphan ssh holding :1080 would make a new -D "succeed"
+        # against the old listener while our ssh then dies.
+        self._reap_socks_orphans(socks_port)
 
         if not _which("ssh"):
             raise RuntimeError("ssh not found in PATH (install OpenSSH Client)")
 
         os.environ["OPS_CONTENT_HTTP_PROXY"] = resolve_corporate_proxy(cfg)
         args = self.ssh_args(cfg)
-        socks_port = int(ssh.get("local_socks_port") or 1080)
         self.log(f"SSH SOCKS -> 127.0.0.1:{socks_port} via Squid")
         self.log(f"ProxyCommand: {self.proxy_command(cfg)}")
 
@@ -435,10 +454,12 @@ class OpsClient:
                 self.paths.ssh_pid.unlink(missing_ok=True)
                 raise RuntimeError("ssh exited immediately; check user/key/sshd")
             if _port_open("127.0.0.1", socks_port):
-                ok = True
-                break
-        if not ok:
-            proc.kill()
+                # Port may already have been open from a race; require our ssh alive.
+                if proc.poll() is None:
+                    ok = True
+                    break
+        if not ok or proc.poll() is not None:
+            procutil.kill_pid(proc.pid)
             self.paths.ssh_pid.unlink(missing_ok=True)
             raise RuntimeError(
                 f"SSH SOCKS port {socks_port} never opened. "
@@ -457,6 +478,25 @@ class OpsClient:
         self.paths.state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
         self.log(f"SSH tunnel ready scope={get_socks_scope()}")
 
+    def _reap_socks_orphans(self, socks_port: int) -> None:
+        """Kill ssh/ProxyCommand leftovers that still own the SOCKS port."""
+        targets: list[int] = []
+        if self.paths.ssh_pid.is_file():
+            try:
+                old = int(self.paths.ssh_pid.read_text().strip())
+            except ValueError:
+                old = 0
+            if old:
+                targets.append(old)
+            self.paths.ssh_pid.unlink(missing_ok=True)
+        targets.extend(procutil.pids_listening_on(socks_port))
+        # Match our dynamic forward even if LISTEN owner lookup failed.
+        targets.extend(procutil.pids_cmdline_match(f"-D 127.0.0.1:{socks_port}"))
+        targets.extend(procutil.pids_cmdline_match("connect_proxy.py"))
+        killed = procutil.kill_pids(targets, exclude=os.getpid())
+        for pid in killed:
+            self.log(f"ssh/orphan pid={pid} stopped")
+
     def stop_tunnel(self) -> None:
         try:
             self.tun.stop()
@@ -465,15 +505,8 @@ class OpsClient:
         disable_browser_proxy(self.paths.proxy_backup, log=self.log)
         disable_linux_env_proxy(self.paths.env_proxy_backup, log=self.log)
         self.stop_http_bridge()
-        if self.paths.ssh_pid.is_file():
-            try:
-                old = int(self.paths.ssh_pid.read_text().strip())
-            except ValueError:
-                old = 0
-            if old and procutil.pid_alive(old):
-                procutil.kill_pid(old)
-                self.log(f"ssh pid={old} stopped")
-            self.paths.ssh_pid.unlink(missing_ok=True)
+        socks_port = int((self.config().get("ssh") or {}).get("local_socks_port") or 1080)
+        self._reap_socks_orphans(socks_port)
         clear_git_proxy(self.paths.cli_env, self.paths.cli_ps1, log=self.log)
         clear_instead_of(self.log)
         self.paths.state_path.unlink(missing_ok=True)
