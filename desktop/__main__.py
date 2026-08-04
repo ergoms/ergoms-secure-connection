@@ -26,6 +26,8 @@ COMMANDS = (
     "tun-off",
     "download-sing-box",
     "sing-box",
+    "docker-env",
+    "docker-test",
     "gui",
     "help",
 )
@@ -70,6 +72,8 @@ def _show_help() -> int:
   relay-on / relay-off MODE=vps git relay
   tun-on / tun-off     TUN поверх SOCKS (sing-box)
   download-sing-box    скачать sing-box в tools/
+  docker-env           var/docker.env + compose (прокси для контейнеров)
+  docker-test          проверка: curl из контейнера через мост
   gui                  окно (нужен дисплей)
   help
 
@@ -125,6 +129,10 @@ def _run_cli(cmd: str, rest: list[str]) -> int:
             client.disable_tun()
         elif cmd in ("download-sing-box", "sing-box"):
             client.download_sing_box()
+        elif cmd == "docker-env":
+            client.docker_env()
+        elif cmd == "docker-test":
+            return client.docker_test()
         elif cmd in ("help", "-h", "--help"):
             return _show_help()
         else:

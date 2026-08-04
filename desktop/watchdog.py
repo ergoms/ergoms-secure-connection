@@ -11,6 +11,7 @@ from typing import Callable
 from desktop.client import OpsClient, _port_open
 from desktop.config_io import (
     get_mode,
+    get_tun_enabled,
     get_watchdog_enabled,
     get_watchdog_interval,
     get_watchdog_max_retries,
@@ -66,6 +67,7 @@ def health_problem(client: OpsClient) -> str | None:
         ssh_alive = bool(ssh_pid and procutil.pid_alive(ssh_pid))
 
     tun_up = client.tun.running()
+    tun_wanted = get_tun_enabled()
 
     if tun_up and not socks_up:
         return f"TUN up but SOCKS :{socks} refused"
@@ -75,6 +77,10 @@ def health_problem(client: OpsClient) -> str | None:
         return f"state present but SOCKS :{socks} down"
     if ssh_pid and not ssh_alive and not socks_up:
         return f"ssh pid={ssh_pid} dead, SOCKS :{socks} down"
+    # SOCKS alone is not enough for Docker Desktop: UDP/53 from the VM dies
+    # unless sing-box hijacks it. Recover TUN when .env says TUN=1.
+    if tun_wanted and socks_up and not tun_up:
+        return "TUN=1 but sing-box down (Docker DNS)"
     return None
 
 
@@ -183,27 +189,43 @@ class TunnelWatchdog:
 
         self._fail_streak += 1
         self.log(f"watchdog: {problem} — reconnect {self._fail_streak}/{max_retries}")
-        self._notify("Туннель упал", f"{problem}. Переподключаю…")
-        self._reconnect()
+        if "sing-box down" in problem:
+            self._notify("TUN упал", f"{problem}. Поднимаю…")
+            self._reconnect(tun_only=True)
+        else:
+            self._notify("Туннель упал", f"{problem}. Переподключаю…")
+            self._reconnect(tun_only=False)
 
-    def _reconnect(self) -> None:
+    def _reconnect(self, *, tun_only: bool = False) -> None:
         self._reconnecting = True
         try:
-            # Stop TUN first so sing-box stops flooding refused-to-1080 logs
-            try:
-                if self.client.tun.running():
-                    self.client.tun.stop()
-            except Exception as exc:  # noqa: BLE001
-                self.log(f"watchdog: TUN stop: {exc}")
-            try:
-                self.client.stop_tunnel()
-            except Exception as exc:  # noqa: BLE001
-                self.log(f"watchdog: stop: {exc}")
-            self.client.enable(spawn_watchdog=False)
+            if tun_only:
+                try:
+                    self.client.enable_tun(persist=False)
+                except Exception as exc:  # noqa: BLE001
+                    self.log(f"watchdog: TUN restart: {exc}")
+                    raise
+            else:
+                # Stop TUN first so sing-box stops flooding refused-to-1080 logs
+                try:
+                    if self.client.tun.running():
+                        self.client.tun.stop()
+                except Exception as exc:  # noqa: BLE001
+                    self.log(f"watchdog: TUN stop: {exc}")
+                try:
+                    self.client.stop_tunnel()
+                except Exception as exc:  # noqa: BLE001
+                    self.log(f"watchdog: stop: {exc}")
+                self.client.enable(spawn_watchdog=False)
             problem = health_problem(self.client)
             if problem is None:
                 self.log("watchdog: reconnected OK")
-                self._notify("Туннель восстановлен", "SOCKS снова доступен")
+                self._notify(
+                    "TUN восстановлен" if tun_only else "Туннель восстановлен",
+                    "Docker DNS снова через host resolver"
+                    if tun_only
+                    else "SOCKS снова доступен",
+                )
                 self._fail_streak = 0
                 self._next_ok_at = time.monotonic() + 5.0
             else:

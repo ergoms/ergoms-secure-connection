@@ -28,6 +28,7 @@ from desktop.config_io import (
     resolve_corporate_proxy,
     update_env_key,
 )
+from desktop.docker_env import clear_docker_env, docker_smoke_test, write_docker_env
 from desktop.git_proxy import (
     disable_relay_git,
     enable_relay_git,
@@ -382,6 +383,7 @@ class OpsClient:
         proxy = f"http://127.0.0.1:{http_port}"
         set_git_http_proxy(proxy, log=self.log)
         write_cli_env(http_port, self.paths.cli_env, self.paths.cli_ps1)
+        self.write_docker_helpers(cfg, http_port=http_port, active=True)
         enable_browser_pac(
             http_port,
             get_socks_scope(),
@@ -398,6 +400,64 @@ class OpsClient:
         socks = int((cfg.get("ssh") or {}).get("local_socks_port") or 1080)
         self.log(f"git via SOCKS {socks}, scope={get_socks_scope()}")
         return http_port
+
+    def write_docker_helpers(
+        self,
+        cfg: dict[str, Any] | None = None,
+        *,
+        http_port: int | None = None,
+        active: bool = True,
+    ) -> None:
+        """Generate var/docker.env + compose snippet + optional extra_hosts."""
+        if cfg is None:
+            try:
+                cfg = self.config()
+            except FileNotFoundError:
+                cfg = {}
+        port = int(http_port if http_port is not None else get_http_bridge_port())
+        extra = cfg.get("docker_dns_hosts")
+        dns_hosts = [str(h) for h in extra] if isinstance(extra, list) and extra else None
+        write_docker_env(
+            port,
+            self.paths.docker_env,
+            self.paths.docker_compose_proxy,
+            self.paths.docker_hosts,
+            dns_hosts=dns_hosts,
+            active=active,
+            log=self.log,
+            run_ps1=self.paths.docker_run_ps1,
+            run_sh=self.paths.docker_run_sh,
+        )
+
+    def docker_env(self) -> None:
+        """Refresh Docker helper files (proxy must already be up for full effect)."""
+        self.reload_env()
+        http_port = get_http_bridge_port()
+        active = _port_open("127.0.0.1", http_port)
+        if not active:
+            self.log(
+                f"HTTP bridge :{http_port} не слушает — пишу заглушку. "
+                "Сначала: ops-content on"
+            )
+        self.write_docker_helpers(http_port=http_port, active=active)
+        if active:
+            self.log(f"env-file:  docker run --env-file {self.paths.docker_env} IMAGE")
+            self.log(f"wrapper:   {self.paths.docker_run_ps1} -- IMAGE")
+            self.log(
+                f"compose:   -f {self.paths.docker_compose_proxy} "
+                f"(<<: *ops-content-proxy)"
+            )
+
+    def docker_test(self) -> int:
+        """Smoke-test: HTTPS from a container via the host HTTP bridge."""
+        self.reload_env()
+        http_port = get_http_bridge_port()
+        if not _port_open("127.0.0.1", http_port):
+            self.log(f"HTTP bridge :{http_port} down — сначала: ops-content on")
+            return 2
+        # Refresh helpers so docker.env has the current host IP
+        self.write_docker_helpers(http_port=http_port, active=True)
+        return docker_smoke_test(http_port, log=self.log)
 
     def start_tunnel(self) -> None:
         self.reload_env()
@@ -508,6 +568,15 @@ class OpsClient:
         socks_port = int((self.config().get("ssh") or {}).get("local_socks_port") or 1080)
         self._reap_socks_orphans(socks_port)
         clear_git_proxy(self.paths.cli_env, self.paths.cli_ps1, log=self.log)
+        clear_docker_env(
+            self.paths.docker_env,
+            self.paths.docker_compose_proxy,
+            self.paths.docker_hosts,
+            http_port=get_http_bridge_port(),
+            log=self.log,
+            run_ps1=self.paths.docker_run_ps1,
+            run_sh=self.paths.docker_run_sh,
+        )
         clear_instead_of(self.log)
         self.paths.state_path.unlink(missing_ok=True)
 
@@ -516,12 +585,14 @@ class OpsClient:
         cfg = self.config()
         ssh = cfg.get("ssh") or {}
         socks_port = int(ssh.get("local_socks_port") or 1080)
+        bypass = [str(h) for h in cfg.get("proxy_bypass") or [] if h]
         self.tun.start(
             socks_port=socks_port,
             corporate_proxy=resolve_corporate_proxy(cfg),
             ssh_host=str(ssh.get("host") or ""),
             sing_box_path=get_sing_box_path(cfg),
             elevate=get_tun_elevate(),
+            bypass_hosts=bypass,
         )
         if persist:
             update_env_key(self.paths.env_path, "TUN", "1")
@@ -574,16 +645,26 @@ class OpsClient:
         self.reload_env()
         if not get_tun_enabled():
             self.log("TUN=0 (.env) — системный TUN не поднимаем")
+            self.log(
+                "Без TUN DNS в Docker Desktop часто мёртв "
+                "(getent/pip к внешним именам). Нужен TUN=1 или HTTP_PROXY из var/docker.env"
+            )
             return
-        self.log("TUN=1 (.env) — поднимаем TUN поверх SOCKS")
+        self.log("TUN=1 (.env) — поднимаем TUN поверх SOCKS (нужен для DNS в Docker)")
         try:
             self.enable_tun(persist=False)
         except Exception as exc:  # noqa: BLE001
             # Tunnel already up — don't fail the whole `on` because of TUN
             self.log(f"TUN auto-start failed: {exc}")
-            self.log("Туннель оставлен включённым. Нужен sing-box: download-sing-box / tools/")
+            self.log(
+                "SOCKS оставлен. Без TUN контейнеры не резолвят pypi.org — "
+                "повторите tun-on (UAC) или используйте var/docker.env (HTTP_PROXY)."
+            )
+            self.log("Нужен sing-box: download-sing-box / tools/")
 
-    def enable(self) -> None:
+    def enable(self, *, spawn_watchdog: bool = True) -> None:
+        # spawn_watchdog kept for watchdog/CLI callers; GUI owns its own monitor.
+        _ = spawn_watchdog
         self.reload_env()
         mode = get_mode()
         self.log(f"MODE={mode} TUN={1 if get_tun_enabled() else 0}")
@@ -696,6 +777,11 @@ class OpsClient:
             lines.append(f"TUN (sing-box) pid={info['tun_pid']} running")
         else:
             lines.append("TUN (sing-box)   = off")
+            if info["tun_env"]:
+                lines.append(
+                    "WARN: TUN=1 but sing-box off — DNS в Docker Desktop сломан "
+                    "(tun-on или ops-content on)"
+                )
 
         if self.paths.state_path.is_file():
             try:
@@ -719,6 +805,11 @@ class OpsClient:
             lines.append(f"proxy_bypass    = {info['proxy_bypass_n']} entries")
             if info["sing_box_path"]:
                 lines.append(f"sing_box_path   = {info['sing_box_path']}")
+
+        if self.paths.docker_env.is_file():
+            lines.append(f"docker.env      = {self.paths.docker_env}")
+        if self.paths.docker_compose_proxy.is_file():
+            lines.append(f"docker compose  = {self.paths.docker_compose_proxy}")
 
         info["active"] = bool(
             info["ssh_running"]

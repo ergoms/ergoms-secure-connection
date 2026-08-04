@@ -23,6 +23,9 @@ ENV_KEYS = [
     "CORPORATE_PROXY",
     "TUN",
     "TUN_ELEVATE",
+    "WATCHDOG",
+    "WATCHDOG_INTERVAL",
+    "WATCHDOG_MAX_RETRIES",
 ]
 
 
@@ -227,6 +230,28 @@ def get_tun_elevate() -> bool:
     if raw is None or raw.strip() == "":
         return True
     return _truthy(raw)
+
+
+def get_watchdog_enabled() -> bool:
+    """Background reconnect; default on. Set WATCHDOG=0 to disable."""
+    raw = os.environ.get("WATCHDOG")
+    if raw is None or raw.strip() == "":
+        return True
+    return _truthy(raw)
+
+
+def get_watchdog_interval() -> int:
+    raw = (os.environ.get("WATCHDOG_INTERVAL") or "").strip()
+    if raw.isdigit():
+        return max(5, int(raw))
+    return 15
+
+
+def get_watchdog_max_retries() -> int:
+    raw = (os.environ.get("WATCHDOG_MAX_RETRIES") or "").strip()
+    if raw.isdigit():
+        return max(1, int(raw))
+    return 5
 
 
 def resolve_corporate_proxy(cfg: dict[str, Any] | None = None) -> str:

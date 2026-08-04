@@ -81,6 +81,37 @@ OpsContent.exe on|off|status|probe|tun-on|tun-off|download-sing-box …
 
 Частные сети, Squid и VPS в TUN не заворачиваются, чтобы не зациклить SSH.
 
+**TUN обязателен для DNS в Docker Desktop:** sing-box перехватывает UDP/53 от VM и отвечает системным резолвером хоста (до 8.8.8.8 из VM часто таймаут; SSH SOCKS не умеет UDP). При `TUN=1` клиент поднимает TUN после `on`; если sing-box упал — watchdog поднимает снова. Без живого TUN `getent pypi.org` в контейнере падает.
+
+Остальной трафик Docker/WSL идёт direct — для pip/npm без рабочего DNS используйте HTTP-мост на хосте (ниже).
+
+### Docker (контейнеры без рабочего DNS)
+
+Контейнер не видит WinINET/PAC. Без TUN не резолвит внешние имена (UDP/53 из VM). При `on` клиент пишет:
+
+| Файл | Назначение |
+|------|------------|
+| `var/docker.env` | `HTTP_PROXY` → IP хоста Docker Desktop (`192.168.65.254:1088`), без DNS |
+| `var/docker-compose.proxy.yml` | якорь `*ops-content-proxy` (env + `extra_hosts`) |
+| `var/docker.hosts` | IP, резолвнутые на хосте (`DOCKER_DNS_FIX`) |
+| `var/docker-run.ps1` | обёртка `docker run --env-file …` |
+
+В контейнере DNS обычно мёртв (в т.ч. `host.docker.internal`), поэтому в `docker.env` пишется **IP** host-gateway, а не имя.
+
+```powershell
+.\ops-content.ps1 on                   # SOCKS + TUN=1 → DNS в контейнерах
+.\ops-content.ps1 docker-test          # getent DNS + curl через мост
+# Если TUN жив — dns-fix / DOCKER_DNS_FIX в другом стеке не нужны:
+docker run --rm --network bridge alpine:3.20 getent hosts pypi.org
+# Запасной путь без DNS (прокси по IP хоста):
+docker run --rm --env-file .\var\docker.env curlimages/curl:8.5.0 -I https://pypi.org
+.\var\docker-run.ps1 -- --rm curlimages/curl:8.5.0 -I https://pypi.org
+```
+
+Compose: подключите якорь к сервису (`<<: *ops-content-proxy`) и добавьте `-f var/docker-compose.proxy.yml`.
+
+Опционально: `docker_dns_hosts` в `config.json`; `OPS_CONTENT_DOCKER_HOST_IP` — ручной IP хоста.
+
 ---
 
 ## Быстрый старт на Windows
@@ -234,6 +265,8 @@ OpsContent.exe <команда>            # Windows EXE
 | `relay-on` / `relay-off` | Только HTTPS-посредник для git (`MODE=vps`) |
 | `tun-on` / `tun-off` | TUN поверх SOCKS (sing-box; Windows UAC / Linux sudo) |
 | `download-sing-box` | Скачать sing-box в `tools/` |
+| `docker-env` | Обновить `var/docker.env` / compose / `extra_hosts` |
+| `docker-test` | Проверка HTTPS из контейнера через мост |
 | `gui` | Окно (нужен дисплей) |
 | `install-service` / `uninstall-service` | Служба пользователя на Linux (только `.sh`) |
 | `deploy` | Выкладка посредника на сервер |
