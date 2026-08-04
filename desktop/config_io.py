@@ -55,9 +55,33 @@ def load_dotenv(path: Path) -> dict[str, str]:
     return out
 
 
-def apply_dotenv(path: Path) -> dict[str, str]:
+_env_cache: tuple[float, dict[str, str]] | None = None
+_config_cache: tuple[float, dict[str, Any]] | None = None
+
+
+def _file_mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime if path.is_file() else 0.0
+    except OSError:
+        return 0.0
+
+
+def invalidate_config_cache() -> None:
+    """Drop cached .env / config.json reads (after save/update)."""
+    global _env_cache, _config_cache
+    _env_cache = None
+    _config_cache = None
+
+
+def apply_dotenv(path: Path, *, force: bool = False) -> dict[str, str]:
     """Load .env into process env (source of truth for MODE / TUN etc.)."""
-    data = load_dotenv(path)
+    global _env_cache
+    mtime = _file_mtime(path)
+    if not force and _env_cache and _env_cache[0] == mtime:
+        data = _env_cache[1]
+    else:
+        data = load_dotenv(path)
+        _env_cache = (mtime, data)
     for k, v in data.items():
         os.environ[k] = v
     return data
@@ -148,6 +172,7 @@ def save_dotenv(path: Path, values: dict[str, str], preserve_comments: bool = Tr
         out.extend(extras)
 
     path.write_text("\n".join(out) + "\n", encoding="utf-8")
+    invalidate_config_cache()
 
 
 def update_env_key(path: Path, key: str, value: str) -> None:
@@ -161,11 +186,16 @@ def update_env_key(path: Path, key: str, value: str) -> None:
     apply_dotenv(path)
 
 
-def load_config(path: Path) -> dict[str, Any]:
+def load_config(path: Path, *, force: bool = False) -> dict[str, Any]:
+    global _config_cache
     if not path.is_file():
         raise FileNotFoundError(f"Missing config.json. Run init first: {path}")
-    cfg = json.loads(path.read_text(encoding="utf-8-sig"))
-    return ensure_config_defaults(cfg)
+    mtime = _file_mtime(path)
+    if not force and _config_cache and _config_cache[0] == mtime:
+        return deepcopy(_config_cache[1])
+    cfg = ensure_config_defaults(json.loads(path.read_text(encoding="utf-8-sig")))
+    _config_cache = (mtime, cfg)
+    return deepcopy(cfg)
 
 
 def save_config(path: Path, cfg: dict[str, Any]) -> None:
@@ -173,6 +203,7 @@ def save_config(path: Path, cfg: dict[str, Any]) -> None:
         json.dumps(ensure_config_defaults(cfg), indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
+    invalidate_config_cache()
 
 
 def ensure_config_defaults(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -197,6 +228,7 @@ def ensure_config_defaults(cfg: dict[str, Any]) -> dict[str, Any]:
         tun = {}
         out["tun"] = tun
     tun.setdefault("sing_box_path", "")
+    tun.setdefault("mtu", 1400)
     return out
 
 
@@ -273,6 +305,22 @@ def get_sing_box_path(cfg: dict[str, Any] | None = None) -> str:
         if isinstance(tun, dict):
             return str(tun.get("sing_box_path") or "").strip()
     return ""
+
+
+def get_tun_mtu(cfg: dict[str, Any] | None = None) -> int:
+    """TUN interface MTU (lower = fewer fragments over SSH SOCKS overlay)."""
+    raw = (os.environ.get("TUN_MTU") or "").strip()
+    if raw.isdigit():
+        return max(1280, min(1500, int(raw)))
+    if cfg:
+        tun = cfg.get("tun") or {}
+        if isinstance(tun, dict):
+            mtu = tun.get("mtu")
+            if isinstance(mtu, int) and 1280 <= mtu <= 1500:
+                return mtu
+            if isinstance(mtu, str) and mtu.isdigit():
+                return max(1280, min(1500, int(mtu)))
+    return 1400
 
 
 def invoke_init(paths: Paths, log: LogFn = _noop) -> None:
@@ -362,6 +410,7 @@ def default_config_template() -> dict[str, Any]:
         "proxy_bypass_via": "direct",
         "tun": {
             "sing_box_path": "",
+            "mtu": 1400,
         },
     }
 

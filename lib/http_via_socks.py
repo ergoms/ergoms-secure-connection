@@ -136,21 +136,46 @@ def pump(a: socket.socket, b: socket.socket) -> None:
                 pass
 
 
-def host_matches_bypass(host: str, patterns: list[str]) -> bool:
-    """True if host matches a proxy_bypass PAC pattern."""
-    h = (host or "").strip().lower().strip("[]").rstrip(".")
-    if not h:
-        return False
-    for raw in patterns:
-        p = raw.strip().lower()
-        if not p:
-            continue
-        if "*" in p or "?" in p:
+class BypassMatcher:
+    """Precompiled bypass host patterns (exact / suffix / glob)."""
+
+    __slots__ = ("_exact", "_suffixes", "_globs")
+
+    def __init__(self, patterns: list[str]) -> None:
+        exact: set[str] = set()
+        suffixes: list[str] = []
+        globs: list[str] = []
+        for raw in patterns:
+            p = raw.strip().lower()
+            if not p:
+                continue
+            if "*" in p or "?" in p:
+                globs.append(p)
+            else:
+                exact.add(p)
+                suffixes.append("." + p)
+        self._exact = exact
+        self._suffixes = suffixes
+        self._globs = globs
+
+    def matches(self, host: str) -> bool:
+        h = (host or "").strip().lower().strip("[]").rstrip(".")
+        if not h:
+            return False
+        if h in self._exact:
+            return True
+        for suf in self._suffixes:
+            if h.endswith(suf):
+                return True
+        for p in self._globs:
             if fnmatch.fnmatch(h, p):
                 return True
-        elif h == p or h.endswith("." + p):
-            return True
-    return False
+        return False
+
+
+def host_matches_bypass(host: str, patterns: list[str]) -> bool:
+    """True if host matches a proxy_bypass PAC pattern."""
+    return BypassMatcher(patterns).matches(host)
 
 
 def bypass_to_singbox(
@@ -350,6 +375,7 @@ def forward_http_absolute(
     socks_host: str,
     socks_port: int,
     *,
+    bypass: BypassMatcher | None = None,
     bypass_hosts: list[str] | None = None,
     fallback_proxy: str = "",
     bypass_via: str = "direct",
@@ -359,7 +385,7 @@ def forward_http_absolute(
     if not host:
         client.sendall(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
         return
-    bypassed = host_matches_bypass(host, bypass_hosts or [])
+    bypassed = (bypass or BypassMatcher(bypass_hosts or [])).matches(host)
     if not bypassed and is_blocked_destination(host):
         _refuse(client, 403, "Forbidden private/metadata destination")
         return
@@ -392,10 +418,12 @@ def handle_client(
     pac_bytes: bytes,
     listen_port: int,
     *,
+    bypass: BypassMatcher | None = None,
     bypass_hosts: list[str] | None = None,
     fallback_proxy: str = "",
     bypass_via: str = "direct",
 ) -> None:
+    matcher = bypass or BypassMatcher(bypass_hosts or [])
     try:
         client.settimeout(60)
         buf = b""
@@ -423,7 +451,7 @@ def handle_client(
             except ValueError:
                 client.sendall(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
                 return
-            bypassed = host_matches_bypass(host, bypass_hosts or [])
+            bypassed = matcher.matches(host)
             if not bypassed and is_blocked_destination(host):
                 _refuse(client, 403, "Forbidden private/metadata destination")
                 return
@@ -465,6 +493,7 @@ def handle_client(
                 target,
                 socks_host,
                 socks_port,
+                bypass=bypass,
                 bypass_hosts=bypass_hosts,
                 fallback_proxy=fallback_proxy,
                 bypass_via=bypass_via,
@@ -515,6 +544,7 @@ def main() -> int:
 
     tunnel = list(args.pac_host)
     bypass = list(args.bypass_host)
+    bypass_matcher = BypassMatcher(bypass)
     pac_bytes = build_pac(
         lport,
         args.mode,
@@ -553,7 +583,7 @@ def main() -> int:
             target=handle_client,
             args=(client, shost, sport, pac_bytes, lport),
             kwargs={
-                "bypass_hosts": bypass,
+                "bypass": bypass_matcher,
                 "fallback_proxy": args.fallback_proxy,
                 "bypass_via": args.bypass_via,
             },

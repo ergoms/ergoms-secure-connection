@@ -50,6 +50,7 @@
     "registry-1.docker.io"
   ],
   "tun": {
-    "sing_box_path": ""
+    "sing_box_path": "",
+    "mtu": 1400
   }
 }

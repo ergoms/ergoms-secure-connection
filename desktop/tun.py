@@ -101,6 +101,8 @@ class TunManager:
         self.config_path = var_dir / "sing-box-tun.json"
         self.pid_path = var_dir / "sing-box.pid"
         self.log_path = logs_dir / "sing-box.log"
+        self._pid_scan_at = 0.0
+        self._pid_scan_result: int | None = None
 
     def _bin_name(self) -> str:
         return "sing-box.exe" if sys.platform == "win32" else "sing-box"
@@ -163,6 +165,7 @@ class TunManager:
         socks_port: int,
         exclude_ips: list[str],
         bypass_hosts: list[str] | None = None,
+        mtu: int = 1400,
     ) -> dict[str, Any]:
         route_exclude = [
             "10.0.0.0/8",
@@ -225,6 +228,8 @@ class TunManager:
         rules.append({"ip_is_private": True, "outbound": "direct"})
 
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        cache_db = (self.var_dir / "sing-box-cache.db").resolve()
+        mtu_val = max(1280, min(1500, int(mtu)))
         return {
             "log": {
                 "level": "info",
@@ -266,6 +271,9 @@ class TunManager:
                 ],
                 "final": "dns-proxy",
                 "strategy": "prefer_ipv4",
+                "cache_capacity": 8192,
+                "optimistic": True,
+                "timeout": "5s",
             },
             "inbounds": [
                 {
@@ -273,7 +281,7 @@ class TunManager:
                     "tag": "tun-in",
                     "interface_name": "ops-content-tun",
                     "address": ["172.19.0.1/30"],
-                    "mtu": 1500,
+                    "mtu": mtu_val,
                     "auto_route": True,
                     "strict_route": False,
                     "stack": "system",
@@ -297,6 +305,13 @@ class TunManager:
                 "final": "socks-out",
                 "rules": rules,
             },
+            "experimental": {
+                "cache_file": {
+                    "enabled": True,
+                    "path": str(cache_db).replace("\\", "/"),
+                    "store_rdrc": True,
+                },
+            },
         }
 
     def running(self) -> bool:
@@ -310,7 +325,13 @@ class TunManager:
                 pid = None
             if pid and procutil.pid_alive(pid):
                 return pid
+        now = time.monotonic()
+        if now - self._pid_scan_at < 2.0 and self._pid_scan_result:
+            if procutil.pid_alive(self._pid_scan_result):
+                return self._pid_scan_result
         found = self._find_sing_box_pid()
+        self._pid_scan_at = now
+        self._pid_scan_result = found
         if found:
             self.pid_path.write_text(str(found), encoding="utf-8")
             return found
@@ -325,11 +346,8 @@ class TunManager:
         sing_box_path: str = "",
         elevate: bool = True,
         bypass_hosts: list[str] | None = None,
+        mtu: int = 1400,
     ) -> None:
-        if self.running():
-            self.log(f"TUN already running (pid={self.pid()})")
-            return
-
         exe = self.find_sing_box(sing_box_path)
         if not exe:
             raise RuntimeError(
@@ -357,11 +375,23 @@ class TunManager:
             socks_port=int(socks_port),
             exclude_ips=exclude,
             bypass_hosts=bypass_hosts,
+            mtu=mtu,
         )
-        self.var_dir.mkdir(parents=True, exist_ok=True)
-        self.config_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        config_text = json.dumps(cfg, indent=2)
+        if self.running():
+            old_text = ""
+            if self.config_path.is_file():
+                old_text = self.config_path.read_text(encoding="utf-8")
+            if old_text == config_text:
+                self.log(f"TUN already running (pid={self.pid()})")
+                return
+            self.log("TUN config changed — перезапуск sing-box")
+            self.stop()
 
-        self.log(f"Starting TUN (sing-box) → socks5://127.0.0.1:{socks_port}")
+        self.var_dir.mkdir(parents=True, exist_ok=True)
+        self.config_path.write_text(config_text, encoding="utf-8")
+
+        self.log(f"Starting TUN (sing-box, mtu={max(1280, min(1500, int(mtu)))}) → socks5://127.0.0.1:{socks_port}")
         if elevate:
             self.log("Нужны права администратора для виртуального адаптера")
 
@@ -369,15 +399,24 @@ class TunManager:
         if pid:
             self.pid_path.write_text(str(pid), encoding="utf-8")
 
-        for _ in range(40):
-            time.sleep(0.25)
-            if self.running() or self._tun_iface_present():
-                if not self.running():
-                    found = self._find_sing_box_pid()
-                    if found:
-                        self.pid_path.write_text(str(found), encoding="utf-8")
+        deadline = time.monotonic() + 10.0
+        interval = 0.05
+        attempt = 0
+        while time.monotonic() < deadline:
+            if self.running():
                 self.log("TUN активен (система → SOCKS → VPS)")
                 return
+            if attempt % 4 == 0 and self._tun_iface_present():
+                found = self._find_sing_box_pid()
+                if found:
+                    self.pid_path.write_text(str(found), encoding="utf-8")
+                    self._pid_scan_at = time.monotonic()
+                    self._pid_scan_result = found
+                self.log("TUN активен (система → SOCKS → VPS)")
+                return
+            time.sleep(interval)
+            interval = min(interval * 1.3, 0.25)
+            attempt += 1
         raise RuntimeError(
             "sing-box не поднял TUN. Нужен admin/sudo (или TUN_ELEVATE=1). "
             f"См. logs/sing-box.log. exe={exe}"
@@ -388,20 +427,11 @@ class TunManager:
         if pid:
             procutil.kill_pid(pid)
             self.log(f"sing-box pid={pid} stopped")
-        # Best-effort cleanup of our config process
-        if sys.platform == "win32":
-            procutil.run(
-                [
-                    "powershell",
-                    "-NoProfile",
-                    "-Command",
-                    "Get-CimInstance Win32_Process -Filter \"Name='sing-box.exe'\" | "
-                    "Where-Object { $_.CommandLine -like '*sing-box-tun.json*' } | "
-                    "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
-                ]
-            )
-        else:
-            procutil.run(["pkill", "-f", "sing-box-tun.json"])
+        for orphan in procutil.pids_cmdline_match("sing-box-tun.json", cache=False):
+            if orphan != pid:
+                procutil.kill_pid(orphan)
+        self._pid_scan_at = 0.0
+        self._pid_scan_result = None
         self.pid_path.unlink(missing_ok=True)
         self.log("TUN выключен")
 
@@ -468,27 +498,8 @@ class TunManager:
         )
 
     def _find_sing_box_pid(self) -> int | None:
-        if sys.platform == "win32":
-            r = procutil.run(
-                [
-                    "powershell",
-                    "-NoProfile",
-                    "-Command",
-                    "Get-CimInstance Win32_Process -Filter \"Name='sing-box.exe'\" | "
-                    "Where-Object { $_.CommandLine -like '*sing-box-tun.json*' } | "
-                    "Select-Object -ExpandProperty ProcessId",
-                ]
-            )
-            for line in (r.stdout or "").splitlines():
-                line = line.strip()
-                if line.isdigit():
-                    return int(line)
-            return None
-        r = procutil.run(["pgrep", "-f", "sing-box-tun.json"])
-        for line in (r.stdout or "").splitlines():
-            line = line.strip()
-            if line.isdigit():
-                return int(line)
+        for pid in procutil.pids_cmdline_match("sing-box-tun.json"):
+            return pid
         return None
 
     def _tun_iface_present(self) -> bool:

@@ -3,15 +3,37 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
-from typing import Sequence
+import time
+from typing import Callable, Sequence
+
+_PROC_CACHE_TTL = 1.0
+_proc_cache: dict[tuple, tuple[float, list[int]]] = {}
 
 
 def creationflags() -> int:
     if sys.platform == "win32":
         return subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
     return 0
+
+
+def invalidate_proc_cache() -> None:
+    """Drop cached PID lookups (call before kill/stop)."""
+    _proc_cache.clear()
+
+
+def _proc_cache_get(key: tuple) -> list[int] | None:
+    entry = _proc_cache.get(key)
+    if entry and time.monotonic() - entry[0] < _PROC_CACHE_TTL:
+        return list(entry[1])
+    return None
+
+
+def _proc_cache_set(key: tuple, value: list[int]) -> list[int]:
+    _proc_cache[key] = (time.monotonic(), list(value))
+    return value
 
 
 def run(
@@ -90,6 +112,7 @@ def pid_alive(pid: int) -> bool:
 def kill_pid(pid: int) -> None:
     if pid <= 0:
         return
+    invalidate_proc_cache()
     if sys.platform == "win32":
         run(["taskkill", "/PID", str(pid), "/T", "/F"])
         return
@@ -99,47 +122,82 @@ def kill_pid(pid: int) -> None:
         pass
 
 
-def pids_listening_on(port: int, host: str = "127.0.0.1") -> list[int]:
-    """PIDs with a TCP LISTEN socket on host:port (best-effort)."""
-    if port <= 0:
-        return []
+def _pids_listening_on_netstat(port: int, host: str) -> list[int]:
+    """Fast Windows path via netstat (~10–50 ms vs seconds for Get-NetTCPConnection)."""
+    r = run(["netstat", "-ano", "-p", "tcp"])
     found: list[int] = []
-    if sys.platform == "win32":
-        # OwnProcess may repeat for IPv4/IPv6; keep order stable / unique.
-        ps = (
-            f"$h='{host}'; $p={int(port)}; "
-            "Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | "
-            "Where-Object { $_.LocalPort -eq $p -and ($_.LocalAddress -eq $h -or $_.LocalAddress -eq '0.0.0.0' -or $_.LocalAddress -eq '::') } | "
-            "Select-Object -ExpandProperty OwningProcess -Unique"
-        )
-        r = run(["powershell", "-NoProfile", "-Command", ps])
-        for line in (r.stdout or "").splitlines():
-            line = line.strip()
-            if line.isdigit():
-                found.append(int(line))
-        return found
-    # ss: users:(("ssh",pid=123,fd=3))
-    r = run(["ss", "-ltnp", f"sport = :{int(port)}"])
-    import re
-
-    for m in re.finditer(r"pid=(\d+)", r.stdout or ""):
-        pid = int(m.group(1))
-        if pid not in found:
+    seen: set[int] = set()
+    port_s = f":{int(port)}"
+    host_l = host.lower()
+    for line in (r.stdout or "").splitlines():
+        if "LISTENING" not in line.upper():
+            continue
+        parts = line.split()
+        if len(parts) < 5:
+            continue
+        local_addr = parts[1]
+        if not local_addr.endswith(port_s):
+            continue
+        addr = local_addr.rsplit(":", 1)[0]
+        if host_l not in ("127.0.0.1", "localhost", "::1"):
+            if addr not in (host_l, "0.0.0.0", "::", "[::]"):
+                continue
+        elif addr not in ("127.0.0.1", "0.0.0.0", "::", "[::]", "localhost"):
+            continue
+        pid_s = parts[-1]
+        if not pid_s.isdigit():
+            continue
+        pid = int(pid_s)
+        if pid not in seen:
+            seen.add(pid)
             found.append(pid)
     return found
 
 
-def pids_cmdline_match(substr: str) -> list[int]:
+def pids_listening_on(
+    port: int, host: str = "127.0.0.1", *, cache: bool = True
+) -> list[int]:
+    """PIDs with a TCP LISTEN socket on host:port (best-effort)."""
+    if port <= 0:
+        return []
+    key = ("listen", int(port), host)
+    if cache:
+        cached = _proc_cache_get(key)
+        if cached is not None:
+            return cached
+    found: list[int] = []
+    if sys.platform == "win32":
+        found = _pids_listening_on_netstat(port, host)
+    else:
+        r = run(["ss", "-ltnp", f"sport = :{int(port)}"])
+        for m in re.finditer(r"pid=(\d+)", r.stdout or ""):
+            pid = int(m.group(1))
+            if pid not in found:
+                found.append(pid)
+    if cache:
+        return _proc_cache_set(key, found)
+    return found
+
+
+def _wmi_escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "[%]").replace("_", "[_]")
+
+
+def pids_cmdline_match(substr: str, *, cache: bool = True) -> list[int]:
     """PIDs whose command line contains substr (case-insensitive on Windows)."""
     if not substr:
         return []
+    key = ("cmdline", substr.lower())
+    if cache:
+        cached = _proc_cache_get(key)
+        if cached is not None:
+            return cached
     found: list[int] = []
     if sys.platform == "win32":
-        # Escape single quotes for PowerShell string literal.
-        needle = substr.replace("'", "''")
+        needle = _wmi_escape_like(substr).replace("'", "''")
         ps = (
-            "Get-CimInstance Win32_Process | "
-            f"Where-Object {{ $_.CommandLine -and $_.CommandLine -like '*{needle}*' }} | "
+            "Get-CimInstance Win32_Process "
+            f"-Filter \"CommandLine LIKE '%{needle}%'\" | "
             "Select-Object -ExpandProperty ProcessId"
         )
         r = run(["powershell", "-NoProfile", "-Command", ps])
@@ -147,17 +205,20 @@ def pids_cmdline_match(substr: str) -> list[int]:
             line = line.strip()
             if line.isdigit():
                 found.append(int(line))
-        return found
-    r = run(["pgrep", "-f", substr])
-    for line in (r.stdout or "").splitlines():
-        line = line.strip()
-        if line.isdigit():
-            found.append(int(line))
+    else:
+        r = run(["pgrep", "-f", substr])
+        for line in (r.stdout or "").splitlines():
+            line = line.strip()
+            if line.isdigit():
+                found.append(int(line))
+    if cache:
+        return _proc_cache_set(key, found)
     return found
 
 
 def kill_pids(pids: Sequence[int], *, exclude: int = 0) -> list[int]:
     """Kill unique PIDs; return those that were targeted."""
+    invalidate_proc_cache()
     killed: list[int] = []
     seen: set[int] = set()
     for pid in pids:
@@ -168,3 +229,33 @@ def kill_pids(pids: Sequence[int], *, exclude: int = 0) -> list[int]:
             kill_pid(pid)
             killed.append(pid)
     return killed
+
+
+def wait_port_open(
+    host: str,
+    port: int,
+    *,
+    timeout: float = 10.0,
+    interval_start: float = 0.05,
+    interval_max: float = 0.25,
+    probe: Callable[[], bool] | None = None,
+) -> bool:
+    """Poll until TCP port accepts connections or timeout expires."""
+    import socket
+
+    def default_probe() -> bool:
+        try:
+            with socket.create_connection((host, port), timeout=0.2):
+                return True
+        except OSError:
+            return False
+
+    check = probe or default_probe
+    deadline = time.monotonic() + timeout
+    interval = interval_start
+    while time.monotonic() < deadline:
+        if check():
+            return True
+        time.sleep(interval)
+        interval = min(interval * 1.5, interval_max)
+    return False

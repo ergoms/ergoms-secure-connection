@@ -23,6 +23,7 @@ from desktop.config_io import (
     get_socks_scope,
     get_tun_elevate,
     get_tun_enabled,
+    get_tun_mtu,
     invoke_init,
     load_config,
     resolve_corporate_proxy,
@@ -60,6 +61,10 @@ def _port_open(host: str, port: int, timeout: float = 0.2) -> bool:
             return True
     except OSError:
         return False
+
+
+def _wait_port(host: str, port: int, *, timeout: float = 10.0) -> bool:
+    return procutil.wait_port_open(host, port, timeout=timeout)
 
 
 def _which(name: str) -> str | None:
@@ -187,7 +192,7 @@ class OpsClient:
             "-o",
             "ConnectTimeout=20",
             "-o",
-            "ServerAliveInterval=30",
+            "ServerAliveInterval=15",
             "-o",
             "ServerAliveCountMax=3",
             "-o",
@@ -228,7 +233,7 @@ class OpsClient:
         pport = int(pp or "3128")
         self.log(f"proxy={ph}:{pport}")
         self.log(f"target={host}:{port}")
-        sock = socket.create_connection((ph, pport), timeout=15)
+        sock = socket.create_connection((ph, pport), timeout=5)
         try:
             req = (
                 f"CONNECT {host}:{port} HTTP/1.1\r\n"
@@ -340,7 +345,7 @@ class OpsClient:
 
         proc = procutil.popen(args, env=env, cwd=root, detached=True)
         self.paths.bridge_pid.write_text(str(proc.pid), encoding="utf-8")
-        for _ in range(30):
+        for _ in range(5):
             if proc.poll() is not None:
                 self.paths.bridge_pid.unlink(missing_ok=True)
                 raise RuntimeError(
@@ -352,12 +357,24 @@ class OpsClient:
                     f"socks=127.0.0.1:{socks_port} bypass={len(bypass)}"
                 )
                 return http_port
-            time.sleep(0.15)
+            time.sleep(0.05)
+        if _wait_port("127.0.0.1", http_port, timeout=4.0):
+            self.log(
+                f"HTTP bridge 127.0.0.1:{http_port} mode={mode} "
+                f"socks=127.0.0.1:{socks_port} bypass={len(bypass)}"
+            )
+            return http_port
+        if proc.poll() is not None:
+            self.paths.bridge_pid.unlink(missing_ok=True)
+            raise RuntimeError(
+                f"HTTP bridge exited (code={proc.returncode})"
+            )
         procutil.kill_pid(proc.pid)
         self.paths.bridge_pid.unlink(missing_ok=True)
         raise RuntimeError(f"HTTP bridge port {http_port} never opened")
 
     def stop_http_bridge(self) -> None:
+        procutil.invalidate_proc_cache()
         self.bridge.stop(log=self.log)
         http_port = get_http_bridge_port()
         targets: list[int] = []
@@ -371,19 +388,14 @@ class OpsClient:
             self.paths.bridge_pid.unlink(missing_ok=True)
         # Reap orphans: previous `on` can leave a bridge if pid-file was overwritten
         # while the old listener kept 1088 open.
-        targets.extend(procutil.pids_listening_on(http_port))
-        targets.extend(procutil.pids_cmdline_match("desktop bridge"))
-        targets.extend(procutil.pids_cmdline_match("-m desktop bridge"))
+        targets.extend(procutil.pids_listening_on(http_port, cache=False))
+        targets.extend(procutil.pids_cmdline_match("desktop bridge", cache=False))
+        targets.extend(procutil.pids_cmdline_match("-m desktop bridge", cache=False))
         killed = procutil.kill_pids(targets, exclude=os.getpid())
         for pid in killed:
             self.log(f"http-bridge pid={pid} stopped")
 
-    def set_git_socks(self, cfg: dict[str, Any]) -> int:
-        http_port = self.start_http_bridge(cfg)
-        proxy = f"http://127.0.0.1:{http_port}"
-        set_git_http_proxy(proxy, log=self.log)
-        write_cli_env(http_port, self.paths.cli_env, self.paths.cli_ps1)
-        self.write_docker_helpers(cfg, http_port=http_port, active=True)
+    def _enable_browser_pac(self, cfg: dict[str, Any], http_port: int) -> None:
         enable_browser_pac(
             http_port,
             get_socks_scope(),
@@ -391,6 +403,14 @@ class OpsClient:
             self.paths.proxy_backup,
             log=self.log,
         )
+
+    def set_git_socks(self, cfg: dict[str, Any]) -> int:
+        http_port = self.start_http_bridge(cfg)
+        proxy = f"http://127.0.0.1:{http_port}"
+        set_git_http_proxy(proxy, log=self.log)
+        write_cli_env(http_port, self.paths.cli_env, self.paths.cli_ps1)
+        self.write_docker_helpers(cfg, http_port=http_port, active=True)
+        self._enable_browser_pac(cfg, http_port)
         # Override corporate Squid in /etc/environment so ergoms/curl see the bridge
         enable_linux_env_proxy(
             http_port,
@@ -481,7 +501,7 @@ class OpsClient:
                 old = int(self.paths.ssh_pid.read_text().strip())
             except ValueError:
                 old = 0
-            listeners = procutil.pids_listening_on(socks_port)
+            listeners = procutil.pids_listening_on(socks_port, cache=False)
             if (
                 old
                 and procutil.pid_alive(old)
@@ -507,17 +527,12 @@ class OpsClient:
         proc = procutil.popen(["ssh", *args])
         self.paths.ssh_pid.write_text(str(proc.pid), encoding="utf-8")
 
+        if proc.poll() is not None:
+            self.paths.ssh_pid.unlink(missing_ok=True)
+            raise RuntimeError("ssh exited immediately; check user/key/sshd")
         ok = False
-        for _ in range(40):
-            time.sleep(0.25)
-            if proc.poll() is not None:
-                self.paths.ssh_pid.unlink(missing_ok=True)
-                raise RuntimeError("ssh exited immediately; check user/key/sshd")
-            if _port_open("127.0.0.1", socks_port):
-                # Port may already have been open from a race; require our ssh alive.
-                if proc.poll() is None:
-                    ok = True
-                    break
+        if _wait_port("127.0.0.1", socks_port, timeout=10.0):
+            ok = proc.poll() is None
         if not ok or proc.poll() is not None:
             procutil.kill_pid(proc.pid)
             self.paths.ssh_pid.unlink(missing_ok=True)
@@ -540,6 +555,7 @@ class OpsClient:
 
     def _reap_socks_orphans(self, socks_port: int) -> None:
         """Kill ssh/ProxyCommand leftovers that still own the SOCKS port."""
+        procutil.invalidate_proc_cache()
         targets: list[int] = []
         if self.paths.ssh_pid.is_file():
             try:
@@ -549,10 +565,10 @@ class OpsClient:
             if old:
                 targets.append(old)
             self.paths.ssh_pid.unlink(missing_ok=True)
-        targets.extend(procutil.pids_listening_on(socks_port))
+        targets.extend(procutil.pids_listening_on(socks_port, cache=False))
         # Match our dynamic forward even if LISTEN owner lookup failed.
-        targets.extend(procutil.pids_cmdline_match(f"-D 127.0.0.1:{socks_port}"))
-        targets.extend(procutil.pids_cmdline_match("connect_proxy.py"))
+        targets.extend(procutil.pids_cmdline_match(f"-D 127.0.0.1:{socks_port}", cache=False))
+        targets.extend(procutil.pids_cmdline_match("connect_proxy.py", cache=False))
         killed = procutil.kill_pids(targets, exclude=os.getpid())
         for pid in killed:
             self.log(f"ssh/orphan pid={pid} stopped")
@@ -593,6 +609,7 @@ class OpsClient:
             sing_box_path=get_sing_box_path(cfg),
             elevate=get_tun_elevate(),
             bypass_hosts=bypass,
+            mtu=get_tun_mtu(cfg),
         )
         if persist:
             update_env_key(self.paths.env_path, "TUN", "1")
@@ -760,7 +777,9 @@ class OpsClient:
                 bpid = 0
             info["bridge_pid"] = bpid
             alive = bool(bpid and procutil.pid_alive(bpid))
-            listening = _port_open("127.0.0.1", int(info["http_port"]))
+            listening = False
+            if not alive:
+                listening = _port_open("127.0.0.1", int(info["http_port"]))
             if alive or listening:
                 info["bridge_running"] = True
                 lines.append(
