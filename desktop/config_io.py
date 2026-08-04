@@ -228,7 +228,7 @@ def ensure_config_defaults(cfg: dict[str, Any]) -> dict[str, Any]:
         tun = {}
         out["tun"] = tun
     tun.setdefault("sing_box_path", "")
-    tun.setdefault("mtu", 1400)
+    tun.setdefault("mtu", 1500)
     return out
 
 
@@ -320,7 +320,7 @@ def get_tun_mtu(cfg: dict[str, Any] | None = None) -> int:
                 return mtu
             if isinstance(mtu, str) and mtu.isdigit():
                 return max(1280, min(1500, int(mtu)))
-    return 1400
+    return 1500
 
 
 def invoke_init(paths: Paths, log: LogFn = _noop) -> None:

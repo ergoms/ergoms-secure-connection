@@ -610,6 +610,7 @@ class OpsClient:
             elevate=get_tun_elevate(),
             bypass_hosts=bypass,
             mtu=get_tun_mtu(cfg),
+            force_restart=True,
         )
         if persist:
             update_env_key(self.paths.env_path, "TUN", "1")
