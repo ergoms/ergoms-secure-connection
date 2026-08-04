@@ -165,7 +165,7 @@ class TunManager:
         socks_port: int,
         exclude_ips: list[str],
         bypass_hosts: list[str] | None = None,
-        mtu: int = 1400,
+        mtu: int = 1500,
     ) -> dict[str, Any]:
         route_exclude = [
             "10.0.0.0/8",
@@ -228,7 +228,6 @@ class TunManager:
         rules.append({"ip_is_private": True, "outbound": "direct"})
 
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_db = (self.var_dir / "sing-box-cache.db").resolve()
         mtu_val = max(1280, min(1500, int(mtu)))
         return {
             "log": {
@@ -271,9 +270,6 @@ class TunManager:
                 ],
                 "final": "dns-proxy",
                 "strategy": "prefer_ipv4",
-                "cache_capacity": 8192,
-                "optimistic": True,
-                "timeout": "5s",
             },
             "inbounds": [
                 {
@@ -304,13 +300,6 @@ class TunManager:
                 "auto_detect_interface": True,
                 "final": "socks-out",
                 "rules": rules,
-            },
-            "experimental": {
-                "cache_file": {
-                    "enabled": True,
-                    "path": str(cache_db).replace("\\", "/"),
-                    "store_rdrc": True,
-                },
             },
         }
 
@@ -346,7 +335,8 @@ class TunManager:
         sing_box_path: str = "",
         elevate: bool = True,
         bypass_hosts: list[str] | None = None,
-        mtu: int = 1400,
+        mtu: int = 1500,
+        force_restart: bool = False,
     ) -> None:
         exe = self.find_sing_box(sing_box_path)
         if not exe:
@@ -379,12 +369,13 @@ class TunManager:
         )
         config_text = json.dumps(cfg, indent=2)
         if self.running():
-            old_text = ""
-            if self.config_path.is_file():
-                old_text = self.config_path.read_text(encoding="utf-8")
-            if old_text == config_text:
-                self.log(f"TUN already running (pid={self.pid()})")
-                return
+            if not force_restart:
+                old_text = ""
+                if self.config_path.is_file():
+                    old_text = self.config_path.read_text(encoding="utf-8")
+                if old_text == config_text:
+                    self.log(f"TUN already running (pid={self.pid()})")
+                    return
             self.log("TUN config changed — перезапуск sing-box")
             self.stop()
 
