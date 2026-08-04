@@ -42,6 +42,13 @@
     "*.lan"
   ],
   "proxy_bypass_via": "direct",
+  "docker_dns_hosts": [
+    "pypi.org",
+    "files.pythonhosted.org",
+    "registry.npmjs.org",
+    "ghcr.io",
+    "registry-1.docker.io"
+  ],
   "tun": {
     "sing_box_path": ""
   }

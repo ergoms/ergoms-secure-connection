@@ -10,6 +10,7 @@ Security:
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import ipaddress
 import select
 import socket
@@ -133,6 +134,42 @@ def pump(a: socket.socket, b: socket.socket) -> None:
                 s.close()
             except OSError:
                 pass
+
+
+def host_matches_bypass(host: str, patterns: list[str]) -> bool:
+    """True if host matches a proxy_bypass PAC pattern."""
+    h = (host or "").strip().lower().strip("[]").rstrip(".")
+    if not h:
+        return False
+    for raw in patterns:
+        p = raw.strip().lower()
+        if not p:
+            continue
+        if "*" in p or "?" in p:
+            if fnmatch.fnmatch(h, p):
+                return True
+        elif h == p or h.endswith("." + p):
+            return True
+    return False
+
+
+def bypass_to_singbox(
+    patterns: list[str],
+) -> tuple[list[str], list[str]]:
+    """Convert proxy_bypass patterns to sing-box domain_suffix / domain lists."""
+    suffixes: set[str] = set()
+    domains: set[str] = set()
+    for raw in patterns:
+        p = raw.strip().lower()
+        if not p:
+            continue
+        if p.startswith("*."):
+            suffixes.add(p[1:])
+        elif "*" not in p and "?" not in p:
+            domains.add(p)
+        elif p.count("*") == 1 and p.startswith("*."):
+            suffixes.add("." + p[2:])
+    return sorted(suffixes), sorted(domains)
 
 
 def _pac_cond(pattern: str) -> str:
@@ -262,6 +299,48 @@ def _refuse(client: socket.socket, code: int = 403, msg: str = "Forbidden") -> N
     )
 
 
+def _direct_connect(host: str, port: int) -> socket.socket:
+    s = socket.create_connection((host, port), timeout=30)
+    _tune(s)
+    return s
+
+
+def _corporate_connect(proxy: str, host: str, port: int) -> socket.socket:
+    phost, _, pport_s = proxy.replace("http://", "").replace("https://", "").partition(":")
+    pport = int(pport_s or 3128)
+    s = socket.create_connection((phost, pport), timeout=30)
+    _tune(s)
+    req = (
+        f"CONNECT {host}:{port} HTTP/1.1\r\n"
+        f"Host: {host}:{port}\r\n"
+        f"Proxy-Connection: keep-alive\r\n\r\n"
+    )
+    s.sendall(req.encode("ascii", "replace"))
+    resp = b""
+    while b"\r\n\r\n" not in resp and len(resp) < 8192:
+        chunk = s.recv(4096)
+        if not chunk:
+            break
+        resp += chunk
+    status = resp.split(b"\r\n", 1)[0].decode("ascii", "replace")
+    if " 200 " not in status:
+        s.close()
+        raise OSError(f"corporate CONNECT failed: {status}")
+    return s
+
+
+def _connect_bypass(
+    host: str,
+    port: int,
+    *,
+    bypass_via: str,
+    fallback_proxy: str,
+) -> socket.socket:
+    if bypass_via == "corporate" and fallback_proxy:
+        return _corporate_connect(fallback_proxy, host, port)
+    return _direct_connect(host, port)
+
+
 def forward_http_absolute(
     client: socket.socket,
     head: bytes,
@@ -270,13 +349,18 @@ def forward_http_absolute(
     target: str,
     socks_host: str,
     socks_port: int,
+    *,
+    bypass_hosts: list[str] | None = None,
+    fallback_proxy: str = "",
+    bypass_via: str = "direct",
 ) -> None:
     u = urlsplit(target)
     host = u.hostname
     if not host:
         client.sendall(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
         return
-    if is_blocked_destination(host):
+    bypassed = host_matches_bypass(host, bypass_hosts or [])
+    if not bypassed and is_blocked_destination(host):
         _refuse(client, 403, "Forbidden private/metadata destination")
         return
     port = u.port or (443 if u.scheme == "https" else 80)
@@ -288,7 +372,12 @@ def forward_http_absolute(
     lines[0] = f"{method} {path} HTTP/1.1".encode("ascii", "replace")
     new_head = b"\r\n".join(lines) + b"\r\n\r\n"
 
-    remote = socks5_connect(socks_host, socks_port, host, port)
+    if bypassed:
+        remote = _connect_bypass(
+            host, port, bypass_via=bypass_via, fallback_proxy=fallback_proxy
+        )
+    else:
+        remote = socks5_connect(socks_host, socks_port, host, port)
     remote.sendall(new_head + rest)
     client.settimeout(None)
     remote.settimeout(None)
@@ -302,6 +391,10 @@ def handle_client(
     socks_port: int,
     pac_bytes: bytes,
     listen_port: int,
+    *,
+    bypass_hosts: list[str] | None = None,
+    fallback_proxy: str = "",
+    bypass_via: str = "direct",
 ) -> None:
     try:
         client.settimeout(60)
@@ -330,10 +423,16 @@ def handle_client(
             except ValueError:
                 client.sendall(b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n")
                 return
-            if is_blocked_destination(host):
+            bypassed = host_matches_bypass(host, bypass_hosts or [])
+            if not bypassed and is_blocked_destination(host):
                 _refuse(client, 403, "Forbidden private/metadata destination")
                 return
-            remote = socks5_connect(socks_host, socks_port, host, port)
+            if bypassed:
+                remote = _connect_bypass(
+                    host, port, bypass_via=bypass_via, fallback_proxy=fallback_proxy
+                )
+            else:
+                remote = socks5_connect(socks_host, socks_port, host, port)
             client.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
             client.settimeout(None)
             remote.settimeout(None)
@@ -358,7 +457,18 @@ def handle_client(
             return
 
         if target.startswith("http://"):
-            forward_http_absolute(client, head, rest, method, target, socks_host, socks_port)
+            forward_http_absolute(
+                client,
+                head,
+                rest,
+                method,
+                target,
+                socks_host,
+                socks_port,
+                bypass_hosts=bypass_hosts,
+                fallback_proxy=fallback_proxy,
+                bypass_via=bypass_via,
+            )
             return
 
         client.sendall(b"HTTP/1.1 405 Method Not Allowed\r\nConnection: close\r\n\r\n")
@@ -442,6 +552,11 @@ def main() -> int:
         threading.Thread(
             target=handle_client,
             args=(client, shost, sport, pac_bytes, lport),
+            kwargs={
+                "bypass_hosts": bypass,
+                "fallback_proxy": args.fallback_proxy,
+                "bypass_via": args.bypass_via,
+            },
             daemon=True,
         ).start()
 

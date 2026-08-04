@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from desktop import procutil
+from lib.http_via_socks import bypass_to_singbox
 
 LogFn = Callable[[str], None]
 
@@ -161,6 +162,7 @@ class TunManager:
         socks_host: str,
         socks_port: int,
         exclude_ips: list[str],
+        bypass_hosts: list[str] | None = None,
     ) -> dict[str, Any]:
         route_exclude = [
             "10.0.0.0/8",
@@ -179,16 +181,48 @@ class TunManager:
             "ssh.exe",
             "OpsContent.exe",
         ]
-        rules: list[dict[str, Any]] = [
-            {"ip_is_private": True, "outbound": "direct"},
-            {"process_name": proc_names, "outbound": "direct"},
+        # Docker Desktop / WSL / Hyper-V: do not half-capture VM traffic.
+        # Containers should use HTTP_PROXY → host bridge (var/docker.env).
+        docker_wsl_procs = [
+            "vmmem",
+            "vmmemWSL",
+            "wsl.exe",
+            "wslhost.exe",
+            "wslrelay.exe",
+            "wslservice.exe",
+            "WSLService.exe",
+            "vmcompute.exe",
+            "vmwp.exe",
+            "com.docker.backend.exe",
+            "com.docker.build.exe",
+            "com.docker.proxy.exe",
+            "Docker Desktop.exe",
+            "docker.exe",
+            "dockerd.exe",
+            "vpnkit.exe",
+            "vpnkit-bridge.exe",
         ]
+        # Order matters:
+        # 1) hijack DNS before ip_is_private (TUN DNS 172.19.0.2:53 is private).
+        # 2) Docker/WSL after hijack so UDP/53 is answered by sing-box DNS module
+        #    (dns-local), then remaining VM traffic stays direct.
+        # SSH DynamicForward is TCP-only — plain UDP DNS via socks-out fails (EOF).
+        rules: list[dict[str, Any]] = []
+        ips = [ip for ip in exclude_ips if ip]
+        if ips:
+            rules.append({"ip_cidr": [f"{ip}/32" for ip in ips], "outbound": "direct"})
+        bypass_suffixes, bypass_domains = bypass_to_singbox(bypass_hosts or [])
+        if bypass_suffixes:
+            rules.append({"domain_suffix": bypass_suffixes, "outbound": "direct"})
+        if bypass_domains:
+            rules.append({"domain": bypass_domains, "outbound": "direct"})
+        rules.append({"port": 53, "action": "hijack-dns"})
+        rules.append({"process_name": docker_wsl_procs, "outbound": "direct"})
+        rules.append({"process_name": proc_names, "outbound": "direct"})
         py_paths = _direct_python_paths()
         if py_paths:
             rules.append({"process_path": py_paths, "outbound": "direct"})
-        ips = [ip for ip in exclude_ips if ip]
-        if ips:
-            rules.insert(0, {"ip_cidr": [f"{ip}/32" for ip in ips], "outbound": "direct"})
+        rules.append({"ip_is_private": True, "outbound": "direct"})
 
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         return {
@@ -199,8 +233,36 @@ class TunManager:
             },
             "dns": {
                 "servers": [
-                    {"tag": "dns-proxy", "address": "8.8.8.8", "detour": "socks-out"},
+                    # DoH over SOCKS — OpenSSH DynamicForward has no UDP ASSOCIATE,
+                    # so plain UDP 8.8.8.8 via socks-out fails with EOF.
+                    {
+                        "tag": "dns-proxy",
+                        "address": "https://1.1.1.1/dns-query",
+                        "detour": "socks-out",
+                    },
                     {"tag": "dns-local", "address": "local", "detour": "direct"},
+                ],
+                "rules": [
+                    {
+                        # Docker ExtServers (8.8.8.8/1.1.1.1) are often unreachable
+                        # from the VM; answer with the host resolver instead.
+                        "process_name": docker_wsl_procs,
+                        "server": "dns-local",
+                    },
+                    *(
+                        [{"domain_suffix": bypass_suffixes, "server": "dns-local"}]
+                        if bypass_suffixes
+                        else []
+                    ),
+                    *(
+                        [{"domain": bypass_domains, "server": "dns-local"}]
+                        if bypass_domains
+                        else []
+                    ),
+                    {
+                        "domain_suffix": [".local", ".lan", ".internal", ".localhost"],
+                        "server": "dns-local",
+                    },
                 ],
                 "final": "dns-proxy",
                 "strategy": "prefer_ipv4",
@@ -262,6 +324,7 @@ class TunManager:
         ssh_host: str,
         sing_box_path: str = "",
         elevate: bool = True,
+        bypass_hosts: list[str] | None = None,
     ) -> None:
         if self.running():
             self.log(f"TUN already running (pid={self.pid()})")
@@ -293,6 +356,7 @@ class TunManager:
             socks_host="127.0.0.1",
             socks_port=int(socks_port),
             exclude_ips=exclude,
+            bypass_hosts=bypass_hosts,
         )
         self.var_dir.mkdir(parents=True, exist_ok=True)
         self.config_path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")

@@ -98,6 +98,12 @@ class Paths:
         self.env_proxy_backup = self.var_dir / "linuxenv.proxy.bak.json"
         self.cli_env = self.var_dir / "cli.env"
         self.cli_ps1 = self.var_dir / "cli.ps1"
+        self.docker_env = self.var_dir / "docker.env"
+        self.docker_compose_proxy = self.var_dir / "docker-compose.proxy.yml"
+        self.docker_hosts = self.var_dir / "docker.hosts"
+        self.docker_run_ps1 = self.var_dir / "docker-run.ps1"
+        self.docker_run_sh = self.var_dir / "docker-run.sh"
+        self.watchdog_pid = self.var_dir / "watchdog.pid"
         self.proxy_cmd = self.var_dir / "proxy.cmd"
         self.connect_py = self.root / "lib" / "connect_proxy.py"
 

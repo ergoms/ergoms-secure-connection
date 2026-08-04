@@ -88,6 +88,11 @@ class HttpBridge:
                 threading.Thread(
                     target=handle_client,
                     args=(client, socks_host, socks_port, pac_bytes, listen_port),
+                    kwargs={
+                        "bypass_hosts": bypass,
+                        "fallback_proxy": fallback_proxy,
+                        "bypass_via": bypass_via,
+                    },
                     daemon=True,
                 ).start()
 
