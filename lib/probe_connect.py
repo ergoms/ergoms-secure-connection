@@ -32,7 +32,7 @@ def main() -> int:
     print(f"proxy={proxy_host}:{proxy_port}")
     print(f"target={args.host}:{args.port}")
 
-    sock = socket.create_connection((proxy_host, proxy_port), timeout=15)
+    sock = socket.create_connection((proxy_host, proxy_port), timeout=5)
     req = (
         f"CONNECT {args.host}:{args.port} HTTP/1.1\r\n"
         f"Host: {args.host}:{args.port}\r\n"

@@ -13,7 +13,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from lib.http_via_socks import build_pac, handle_client  # noqa: E402
+from lib.http_via_socks import BypassMatcher, build_pac, handle_client  # noqa: E402
 
 LogFn = Callable[[str], None]
 
@@ -53,6 +53,7 @@ class HttpBridge:
 
         tunnel = list(pac_hosts or [])
         bypass = list(bypass_hosts or [])
+        bypass_matcher = BypassMatcher(bypass)
         pac_bytes = build_pac(
             listen_port, mode, tunnel, bypass, fallback_proxy, bypass_via
         )
@@ -89,7 +90,7 @@ class HttpBridge:
                     target=handle_client,
                     args=(client, socks_host, socks_port, pac_bytes, listen_port),
                     kwargs={
-                        "bypass_hosts": bypass,
+                        "bypass": bypass_matcher,
                         "fallback_proxy": fallback_proxy,
                         "bypass_via": bypass_via,
                     },
