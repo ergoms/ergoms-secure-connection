@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import socket
+import struct
 import threading
 import time
 from datetime import datetime
@@ -22,6 +24,13 @@ LogFn = Callable[[str], None]
 NotifyFn = Callable[[str, str], None]
 SkipFn = Callable[[], bool]
 
+# Public IP:443 — no DNS needed; not private (SSRF blocklist).
+_PROBE_HOST = "1.1.1.1"
+_PROBE_PORT = 443
+_PROBE_TIMEOUT = 6.0
+# Port-open is cheap; real CONNECT can flap once — require 2 fails.
+_PROBE_FAILS_BEFORE_RECONNECT = 2
+
 
 def _noop(_msg: str) -> None:
     pass
@@ -35,10 +44,71 @@ def socks_port_from_client(client: OpsClient) -> int:
         return 1080
 
 
-def health_problem(client: OpsClient) -> str | None:
+def socks_probe(
+    socks_port: int,
+    *,
+    host: str = _PROBE_HOST,
+    port: int = _PROBE_PORT,
+    timeout: float = _PROBE_TIMEOUT,
+) -> str | None:
+    """SOCKS5 CONNECT probe. Return None if OK, else a short error string.
+
+    Detects zombie tunnels: :1080 still accepts TCP but SSH/Squid no longer
+    forwards (the usual cause of TUN blackholing the whole OS).
+    """
+    s: socket.socket | None = None
+    try:
+        s = socket.create_connection(("127.0.0.1", socks_port), timeout=timeout)
+        s.settimeout(timeout)
+        s.sendall(b"\x05\x01\x00")
+        resp = s.recv(2)
+        if len(resp) != 2 or resp[0] != 5 or resp[1] != 0:
+            return f"SOCKS5 greeting failed: {resp!r}"
+        try:
+            ip_bytes = socket.inet_aton(host)
+            req = b"\x05\x01\x00\x01" + ip_bytes + struct.pack("!H", port)
+        except OSError:
+            host_b = host.encode("ascii")
+            req = (
+                b"\x05\x01\x00\x03"
+                + bytes([len(host_b)])
+                + host_b
+                + struct.pack("!H", port)
+            )
+        s.sendall(req)
+        hdr = s.recv(4)
+        if len(hdr) != 4:
+            return "SOCKS5 CONNECT truncated"
+        if hdr[0] != 5 or hdr[1] != 0:
+            return f"SOCKS5 CONNECT rejected: rep={hdr[1]}"
+        atyp = hdr[3]
+        if atyp == 1:
+            s.recv(4 + 2)
+        elif atyp == 3:
+            ln = s.recv(1)
+            if not ln:
+                return "SOCKS5 CONNECT bnd truncated"
+            s.recv(ln[0] + 2)
+        elif atyp == 4:
+            s.recv(16 + 2)
+        else:
+            return f"SOCKS5 bad atyp={atyp}"
+        return None
+    except OSError as exc:
+        return f"SOCKS probe: {exc}"
+    finally:
+        if s is not None:
+            try:
+                s.close()
+            except OSError:
+                pass
+
+
+def health_problem(client: OpsClient, *, probe: bool = False) -> str | None:
     """Return a short reason if the tunnel looks broken, else None.
 
     Idle (nothing expected) is not a problem — caller decides via desired_on.
+    Set probe=True for a real SOCKS5 CONNECT check (watchdog ticks).
     """
     client.reload_env()
     mode = get_mode()
@@ -77,6 +147,14 @@ def health_problem(client: OpsClient) -> str | None:
         return f"state present but SOCKS :{socks} down"
     if ssh_pid and not ssh_alive and not socks_up:
         return f"ssh pid={ssh_pid} dead, SOCKS :{socks} down"
+    # Probe before TUN recovery — otherwise failsafe TUN-stop + "sing-box down"
+    # would bring TUN back on top of a zombie SOCKS and blackhole the OS again.
+    if probe and socks_up and (
+        ssh_alive or tun_up or tun_wanted or client.paths.state_path.is_file()
+    ):
+        err = socks_probe(socks)
+        if err:
+            return f"SOCKS :{socks} zombie ({err})"
     # SOCKS alone is not enough for Docker Desktop: UDP/53 from the VM dies
     # unless sing-box hijacks it. Recover TUN when .env says TUN=1.
     if tun_wanted and socks_up and not tun_up:
@@ -115,6 +193,7 @@ class TunnelWatchdog:
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._fail_streak = 0
+        self._probe_fails = 0
         self._next_ok_at = 0.0
         self._reconnecting = False
 
@@ -126,9 +205,11 @@ class TunnelWatchdog:
         self._desired = on
         if on:
             self._fail_streak = 0
+            self._probe_fails = 0
             self._next_ok_at = 0.0
         else:
             self._fail_streak = 0
+            self._probe_fails = 0
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -170,12 +251,32 @@ class TunnelWatchdog:
         if now < self._next_ok_at:
             return
 
-        problem = health_problem(self.client)
-        if problem is None:
-            if self._fail_streak:
+        # Always probe SOCKS CONNECT when the port is up — port-open alone
+        # misses zombie SSH/Squid (TUN still up → whole OS blackholed).
+        problem = health_problem(self.client, probe=True)
+        if problem and "zombie" in problem:
+            self._probe_fails += 1
+            self.log(
+                f"watchdog: {problem} "
+                f"({self._probe_fails}/{_PROBE_FAILS_BEFORE_RECONNECT})"
+            )
+            if self.client.tun.running():
+                try:
+                    self.client.tun.stop()
+                    self.log("watchdog: TUN stopped (failsafe while SOCKS zombie)")
+                except Exception as exc:  # noqa: BLE001
+                    self.log(f"watchdog: TUN failsafe stop: {exc}")
+            if self._probe_fails < _PROBE_FAILS_BEFORE_RECONNECT:
+                return
+        elif problem is None:
+            if self._fail_streak or self._probe_fails:
                 self.log("watchdog: tunnel healthy again")
             self._fail_streak = 0
+            self._probe_fails = 0
             return
+        else:
+            # Hard failure (port closed / ssh dead) — reset soft probe counter
+            self._probe_fails = 0
 
         max_retries = get_watchdog_max_retries()
         if self._fail_streak >= max_retries:
@@ -193,6 +294,13 @@ class TunnelWatchdog:
             self._notify("TUN упал", f"{problem}. Поднимаю…")
             self._reconnect(tun_only=True)
         else:
+            # Drop TUN ASAP so a dead SOCKS does not blackhole the whole OS.
+            if self.client.tun.running() and "SOCKS" in problem:
+                try:
+                    self.client.tun.stop()
+                    self.log("watchdog: TUN stopped (failsafe while SOCKS down)")
+                except Exception as exc:  # noqa: BLE001
+                    self.log(f"watchdog: TUN failsafe stop: {exc}")
             self._notify("Туннель упал", f"{problem}. Переподключаю…")
             self._reconnect(tun_only=False)
 
@@ -217,7 +325,7 @@ class TunnelWatchdog:
                 except Exception as exc:  # noqa: BLE001
                     self.log(f"watchdog: stop: {exc}")
                 self.client.enable(spawn_watchdog=False)
-            problem = health_problem(self.client)
+            problem = health_problem(self.client, probe=True)
             if problem is None:
                 self.log("watchdog: reconnected OK")
                 self._notify(
@@ -227,6 +335,7 @@ class TunnelWatchdog:
                     else "SOCKS снова доступен",
                 )
                 self._fail_streak = 0
+                self._probe_fails = 0
                 self._next_ok_at = time.monotonic() + 5.0
             else:
                 delay = min(120, get_watchdog_interval() * (2 ** min(self._fail_streak, 4)))
@@ -300,7 +409,7 @@ def run_watch_forever(
     wd.set_desired(True)
 
     if not daemon:
-        if health_problem(client) is not None or not infer_desired_on(client):
+        if health_problem(client, probe=True) is not None or not infer_desired_on(client):
             log("watch: ensuring tunnel is up…")
             try:
                 client.enable(spawn_watchdog=False)
