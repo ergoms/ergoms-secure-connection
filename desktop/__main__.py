@@ -28,6 +28,7 @@ COMMANDS = (
     "sing-box",
     "docker-env",
     "docker-test",
+    "watch",
     "gui",
     "help",
 )
@@ -74,6 +75,7 @@ def _show_help() -> int:
   download-sing-box    скачать sing-box в tools/
   docker-env           var/docker.env + compose (прокси для контейнеров)
   docker-test          проверка: curl из контейнера через мост
+  watch                следить за SOCKS и переподключать (Ctrl+C)
   gui                  окно (нужен дисплей)
   help
 
@@ -133,6 +135,13 @@ def _run_cli(cmd: str, rest: list[str]) -> int:
             client.docker_env()
         elif cmd == "docker-test":
             return client.docker_test()
+        elif cmd == "watch":
+            from desktop.watchdog import run_watch_forever
+
+            daemon = "--daemon" in rest or os.environ.get(
+                "OPS_CONTENT_WATCHDOG_CHILD", ""
+            ).strip() in ("1", "true", "yes")
+            return run_watch_forever(client, log=log, daemon=daemon)
         elif cmd in ("help", "-h", "--help"):
             return _show_help()
         else:
