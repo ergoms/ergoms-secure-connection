@@ -16,7 +16,6 @@ LogFn = Callable[[str], None]
 
 # Keys persisted in root .env (runtime switches)
 ENV_KEYS = [
-    "MODE",
     "SOCKS_SCOPE",
     "HTTP_BRIDGE_PORT",
     "CORPORATE_PROXY",
@@ -91,13 +90,12 @@ def _default_env_text(values: dict[str, str]) -> str:
     tun = values.get("TUN", "0") or "0"
     elevate = values.get("TUN_ELEVATE", "1") or "1"
     lines = [
-        "# Client mode: socks | singbox",
-        f"MODE={values.get('MODE', 'socks') or 'socks'}",
+        "# VLESS+Reality client (sing-box)",
         "",
         "# full | github",
         f"SOCKS_SCOPE={values.get('SOCKS_SCOPE', 'full') or 'full'}",
         "",
-        "# TUN (sing-box). socks: over SSH SOCKS; singbox: in the same process",
+        "# TUN in the same sing-box process",
         f"TUN={tun}",
         "# Request UAC when starting sing-box TUN",
         f"TUN_ELEVATE={elevate}",
@@ -210,15 +208,23 @@ def ensure_config_defaults(cfg: dict[str, Any]) -> dict[str, Any]:
     """Fill missing sections without wiping user values."""
     out = deepcopy(cfg) if cfg else {}
     out.setdefault("corporate_proxy", "10.16.0.8:3128")
-    ssh = out.setdefault("ssh", {})
-    if not isinstance(ssh, dict):
-        ssh = {}
-        out["ssh"] = ssh
-    ssh.setdefault("host", "YOUR_VPS_IP_OR_HOSTNAME")
-    ssh.setdefault("user", "root")
-    ssh.setdefault("port", 443)
-    ssh.setdefault("identity_file", "")
-    ssh.setdefault("local_socks_port", 1080)
+
+    # Migrate legacy ssh{} → server{} (SSH tunnel mode removed)
+    legacy = out.pop("ssh", None)
+    server = out.get("server")
+    if not isinstance(server, dict):
+        server = {}
+    if isinstance(legacy, dict):
+        for key in ("host", "port", "local_socks_port"):
+            if key in legacy and key not in server:
+                server[key] = legacy[key]
+    out["server"] = server
+    server.setdefault("host", "YOUR_VPS_IP_OR_HOSTNAME")
+    server.setdefault("port", 443)
+    server.setdefault("local_socks_port", 1080)
+    server.pop("user", None)
+    server.pop("identity_file", None)
+
     out.pop("worker_base_url", None)
     out.setdefault("blocked_hosts", default_config_template()["blocked_hosts"])
     out.setdefault("proxy_bypass", ["*.tu-bryansk.ru", "*.local", "*.lan"])
@@ -243,7 +249,36 @@ def ensure_config_defaults(cfg: dict[str, Any]) -> dict[str, Any]:
 
 
 def get_mode() -> str:
-    return (os.environ.get("MODE") or "socks").strip().lower()
+    """Client is VLESS+Reality only."""
+    return "singbox"
+
+
+def get_server(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
+    if not cfg:
+        return {
+            "host": "YOUR_VPS_IP_OR_HOSTNAME",
+            "port": 443,
+            "local_socks_port": 1080,
+        }
+    server = cfg.get("server")
+    if isinstance(server, dict):
+        return server
+    legacy = cfg.get("ssh")
+    if isinstance(legacy, dict):
+        return legacy
+    return {}
+
+
+def get_server_host(cfg: dict[str, Any] | None = None) -> str:
+    return str(get_server(cfg).get("host") or "").strip()
+
+
+def get_local_socks_port(cfg: dict[str, Any] | None = None) -> int:
+    raw = get_server(cfg).get("local_socks_port") or 1080
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return 1080
 
 
 def get_pac_listen_port() -> int:
@@ -314,14 +349,23 @@ def resolve_corporate_proxy(cfg: dict[str, Any] | None = None) -> str:
 
 
 def get_sing_box_path(cfg: dict[str, Any] | None = None) -> str:
-    env_p = (os.environ.get("SING_BOX_PATH") or "").strip()
-    if env_p:
-        return env_p
-    if cfg:
+    """Return configured sing-box path, or empty for auto (tools/sing-box).
+
+    Relative paths are resolved against the project data root.
+    """
+    from desktop.paths import data_root
+
+    raw = (os.environ.get("SING_BOX_PATH") or "").strip()
+    if not raw and cfg:
         tun = cfg.get("tun") or {}
         if isinstance(tun, dict):
-            return str(tun.get("sing_box_path") or "").strip()
-    return ""
+            raw = str(tun.get("sing_box_path") or "").strip()
+    if not raw:
+        return ""
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        path = data_root() / path
+    return str(path)
 
 
 def get_tun_mtu(cfg: dict[str, Any] | None = None) -> int:
@@ -387,11 +431,9 @@ def invoke_init(paths: Paths, log: LogFn = _noop) -> None:
 def default_config_template() -> dict[str, Any]:
     return {
         "corporate_proxy": "10.16.0.8:3128",
-        "ssh": {
+        "server": {
             "host": "YOUR_VPS_IP_OR_HOSTNAME",
-            "user": "root",
             "port": 443,
-            "identity_file": "",
             "local_socks_port": 1080,
         },
         "blocked_hosts": [

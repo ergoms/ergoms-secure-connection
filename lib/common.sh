@@ -113,8 +113,8 @@ http_bridge_port() {
 }
 
 get_mode() {
-  local m="${MODE:-socks}"
-  printf '%s' "$m" | tr '[:upper:]' '[:lower:]'
+  # Client is VLESS+Reality only; MODE env ignored
+  printf 'singbox'
 }
 
 require_config() {

@@ -79,6 +79,31 @@ def self_command() -> list[str]:
     return [sys.executable, "-m", "desktop"]
 
 
+def resolve_ssh_identity(creds_dir: Path | None = None) -> str:
+    """Auto-pick a private key from creds/ (no config setting)."""
+    root = creds_dir or (data_root() / "creds")
+    if not root.is_dir():
+        return ""
+    preferred = ("server-vps", "id_ed25519", "id_rsa", "id_ecdsa", "id_dsa")
+    for name in preferred:
+        path = root / name
+        if path.is_file():
+            return str(path.resolve())
+    skip = {
+        ".gitkeep",
+        "ssh_known_hosts",
+        "ssh_known_hosts.old",
+    }
+    for path in sorted(root.iterdir()):
+        if not path.is_file():
+            continue
+        name = path.name
+        if name in skip or name.endswith(".pub") or name.endswith(".old"):
+            continue
+        return str(path.resolve())
+    return ""
+
+
 class Paths:
     def __init__(self, root: Path | None = None) -> None:
         self.root = root or data_root()

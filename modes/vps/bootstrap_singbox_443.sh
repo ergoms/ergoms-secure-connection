@@ -208,11 +208,9 @@ OK: sing-box VLESS+Reality listening on :443
 
 On the office PC — config.json (merge into existing file):
 
-  "ssh": {
+  "server": {
     "host": "$PUBLIC_IP",
     "port": 443,
-    "user": "root",
-    "identity_file": "",
     "local_socks_port": 1080
   },
   "transport": {
@@ -224,10 +222,9 @@ On the office PC — config.json (merge into existing file):
     "port": 443
   }
 
-On the office PC — merge transport into config.json, then:
+On the office PC — merge server + transport into config.json, then:
 
   # .env
-  MODE=singbox
   TUN=1
 
   ./ops-content.sh on
@@ -240,8 +237,5 @@ Probe from office:
   # or: .\\ops-content.ps1 probe $PUBLIC_IP 443
 
 Credentials saved on VPS: $CREDS
-Rollback to SSH socks: systemctl disable --now sing-box
-  then: bash modes/vps/bootstrap_sshd_443.sh
-  Client: MODE=socks ; ./ops-content.sh on  (or ops-content.ps1 / python -m desktop)
 ========================================================================
 EOF

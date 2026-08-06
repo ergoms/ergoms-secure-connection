@@ -17,8 +17,11 @@ from desktop.bridge import HttpBridge
 from desktop.config_io import (
     apply_dotenv,
     get_http_bridge_port,
+    get_local_socks_port,
     get_mode,
     get_pac_listen_port,
+    get_server,
+    get_server_host,
     get_sing_box_path,
     get_socks_scope,
     get_tun_elevate,
@@ -38,7 +41,7 @@ from desktop.git_proxy import (
     clear_git_proxy,
     clear_instead_of,
 )
-from desktop.paths import Paths, bundle_dir, is_frozen, self_command
+from desktop.paths import Paths, bundle_dir, is_frozen, resolve_ssh_identity, self_command
 from desktop.singbox_mode import SingboxModeManager, require_transport
 from desktop.tun import TunManager
 from desktop.sys_proxy import (
@@ -225,7 +228,7 @@ class OpsClient:
             "-o",
             f"ProxyCommand={proxy}",
         ]
-        ident = (ssh.get("identity_file") or "").strip()
+        ident = resolve_ssh_identity(self.paths.creds_dir)
         if ident:
             args += ["-o", "IdentitiesOnly=yes", "-i", ident]
         args.append(f"{user}@{host}")
@@ -511,16 +514,16 @@ class OpsClient:
         self.log(f"git via sing-box HTTP :{http_port}, scope={get_socks_scope()}")
 
     def start_singbox_mode(self) -> None:
-        """MODE=singbox: VLESS+Reality through Squid (no SSH)."""
+        """VLESS+Reality through Squid (sing-box)."""
         self.reload_env()
         cfg = self.config()
-        ssh = cfg.get("ssh") or {}
-        host = str(ssh.get("host") or "")
+        server = get_server(cfg)
+        host = get_server_host(cfg)
         if "YOUR_VPS" in host or not host:
-            raise RuntimeError("Set real ssh.host in config.json")
+            raise RuntimeError("Set real server.host in config.json")
 
         transport = require_transport(cfg)
-        port = int(transport.get("port") or ssh.get("port") or 443)
+        port = int(transport.get("port") or server.get("port") or 443)
         self.log(f"Probing CONNECT {host}:{port} via Squid...")
         if self.probe(host, port) != 0:
             raise RuntimeError(
@@ -529,14 +532,14 @@ class OpsClient:
                 "(and disable sshd on :443)"
             )
 
-        # Avoid fighting SOCKS-over-SSH TUN leftovers
+        # Avoid fighting leftover TUN processes
         try:
             if self.tun.running():
                 self.tun.stop()
         except Exception as exc:  # noqa: BLE001
             self.log(f"stop legacy TUN: {exc}")
 
-        socks_port = int(ssh.get("local_socks_port") or 1080)
+        socks_port = get_local_socks_port(cfg)
         http_port = get_http_bridge_port()
         # Reap Python HTTP bridge if it holds :1088
         self.stop_http_bridge()
@@ -804,24 +807,8 @@ class OpsClient:
             update_env_key(self.paths.env_path, "TUN", "1")
             self.log("TUN=1 записан в .env")
             apply_dotenv(self.paths.env_path, force=True)
-        if get_mode() == "singbox":
-            # Restart sing-box process with TUN inbound
-            self.start_singbox_mode()
-            return
-        cfg = self.config()
-        ssh = cfg.get("ssh") or {}
-        socks_port = int(ssh.get("local_socks_port") or 1080)
-        bypass = [str(h) for h in cfg.get("proxy_bypass") or [] if h]
-        self.tun.start(
-            socks_port=socks_port,
-            corporate_proxy=resolve_corporate_proxy(cfg),
-            ssh_host=str(ssh.get("host") or ""),
-            sing_box_path=get_sing_box_path(cfg),
-            elevate=get_tun_elevate(),
-            bypass_hosts=bypass,
-            mtu=get_tun_mtu(cfg),
-            force_restart=True,
-        )
+        # Restart sing-box process with TUN inbound
+        self.start_singbox_mode()
 
     def disable_tun(self, *, persist: bool = True) -> None:
         self.reload_env()
@@ -829,15 +816,12 @@ class OpsClient:
             update_env_key(self.paths.env_path, "TUN", "0")
             self.log("TUN=0 записан в .env")
             apply_dotenv(self.paths.env_path, force=True)
-        if get_mode() == "singbox":
-            if self.singbox.running() or (
-                self.paths.state_path.is_file()
-                and "singbox"
-                in self.paths.state_path.read_text(encoding="utf-8-sig", errors="ignore")
-            ):
-                self.start_singbox_mode()
-            return
-        self.tun.stop()
+        if self.singbox.running() or (
+            self.paths.state_path.is_file()
+            and "singbox"
+            in self.paths.state_path.read_text(encoding="utf-8-sig", errors="ignore")
+        ):
+            self.start_singbox_mode()
 
     def download_sing_box(self) -> None:
         self.reload_env()
@@ -846,14 +830,14 @@ class OpsClient:
         if _port_open("127.0.0.1", http_port):
             proxy_url = f"http://127.0.0.1:{http_port}"
         path = self.tun.ensure_downloaded(proxy_url=proxy_url)
-        # Persist path into config.json
+        # Keep empty in config → auto-resolve tools/sing-box next to project
         cfg = self.config()
         cfg.setdefault("tun", {})
-        cfg["tun"]["sing_box_path"] = str(path)
+        cfg["tun"]["sing_box_path"] = ""
         from desktop.config_io import save_config
 
         save_config(self.paths.config_path, cfg)
-        self.log(f"tun.sing_box_path = {path}")
+        self.log(f"sing-box ready (auto): {path}")
 
     def _maybe_autostart_tun(self) -> None:
         self.reload_env()
@@ -941,37 +925,21 @@ class OpsClient:
 
     def enable(self, *, spawn_watchdog: bool = True) -> None:
         self.reload_env()
-        mode = get_mode()
-        self.log(f"MODE={mode} TUN={1 if get_tun_enabled() else 0}")
-        if mode == "singbox":
-            self.start_singbox_mode()
-            if spawn_watchdog:
-                self.ensure_watchdog_daemon()
-            return
-        if mode == "socks":
-            self.start_tunnel()
-            self._maybe_autostart_tun()
-            if spawn_watchdog:
-                self.ensure_watchdog_daemon()
-            return
-        raise RuntimeError(f"Unknown MODE={mode} (use socks|singbox)")
+        self.log(f"VLESS+Reality TUN={1 if get_tun_enabled() else 0}")
+        self.start_singbox_mode()
+        if spawn_watchdog:
+            self.ensure_watchdog_daemon()
 
     def disable(self) -> None:
         self.reload_env()
-        mode = get_mode()
-        self.log(f"MODE={mode} -> off")
+        self.log("off")
         self.stop_watchdog_daemon()
-        if mode == "singbox" or self.singbox.running():
-            self.stop_singbox_mode()
-            # Also clear any leftover socks TUN/bridge
-            try:
-                self.tun.stop()
-            except Exception:  # noqa: BLE001
-                pass
-            self.stop_http_bridge()
-        else:
-            # stop_tunnel already stops TUN process; keep TUN= flag in .env
-            self.stop_tunnel()
+        self.stop_singbox_mode()
+        try:
+            self.tun.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        self.stop_http_bridge()
 
     def status(self, *, include_git: bool = True) -> dict[str, Any]:
         """Snapshot of tunnel state.
@@ -982,7 +950,7 @@ class OpsClient:
         mode = get_mode()
         info: dict[str, Any] = {
             "mode": mode,
-            "socks_scope": get_socks_scope() if mode in ("socks", "singbox") else "",
+            "socks_scope": get_socks_scope(),
             "git_http_proxy": "",
             "git_https_proxy": "",
             "ssh_running": False,
@@ -994,6 +962,7 @@ class OpsClient:
             "http_port": get_http_bridge_port(),
             "pac_port": get_pac_listen_port(),
             "corporate_proxy": "",
+            "server_target": "",
             "ssh_target": "",
             "proxy_bypass_n": 0,
             "state": None,
@@ -1001,27 +970,14 @@ class OpsClient:
         }
         lines = info["lines"]
         info["tun_env"] = get_tun_enabled()
-        lines.append(f"MODE (.env)       = {info['mode']}")
-        if info["mode"] in ("socks", "singbox"):
-            lines.append(f"SOCKS_SCOPE       = {info['socks_scope']}")
+        lines.append("mode             = vless-reality")
+        lines.append(f"SOCKS_SCOPE       = {info['socks_scope']}")
         lines.append(f"TUN (.env)        = {1 if info['tun_env'] else 0}")
         if include_git:
             info["git_http_proxy"] = git_get("http.proxy")
             info["git_https_proxy"] = git_get("https.proxy")
             lines.append(f"git http.proxy  = {info['git_http_proxy']}")
             lines.append(f"git https.proxy = {info['git_https_proxy']}")
-
-        if self.paths.ssh_pid.is_file():
-            try:
-                pid = int(self.paths.ssh_pid.read_text().strip())
-            except ValueError:
-                pid = 0
-            info["ssh_pid"] = pid
-            if pid and procutil.pid_alive(pid):
-                info["ssh_running"] = True
-                lines.append(f"ssh tunnel pid={pid} running")
-            else:
-                lines.append(f"ssh pid={pid} dead")
 
         if self.bridge.running:
             info["bridge_running"] = True
@@ -1058,7 +1014,7 @@ class OpsClient:
                     f"PAC             = http://127.0.0.1:{info['pac_port']}/proxy.pac"
                 )
 
-        # TUN-over-SOCKS (MODE=socks) or TUN inbound inside MODE=singbox
+        # TUN inbound inside sing-box
         info["tun_running"] = self.tun.running() or (
             info["singbox_running"] and self.singbox.tun_active()
         )
@@ -1091,8 +1047,7 @@ class OpsClient:
         if info["watchdog_running"]:
             lines.append(f"watchdog pid={info['watchdog_pid']} running")
         elif get_watchdog_enabled() and (
-            info["ssh_running"]
-            or info.get("singbox_running")
+            info.get("singbox_running")
             or info.get("tun_running")
             or info.get("state")
         ):
@@ -1106,21 +1061,22 @@ class OpsClient:
         if self.paths.config_path.is_file():
             cfg = self.config()
             info["corporate_proxy"] = resolve_corporate_proxy(cfg)
-            ssh = cfg.get("ssh") or {}
-            info["ssh_target"] = f"{ssh.get('user')}@{ssh.get('host')}:{ssh.get('port')}"
+            host = get_server_host(cfg)
+            port = int(get_server(cfg).get("port") or 443)
+            info["server_target"] = f"{host}:{port}"
+            info["ssh_target"] = info["server_target"]  # GUI compat
             info["proxy_bypass_n"] = len(cfg.get("proxy_bypass") or [])
             info["sing_box_path"] = get_sing_box_path(cfg)
             tr = cfg.get("transport") or {}
             info["transport_type"] = str(tr.get("type") or "")
             lines.append(f"corporate_proxy = {info['corporate_proxy']}")
-            lines.append(f"ssh             = {info['ssh_target']}")
-            if info["mode"] == "singbox" or info.get("transport_type"):
-                uuid = str(tr.get("uuid") or "")
-                uuid_show = (uuid[:8] + "…") if len(uuid) > 8 else (uuid or "(empty)")
-                lines.append(
-                    f"transport       = {info['transport_type'] or 'vless-reality'} "
-                    f"uuid={uuid_show} sni={tr.get('server_name') or ''}"
-                )
+            lines.append(f"server          = {info['server_target']}")
+            uuid = str(tr.get("uuid") or "")
+            uuid_show = (uuid[:8] + "…") if len(uuid) > 8 else (uuid or "(empty)")
+            lines.append(
+                f"transport       = {info['transport_type'] or 'vless-reality'} "
+                f"uuid={uuid_show} sni={tr.get('server_name') or ''}"
+            )
             lines.append(f"proxy_bypass    = {info['proxy_bypass_n']} entries")
             if info["sing_box_path"]:
                 lines.append(f"sing_box_path   = {info['sing_box_path']}")
@@ -1131,8 +1087,7 @@ class OpsClient:
             lines.append(f"docker compose  = {self.paths.docker_compose_proxy}")
 
         info["active"] = bool(
-            info["ssh_running"]
-            or info["bridge_running"]
+            info["bridge_running"]
             or info.get("singbox_running")
             or info.get("tun_running")
         )
