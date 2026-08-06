@@ -43,6 +43,40 @@ def _resolve_host(host: str) -> str | None:
         return None
 
 
+def detect_bind_interface(dest: str) -> str | None:
+    """Interface used to reach dest on the underlay (not the TUN device).
+
+    With auto_route TUN, sing-box auto_detect_interface often picks the TUN
+    iface; dialing Squid then fails with "no route to internet". Bind Squid /
+    direct outbounds to the physical NIC instead.
+    """
+    dest = (dest or "").strip()
+    if not dest:
+        return None
+    if sys.platform.startswith("linux"):
+        try:
+            r = subprocess.run(
+                ["ip", "-4", "route", "get", dest],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        parts = (r.stdout or "").split()
+        if "dev" not in parts:
+            return None
+        i = parts.index("dev")
+        if i + 1 >= len(parts):
+            return None
+        dev = parts[i + 1].strip()
+        if not dev or dev.startswith("ops-content"):
+            return None
+        return dev
+    return None
+
+
 def _arch_tag() -> str:
     m = platform.machine().lower()
     if m in ("x86_64", "amd64"):
