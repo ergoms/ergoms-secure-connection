@@ -7,7 +7,6 @@
     "identity_file": "",
     "local_socks_port": 1080
   },
-  "worker_base_url": "",
   "blocked_hosts": [
     "github.com",
     "www.github.com",
@@ -42,16 +41,9 @@
     "*.lan"
   ],
   "proxy_bypass_via": "direct",
-  "docker_dns_hosts": [
-    "pypi.org",
-    "files.pythonhosted.org",
-    "registry.npmjs.org",
-    "ghcr.io",
-    "registry-1.docker.io"
-  ],
   "tun": {
     "sing_box_path": "",
-    "mtu": 1400
+    "mtu": 1500
   },
   "transport": {
     "type": "vless-reality",

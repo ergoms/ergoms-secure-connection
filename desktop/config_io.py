@@ -19,7 +19,6 @@ ENV_KEYS = [
     "MODE",
     "SOCKS_SCOPE",
     "HTTP_BRIDGE_PORT",
-    "OPS_CONTENT_SECRET",
     "CORPORATE_PROXY",
     "TUN",
     "TUN_ELEVATE",
@@ -92,7 +91,7 @@ def _default_env_text(values: dict[str, str]) -> str:
     tun = values.get("TUN", "0") or "0"
     elevate = values.get("TUN_ELEVATE", "1") or "1"
     lines = [
-        "# Client mode: socks | vps | singbox",
+        "# Client mode: socks | singbox",
         f"MODE={values.get('MODE', 'socks') or 'socks'}",
         "",
         "# full | github",
@@ -112,10 +111,6 @@ def _default_env_text(values: dict[str, str]) -> str:
         lines.append(f"PAC_LISTEN_PORT={values['PAC_LISTEN_PORT']}")
     else:
         lines.append("# PAC_LISTEN_PORT=1089  (MODE=singbox PAC server)")
-    if values.get("OPS_CONTENT_SECRET"):
-        lines.append(f"OPS_CONTENT_SECRET={values['OPS_CONTENT_SECRET']}")
-    else:
-        lines.append("# OPS_CONTENT_SECRET=")
     if values.get("CORPORATE_PROXY"):
         lines.append(f"CORPORATE_PROXY={values['CORPORATE_PROXY']}")
     else:
@@ -161,7 +156,7 @@ def save_dotenv(path: Path, values: dict[str, str], preserve_comments: bool = Tr
         if key not in cleaned or key in seen:
             continue
         # Skip empty optional secrets/ports unless TUN flags
-        if key in ("OPS_CONTENT_SECRET", "CORPORATE_PROXY", "HTTP_BRIDGE_PORT") and not cleaned[key]:
+        if key in ("CORPORATE_PROXY", "HTTP_BRIDGE_PORT") and not cleaned[key]:
             continue
         extras.append(f"{key}={cleaned[key]}")
         seen.add(key)
@@ -224,7 +219,7 @@ def ensure_config_defaults(cfg: dict[str, Any]) -> dict[str, Any]:
     ssh.setdefault("port", 443)
     ssh.setdefault("identity_file", "")
     ssh.setdefault("local_socks_port", 1080)
-    out.setdefault("worker_base_url", "")
+    out.pop("worker_base_url", None)
     out.setdefault("blocked_hosts", default_config_template()["blocked_hosts"])
     out.setdefault("proxy_bypass", ["*.intranet.example", "*.local", "*.lan"])
     out.setdefault("proxy_bypass_via", "direct")
@@ -399,7 +394,6 @@ def default_config_template() -> dict[str, Any]:
             "identity_file": "",
             "local_socks_port": 1080,
         },
-        "worker_base_url": "",
         "blocked_hosts": [
             "github.com",
             "www.github.com",

@@ -1,2 +1,0 @@
-# Present next to OpsContent.exe when installed via Setup.
-# Tells the app to use %LOCALAPPDATA%\ops-content for writable data.

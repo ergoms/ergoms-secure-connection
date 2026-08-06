@@ -45,7 +45,6 @@ CHOICES: dict[str, list[tuple[str, str]]] = {
     "MODE": [
         ("Туннель", "socks"),
         ("Быстрый", "singbox"),
-        ("VPS", "vps"),
     ],
     "SOCKS_SCOPE": [("Всё", "full"), ("GitHub + Cursor", "github")],
     "TUN": [("Выкл", "0"), ("Вкл", "1")],
@@ -508,7 +507,6 @@ class App:
             "TUN": tk.StringVar(value="0"),
             "TUN_ELEVATE": tk.StringVar(value="1"),
             "HTTP_BRIDGE_PORT": tk.StringVar(value="1088"),
-            "OPS_CONTENT_SECRET": tk.StringVar(value=""),
             "CORPORATE_PROXY": tk.StringVar(value=""),
             "corporate_proxy": tk.StringVar(value=""),
             "ssh_host": tk.StringVar(value=""),
@@ -516,7 +514,6 @@ class App:
             "ssh_port": tk.StringVar(value="443"),
             "ssh_identity": tk.StringVar(value=""),
             "ssh_socks": tk.StringVar(value="1080"),
-            "worker_base_url": tk.StringVar(value=""),
             "proxy_bypass": tk.StringVar(value=""),
             "proxy_bypass_via": tk.StringVar(value="direct"),
             "sing_box_path": tk.StringVar(value=""),
@@ -561,12 +558,10 @@ class App:
             (
                 "Прокси и исключения",
                 [
-                    ("Секрет", "OPS_CONTENT_SECRET", None),
                     ("Корп. прокси (.env)", "CORPORATE_PROXY", None),
                     ("Корп. прокси (config)", "corporate_proxy", None),
                     ("Исключения (через запятую)", "proxy_bypass", None),
                     ("Исключения идут", "proxy_bypass_via", "choice"),
-                    ("Адрес воркера", "worker_base_url", None),
                     ("Путь к sing-box", "sing_box_path", "file"),
                 ],
             ),
@@ -694,7 +689,6 @@ class App:
         self.vars["TUN"].set(env.get("TUN", "0") or "0")
         self.vars["TUN_ELEVATE"].set(env.get("TUN_ELEVATE", "1") or "1")
         self.vars["HTTP_BRIDGE_PORT"].set(env.get("HTTP_BRIDGE_PORT", "1088") or "1088")
-        self.vars["OPS_CONTENT_SECRET"].set(env.get("OPS_CONTENT_SECRET", "") or "")
         self.vars["CORPORATE_PROXY"].set(env.get("CORPORATE_PROXY", "") or "")
         if self.paths.config_path.is_file():
             cfg = load_config(self.paths.config_path)
@@ -706,7 +700,6 @@ class App:
             self.vars["ssh_port"].set(str(ssh.get("port") or 443))
             self.vars["ssh_identity"].set(str(ssh.get("identity_file") or ""))
             self.vars["ssh_socks"].set(str(ssh.get("local_socks_port") or 1080))
-            self.vars["worker_base_url"].set(str(cfg.get("worker_base_url") or ""))
             bypass = cfg.get("proxy_bypass") or []
             self.vars["proxy_bypass"].set(", ".join(str(x) for x in bypass))
             self.vars["proxy_bypass_via"].set(str(cfg.get("proxy_bypass_via") or "direct"))
@@ -728,7 +721,6 @@ class App:
                 "TUN": self.vars["TUN"].get().strip() or "0",
                 "TUN_ELEVATE": self.vars["TUN_ELEVATE"].get().strip() or "1",
                 "HTTP_BRIDGE_PORT": self.vars["HTTP_BRIDGE_PORT"].get().strip(),
-                "OPS_CONTENT_SECRET": self.vars["OPS_CONTENT_SECRET"].get().strip(),
                 "CORPORATE_PROXY": self.vars["CORPORATE_PROXY"].get().strip(),
             }
             save_dotenv(self.paths.env_path, env_vals)
@@ -746,7 +738,7 @@ class App:
             cfg["ssh"]["port"] = int(self.vars["ssh_port"].get().strip() or "443")
             cfg["ssh"]["identity_file"] = self.vars["ssh_identity"].get().strip()
             cfg["ssh"]["local_socks_port"] = int(self.vars["ssh_socks"].get().strip() or "1080")
-            cfg["worker_base_url"] = self.vars["worker_base_url"].get().strip()
+            cfg.pop("worker_base_url", None)
             raw_bypass = self.vars["proxy_bypass"].get().strip()
             cfg["proxy_bypass"] = [x.strip() for x in raw_bypass.split(",") if x.strip()]
             cfg["proxy_bypass_via"] = self.vars["proxy_bypass_via"].get().strip() or "direct"
@@ -858,7 +850,6 @@ class App:
         return {
             "socks": "Туннель",
             "singbox": "Быстрый",
-            "vps": "VPS",
         }.get(mode, mode or "—")
 
     def _scope_label(self, scope: str) -> str:
@@ -897,9 +888,6 @@ class App:
             self._recolor_btn(self.btn_power, danger=True, text="Отключить")
         elif ssh:
             title, sub, color = "Подключено", "Туннель активен", C_OK
-            self._recolor_btn(self.btn_power, danger=True, text="Отключить")
-        elif (st.get("state") or {}).get("mode") == "relay":
-            title, sub, color = "Relay", "Режим relay", C_WARN
             self._recolor_btn(self.btn_power, danger=True, text="Отключить")
         elif active:
             title, sub, color = "Включено", "Активно", C_OK

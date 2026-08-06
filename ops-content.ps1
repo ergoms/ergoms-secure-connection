@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Thin wrapper → unified Python client (same commands as Linux / EXE)
+  Thin wrapper to unified Python client (CLI)
 #>
 param(
     [Parameter(Position = 0)]
@@ -32,7 +32,6 @@ function Get-PythonExe {
     throw 'Python 3 not found'
 }
 
-# Legacy deploy stays in PowerShell
 if ($Command -eq 'deploy') {
     & (Join-Path $Root 'deploy.ps1') @Rest
     exit $LASTEXITCODE

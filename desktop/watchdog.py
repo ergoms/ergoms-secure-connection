@@ -111,19 +111,6 @@ def health_problem(client: OpsClient, *, probe: bool = False) -> str | None:
     Set probe=True for a real SOCKS5 CONNECT check (watchdog ticks).
     """
     client.reload_env()
-    mode = get_mode()
-    if mode == "vps":
-        # Relay mode has no local SOCKS; skip SOCKS checks.
-        if client.paths.state_path.is_file():
-            try:
-                import json
-
-                st = json.loads(client.paths.state_path.read_text(encoding="utf-8-sig"))
-                if st.get("mode") == "relay":
-                    return None
-            except Exception:  # noqa: BLE001
-                pass
-
     socks = socks_port_from_client(client)
     socks_up = _port_open("127.0.0.1", socks, timeout=0.35)
 

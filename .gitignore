@@ -35,11 +35,10 @@ ssh-debug.out
 __pycache__/
 *.pyc
 
-# Desktop build
+# Build leftovers
 dist/
 build/
-*.spec.bak
 
-# Bundled binaries (sing-box etc.)
+# Optional local binaries
 tools/*
 !tools/.gitkeep

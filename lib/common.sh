@@ -153,20 +153,6 @@ print("" if cur is None else cur)
 PY
 }
 
-config_set_worker_url() {
-  local url="$1" py path
-  py="$(find_python)"
-  path="$(_py_path "$CONFIG_PATH")"
-  "$py" - "$path" "$url" <<'PY'
-import json, sys
-path, url = sys.argv[1], sys.argv[2]
-data = json.loads(open(path, encoding="utf-8-sig").read())
-data["worker_base_url"] = url
-open(path, "w", encoding="utf-8").write(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
-print("saved worker_base_url")
-PY
-}
-
 corporate_proxy_url() {
   local p="${CORPORATE_PROXY:-}"
   if [[ -n "$p" ]]; then

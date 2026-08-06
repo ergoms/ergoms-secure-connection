@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Install sing-box VLESS+Reality on :443 for MODE=singbox clients (via Squid CONNECT).
+# Install sing-box VLESS+Reality on :443 (office clients reach it via Squid CONNECT).
 # Run on the VPS from provider console / non-office SSH — not through office Squid
 # while sshd still owns :443.
 #
-# After success, copy the printed transport block into the office PC config.json
-# and set MODE=singbox in .env.
+# After success, copy the printed transport block into an external VLESS client
+# (or keep it in config.json for reference).
 set -euo pipefail
 
 if [[ "$(id -u)" -ne 0 ]]; then
@@ -224,19 +224,24 @@ On the office PC — config.json (merge into existing file):
     "port": 443
   }
 
-In .env:
+On the office PC — merge transport into config.json, then:
 
+  # .env
   MODE=singbox
   TUN=1
 
-Then from the office:
+  ./ops-content.sh on
+  # or: .\\ops-content.ps1 on
+  # or: python -m desktop on
 
-  ops-content probe $PUBLIC_IP 443
-  ops-content on
+Probe from office:
+
+  ./ops-content.sh probe $PUBLIC_IP 443
+  # or: .\\ops-content.ps1 probe $PUBLIC_IP 443
 
 Credentials saved on VPS: $CREDS
 Rollback to SSH socks: systemctl disable --now sing-box
   then: bash modes/vps/bootstrap_sshd_443.sh
-  client: MODE=socks
+  Client: MODE=socks ; ./ops-content.sh on  (or ops-content.ps1 / python -m desktop)
 ========================================================================
 EOF
