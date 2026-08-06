@@ -8,13 +8,22 @@ if [[ "$(id -u)" -ne 0 ]]; then
   exit 1
 fi
 
-DROPIN=/etc/ssh/sshd_config.d/99-ops-content-443.conf
+# Canonical name uses hyphen; older hosts may have a dotted variant.
+DROPINS=(
+  /etc/ssh/sshd_config.d/99-ops-content-443.conf
+  /etc/ssh/sshd_config.d/99.ops-content-443.conf
+)
 
-if [[ -f "$DROPIN" ]]; then
-  rm -f "$DROPIN"
-  echo "Removed $DROPIN"
-else
-  echo "No $DROPIN (nothing to remove)"
+removed=0
+for DROPIN in "${DROPINS[@]}"; do
+  if [[ -f "$DROPIN" ]]; then
+    rm -f "$DROPIN"
+    echo "Removed $DROPIN"
+    removed=1
+  fi
+done
+if [[ "$removed" -eq 0 ]]; then
+  echo "No ops-content :443 drop-in (nothing to remove)"
 fi
 
 # If someone put Port 443 into the main config, warn (do not edit blindly).
@@ -22,7 +31,18 @@ if grep -E '^[[:space:]]*Port[[:space:]]+443' /etc/ssh/sshd_config 2>/dev/null; 
   echo "WARNING: /etc/ssh/sshd_config still has 'Port 443' — remove it manually." >&2
 fi
 
-if systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null; then
+# Ubuntu socket-activated ssh keeps ListenStream in a generator drop-in;
+# restarting only ssh.service leaves :443 bound until daemon-reload + socket restart.
+if systemctl daemon-reload 2>/dev/null; then
+  if systemctl restart ssh.socket ssh.service 2>/dev/null \
+    || systemctl restart sshd.socket sshd.service 2>/dev/null \
+    || systemctl restart ssh.service 2>/dev/null \
+    || systemctl restart sshd.service 2>/dev/null; then
+    echo "sshd restarted (socket + service)"
+  else
+    service ssh restart 2>/dev/null || service sshd restart 2>/dev/null || true
+  fi
+elif systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null; then
   echo "sshd restarted"
 else
   service ssh restart 2>/dev/null || service sshd restart 2>/dev/null || true
