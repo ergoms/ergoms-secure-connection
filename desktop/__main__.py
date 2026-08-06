@@ -66,18 +66,23 @@ def _show_help() -> int:
 Команды (одинаковы везде):
   init                 создать .env / config.json
   on / off             включить / выключить MODE (+ TUN если TUN=1)
-  start / stop         только SSH-туннель
+  start / stop         только SSH-туннель (MODE=socks)
   status               состояние
   probe HOST [PORT]    CONNECT через Squid
   test                 проверка обхода
   relay-on / relay-off MODE=vps git relay
-  tun-on / tun-off     TUN поверх SOCKS (sing-box)
+  tun-on / tun-off     TUN (socks: поверх SOCKS; singbox: в том же процессе)
   download-sing-box    скачать sing-box в tools/
   docker-env           var/docker.env + compose (прокси для контейнеров)
   docker-test          проверка: curl из контейнера через мост
   watch                следить за SOCKS и переподключать (Ctrl+C)
   gui                  окно (нужен дисплей)
   help
+
+Режимы (.env MODE=):
+  socks     SSH -D через Squid (sshd на VPS :443)
+  vps       HTTPS git-relay
+  singbox   VLESS+Reality через Squid (sing-box на VPS :443)
 
 Запуск:
   python -m desktop <cmd> …
@@ -193,6 +198,10 @@ def main(argv: list[str] | None = None) -> int:
         return _run_connect(argv[1:])
     if head == "bridge":
         return _run_bridge(argv[1:])
+    if head == "pac-serve":
+        from desktop.pac_serve import main as pac_main
+
+        return int(pac_main(argv[1:]))
     if head in ("help", "-h", "--help"):
         return _show_help()
     if head == "gui":

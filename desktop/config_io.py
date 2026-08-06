@@ -26,6 +26,7 @@ ENV_KEYS = [
     "WATCHDOG",
     "WATCHDOG_INTERVAL",
     "WATCHDOG_MAX_RETRIES",
+    "PAC_LISTEN_PORT",
 ]
 
 
@@ -91,13 +92,13 @@ def _default_env_text(values: dict[str, str]) -> str:
     tun = values.get("TUN", "0") or "0"
     elevate = values.get("TUN_ELEVATE", "1") or "1"
     lines = [
-        "# Client mode: socks | vps",
+        "# Client mode: socks | vps | singbox",
         f"MODE={values.get('MODE', 'socks') or 'socks'}",
         "",
         "# full | github",
         f"SOCKS_SCOPE={values.get('SOCKS_SCOPE', 'full') or 'full'}",
         "",
-        "# TUN over SOCKS (sing-box). 1 = auto-start TUN after tunnel on",
+        "# TUN (sing-box). socks: over SSH SOCKS; singbox: in the same process",
         f"TUN={tun}",
         "# Request UAC when starting sing-box TUN",
         f"TUN_ELEVATE={elevate}",
@@ -107,6 +108,10 @@ def _default_env_text(values: dict[str, str]) -> str:
         lines.append(f"HTTP_BRIDGE_PORT={values['HTTP_BRIDGE_PORT']}")
     else:
         lines.append("# HTTP_BRIDGE_PORT=1088")
+    if values.get("PAC_LISTEN_PORT"):
+        lines.append(f"PAC_LISTEN_PORT={values['PAC_LISTEN_PORT']}")
+    else:
+        lines.append("# PAC_LISTEN_PORT=1089  (MODE=singbox PAC server)")
     if values.get("OPS_CONTENT_SECRET"):
         lines.append(f"OPS_CONTENT_SECRET={values['OPS_CONTENT_SECRET']}")
     else:
@@ -229,11 +234,28 @@ def ensure_config_defaults(cfg: dict[str, Any]) -> dict[str, Any]:
         out["tun"] = tun
     tun.setdefault("sing_box_path", "")
     tun.setdefault("mtu", 1500)
+    transport = out.setdefault("transport", {})
+    if not isinstance(transport, dict):
+        transport = {}
+        out["transport"] = transport
+    transport.setdefault("type", "vless-reality")
+    transport.setdefault("uuid", "")
+    transport.setdefault("public_key", "")
+    transport.setdefault("short_id", "")
+    transport.setdefault("server_name", "www.cloudflare.com")
+    transport.setdefault("port", 443)
     return out
 
 
 def get_mode() -> str:
     return (os.environ.get("MODE") or "socks").strip().lower()
+
+
+def get_pac_listen_port() -> int:
+    raw = (os.environ.get("PAC_LISTEN_PORT") or "").strip()
+    if raw:
+        return int(raw)
+    return 1089
 
 
 def get_socks_scope() -> str:
@@ -412,13 +434,21 @@ def default_config_template() -> dict[str, Any]:
             "sing_box_path": "",
             "mtu": 1400,
         },
+        "transport": {
+            "type": "vless-reality",
+            "uuid": "",
+            "public_key": "",
+            "short_id": "",
+            "server_name": "www.cloudflare.com",
+            "port": 443,
+        },
     }
 
 
 def merge_settings_to_config(cfg: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
     out = deepcopy(cfg)
     for k, v in updates.items():
-        if k in ("ssh", "tun") and isinstance(v, dict):
+        if k in ("ssh", "tun", "transport") and isinstance(v, dict):
             out.setdefault(k, {}).update(v)
         else:
             out[k] = v

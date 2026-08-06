@@ -64,7 +64,7 @@ OpsContent.exe on|off|status|probe|tun-on|tun-off|download-sing-box …
 
 Разработка без сборки: `python -m desktop` (нужны `pip install -r requirements-desktop.txt`).
 
-### TUN (как VPN поверх SOCKS)
+### TUN (как VPN)
 
 Управляется из `.env` и `config.json` (GUI → Настройки тоже пишет туда же).
 
@@ -73,13 +73,14 @@ OpsContent.exe on|off|status|probe|tun-on|tun-off|download-sing-box …
 | `.env` | `TUN=0\|1` — автоподъём TUN после `on`; `TUN_ELEVATE=0\|1` — UAC; кнопки TUN вкл/выкл пишут `TUN` |
 | `config.json` | `tun.sing_box_path` — путь к `sing-box.exe` (пусто = `tools/sing-box.exe`) |
 
-Когда SSH-туннель уже поднят (SOCKS `127.0.0.1:1080`):
+- **MODE=socks:** TUN = отдельный sing-box поверх локального SSH SOCKS `:1080`.
+- **MODE=singbox:** TUN = inbound в том же процессе, что и VLESS (отдельный «TUN поверх SOCKS» не нужен).
 
 1. **Скачать sing-box** или положить exe в `tools\` / указать `tun.sing_box_path`.
 2. Либо **TUN вкл** в GUI, либо `TUN=1` в `.env` и обычное **Включить** — TUN поднимется сам (UAC).
-3. **TUN выкл** → процесс стоп + `TUN=0` в `.env`.
+3. **TUN выкл** → без TUN (+ `TUN=0` в `.env`).
 
-Частные сети, Squid и VPS в TUN не заворачиваются, чтобы не зациклить SSH.
+Частные сети, Squid и VPS в TUN не заворачиваются, чтобы не зациклить туннель.
 
 **TUN обязателен для DNS в Docker Desktop:** sing-box перехватывает UDP/53 от VM и отвечает системным резолвером хоста (до 8.8.8.8 из VM часто таймаут; SSH SOCKS не умеет UDP). При `TUN=1` клиент поднимает TUN после `on`; если sing-box упал — watchdog поднимает снова. Без живого TUN `getent pypi.org` в контейнере падает.
 
@@ -184,15 +185,16 @@ source ./var/cli.env
 ### Пример `.env`
 
 ```env
-# socks — туннель через SSH; vps — свой HTTPS-посредник для git (см. ниже)
+# socks | vps | singbox
 MODE=socks
 
 # full   — почти весь HTTP/HTTPS через сервер (кроме proxy_bypass)
 # github — только узлы, связанные с GitHub; остальное — как в сети обычно
 SOCKS_SCOPE=full
 
-# Порт локального HTTP-моста (по умолчанию 1088)
+# Порт локального HTTP (мост в socks; inbound sing-box в MODE=singbox)
 # HTTP_BRIDGE_PORT=1088
+# PAC_LISTEN_PORT=1089
 ```
 
 Клиент и выкладка на сервер:
@@ -215,6 +217,42 @@ SOCKS_SCOPE=full
 
 - `SOCKS_SCOPE=full` — почти весь веб через ваш сервер.
 - `SOCKS_SCOPE=github` — через туннель только GitHub и родственные узлы; остальное идёт обычным путём сети.
+
+### `singbox` (быстрый, VLESS+Reality)
+
+Отдельный режим без SSH: один процесс **sing-box** на клиенте поднимает локальный SOCKS/HTTP и опционально TUN, а наружу ходит **VLESS+Reality** через Squid CONNECT на ваш VPS `:443`.
+
+На одном IP нельзя одновременно держать `sshd` на 443 и sing-box на 443 — это выбор деплоя на VPS. Режимы `socks` / `vps` в коде не ломаются: переключение только через `.env` (`MODE=singbox`).
+
+#### Что сделать на VPS
+
+С консоли хостинга (VNC / serial / SSH **не** через офисный Squid, пока на 443 ещё старый sshd):
+
+```bash
+# 1) Снять sshd с :443 (оставить :22 для консоли)
+bash modes/vps/disable_sshd_443.sh
+
+# 2) Поставить sing-box VLESS+Reality на :443
+bash modes/vps/bootstrap_singbox_443.sh
+```
+
+Скрипт установит sing-box, сгенерирует ключи, включит systemd и **напечатает блок** `transport` для клиента. Проверка на VPS:
+
+```bash
+systemctl status sing-box --no-pager
+ss -lntp | grep ':443'
+journalctl -u sing-box -n 50
+```
+
+#### На рабочей машине (офис)
+
+1. В `config.json` вставьте `transport` из вывода bootstrap (и тот же `ssh.host` = IP VPS).
+2. В `.env`: `MODE=singbox` и при необходимости `TUN=1`.
+3. `ops-content probe <IP> 443` → `ops-content on`.
+
+Локально: SOCKS `:1080`, HTTP `:1088` (sing-box), PAC на `:1089` (только файл автонастройки; PROXY в PAC указывает на `:1088`).
+
+Откат на SSH-туннель: на VPS `systemctl disable --now sing-box`, снова `bash modes/vps/bootstrap_sshd_443.sh`; на клиенте `MODE=socks`.
 
 ### `vps`
 
@@ -332,7 +370,7 @@ ops-content/
 ├── lib/                  вспомогательные программы на Python и оболочке
 └── modes/
     ├── socks/            служба systemd и запуск туннеля
-    └── vps/              подготовка SSH на 443, посредник для git, пример Caddy
+    └── vps/              sshd:443, sing-box Reality:443, git-proxy, Caddy
 ```
 
 Нужны: оболочка (`bash` или PowerShell), Python 3, `git`, `curl`, клиент SSH. На Linux для настройки среды рабочего стола GNOME может пригодиться `gsettings`.

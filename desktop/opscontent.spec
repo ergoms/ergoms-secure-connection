@@ -26,6 +26,12 @@ hiddenimports = [
     "desktop.git_proxy",
     "desktop.win_proxy",
     "desktop.paths",
+    "desktop.tun",
+    "desktop.singbox_mode",
+    "desktop.pac_serve",
+    "desktop.watchdog",
+    "desktop.sys_proxy",
+    "desktop.docker_env",
     "pystray._win32",
     "PIL._tkinter_finder",
 ]
