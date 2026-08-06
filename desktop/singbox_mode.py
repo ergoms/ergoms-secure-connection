@@ -12,7 +12,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 from desktop import procutil
-from desktop.tun import TunManager, _direct_python_paths, _resolve_host
+from desktop.tun import (
+    TunManager,
+    _direct_python_paths,
+    _resolve_host,
+    detect_bind_interface,
+)
 from lib.http_via_socks import bypass_to_singbox
 
 LogFn = Callable[[str], None]
@@ -105,6 +110,9 @@ class SingboxModeManager:
             ip = _resolve_host(h)
             if ip:
                 exclude_ips.append(ip)
+
+        # Prefer underlay NIC toward Squid so TUN auto_route cannot steal dials.
+        bind_iface = detect_bind_interface(exclude_ips[0] if exclude_ips else squid_host)
 
         route_exclude = [
             "10.0.0.0/8",
@@ -237,6 +245,7 @@ class SingboxModeManager:
                     "tag": "squid",
                     "server": squid_host,
                     "server_port": int(squid_port),
+                    **({"bind_interface": bind_iface} if bind_iface else {}),
                 },
                 {
                     "type": "vless",
@@ -258,11 +267,16 @@ class SingboxModeManager:
                     },
                     "detour": "squid",
                 },
-                {"type": "direct", "tag": "direct"},
+                {
+                    "type": "direct",
+                    "tag": "direct",
+                    **({"bind_interface": bind_iface} if bind_iface else {}),
+                },
                 {"type": "block", "tag": "block"},
             ],
             "route": {
                 "auto_detect_interface": True,
+                **({"default_interface": bind_iface} if bind_iface else {}),
                 "final": "proxy",
                 "rules": [
                     {"inbound": ["socks-in", "http-in"], "action": "sniff", "timeout": "1s"},
@@ -295,7 +309,11 @@ class SingboxModeManager:
         self._pid_scan_at = now
         self._pid_scan_result = found
         if found:
-            self.pid_path.write_text(str(found), encoding="utf-8")
+            try:
+                self.pid_path.write_text(str(found), encoding="utf-8")
+            except OSError:
+                # Root-owned pid after `sudo on` — status as user must still work.
+                pass
             return found
         return None
 

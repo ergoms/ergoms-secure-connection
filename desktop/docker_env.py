@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import ipaddress
 import os
 import shutil
@@ -40,28 +41,36 @@ DEFAULT_DNS_HOSTS: tuple[str, ...] = (
 # Docker Desktop (Windows/Mac) host gateway — used if live detect fails.
 _DOCKER_DESKTOP_HOST_FALLBACK = "192.168.65.254"
 
+# getaddrinfo has no native timeout; under broken TUN DNS it can hang forever.
+_RESOLVE_HOST_TIMEOUT = 2.0
+_DOCKER_PROBE_TIMEOUT = 12.0
+
 
 def resolve_hosts(hosts: list[str] | tuple[str, ...]) -> list[tuple[str, str]]:
     """Resolve hostnames on the Windows/Linux host (where DNS usually works)."""
     out: list[tuple[str, str]] = []
     seen: set[str] = set()
-    for host in hosts:
-        h = (host or "").strip().lower().rstrip(".")
-        if not h or h in seen:
-            continue
-        seen.add(h)
-        try:
-            infos = socket.getaddrinfo(h, None, socket.AF_INET, socket.SOCK_STREAM)
-        except OSError:
-            continue
-        ip = ""
-        for info in infos:
-            cand = info[4][0]
-            if cand and not cand.startswith("127."):
-                ip = cand
-                break
-        if ip:
-            out.append((h, ip))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+        for host in hosts:
+            h = (host or "").strip().lower().rstrip(".")
+            if not h or h in seen:
+                continue
+            seen.add(h)
+            fut = pool.submit(
+                socket.getaddrinfo, h, None, socket.AF_INET, socket.SOCK_STREAM
+            )
+            try:
+                infos = fut.result(timeout=_RESOLVE_HOST_TIMEOUT)
+            except (OSError, concurrent.futures.TimeoutError):
+                continue
+            ip = ""
+            for info in infos:
+                cand = info[4][0]
+                if cand and not cand.startswith("127."):
+                    ip = cand
+                    break
+            if ip:
+                out.append((h, ip))
     return out
 
 
@@ -77,7 +86,9 @@ def _is_usable_host_ip(ip: str) -> bool:
     return True
 
 
-def detect_docker_host_ip(*, log: LogFn = _noop, timeout: float = 90.0) -> str | None:
+def detect_docker_host_ip(
+    *, log: LogFn = _noop, timeout: float = _DOCKER_PROBE_TIMEOUT
+) -> str | None:
     """IPv4 that containers can use to reach the host (Docker Desktop host-gateway).
 
     Container DNS is often broken, so proxy URL must be an IP, not a hostname.
@@ -90,6 +101,30 @@ def detect_docker_host_ip(*, log: LogFn = _noop, timeout: float = 90.0) -> str |
     if not docker:
         if sys.platform == "win32":
             log(f"docker not in PATH — fallback host IP {_DOCKER_DESKTOP_HOST_FALLBACK}")
+            return _DOCKER_DESKTOP_HOST_FALLBACK
+        return None
+
+    # Fail fast when daemon is down/hung — do not block `on` for minutes.
+    try:
+        info = subprocess.run(
+            [docker, "info"],
+            capture_output=True,
+            text=True,
+            timeout=min(3.0, timeout),
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        log(f"docker info: {exc} — skip host-ip probe")
+        if sys.platform in ("win32", "darwin"):
+            return _DOCKER_DESKTOP_HOST_FALLBACK
+        return None
+    if info.returncode != 0:
+        err = (info.stderr or info.stdout or "").strip().splitlines()
+        log(
+            "docker info failed — skip host-ip probe"
+            + (f": {err[-1][:160]}" if err else "")
+        )
+        if sys.platform in ("win32", "darwin"):
             return _DOCKER_DESKTOP_HOST_FALLBACK
         return None
 
