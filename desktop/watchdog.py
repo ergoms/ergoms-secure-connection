@@ -136,21 +136,32 @@ def health_problem(client: OpsClient, *, probe: bool = False) -> str | None:
             ssh_pid = 0
         ssh_alive = bool(ssh_pid and procutil.pid_alive(ssh_pid))
 
-    tun_up = client.tun.running()
+    singbox_alive = False
+    try:
+        singbox_alive = bool(client.singbox.running())
+    except Exception:  # noqa: BLE001
+        singbox_alive = False
+
+    tun_up = client.tun.running() or (
+        singbox_alive and getattr(client.singbox, "tun_active", lambda: False)()
+    )
     tun_wanted = get_tun_enabled()
+    transport_alive = ssh_alive or singbox_alive
 
     if tun_up and not socks_up:
         return f"TUN up but SOCKS :{socks} refused"
     if ssh_alive and not socks_up:
         return f"ssh pid={ssh_pid} alive but SOCKS :{socks} closed"
-    if client.paths.state_path.is_file() and not socks_up and not ssh_alive:
+    if singbox_alive and not socks_up:
+        return f"singbox up but SOCKS :{socks} closed"
+    if client.paths.state_path.is_file() and not socks_up and not transport_alive:
         return f"state present but SOCKS :{socks} down"
-    if ssh_pid and not ssh_alive and not socks_up:
+    if ssh_pid and not ssh_alive and not socks_up and not singbox_alive:
         return f"ssh pid={ssh_pid} dead, SOCKS :{socks} down"
     # Probe before TUN recovery — otherwise failsafe TUN-stop + "sing-box down"
     # would bring TUN back on top of a zombie SOCKS and blackhole the OS again.
     if probe and socks_up and (
-        ssh_alive or tun_up or tun_wanted or client.paths.state_path.is_file()
+        transport_alive or tun_up or tun_wanted or client.paths.state_path.is_file()
     ):
         err = socks_probe(socks)
         if err:
@@ -168,6 +179,11 @@ def infer_desired_on(client: OpsClient) -> bool:
         return True
     if client.paths.ssh_pid.is_file():
         return True
+    try:
+        if client.singbox.running():
+            return True
+    except Exception:  # noqa: BLE001
+        pass
     if client.tun.running():
         return True
     return False
@@ -260,7 +276,14 @@ class TunnelWatchdog:
                 f"watchdog: {problem} "
                 f"({self._probe_fails}/{_PROBE_FAILS_BEFORE_RECONNECT})"
             )
-            if self.client.tun.running():
+            if get_mode() == "singbox":
+                try:
+                    if self.client.singbox.running():
+                        self.client.singbox.stop()
+                        self.log("watchdog: singbox stopped (failsafe while SOCKS zombie)")
+                except Exception as exc:  # noqa: BLE001
+                    self.log(f"watchdog: singbox failsafe stop: {exc}")
+            elif self.client.tun.running():
                 try:
                     self.client.tun.stop()
                     self.log("watchdog: TUN stopped (failsafe while SOCKS zombie)")
@@ -295,7 +318,8 @@ class TunnelWatchdog:
             self._reconnect(tun_only=True)
         else:
             # Drop TUN ASAP so a dead SOCKS does not blackhole the whole OS.
-            if self.client.tun.running() and "SOCKS" in problem:
+            # MODE=socks: separate TUN process. MODE=singbox: full reconnect.
+            if get_mode() != "singbox" and self.client.tun.running() and "SOCKS" in problem:
                 try:
                     self.client.tun.stop()
                     self.log("watchdog: TUN stopped (failsafe while SOCKS down)")
@@ -316,12 +340,15 @@ class TunnelWatchdog:
             else:
                 # Stop TUN first so sing-box stops flooding refused-to-1080 logs
                 try:
-                    if self.client.tun.running():
+                    if get_mode() != "singbox" and self.client.tun.running():
                         self.client.tun.stop()
                 except Exception as exc:  # noqa: BLE001
                     self.log(f"watchdog: TUN stop: {exc}")
                 try:
-                    self.client.stop_tunnel()
+                    if get_mode() == "singbox":
+                        self.client.stop_singbox_mode()
+                    else:
+                        self.client.stop_tunnel()
                 except Exception as exc:  # noqa: BLE001
                     self.log(f"watchdog: stop: {exc}")
                 self.client.enable(spawn_watchdog=False)

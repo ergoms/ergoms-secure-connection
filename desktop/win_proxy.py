@@ -136,21 +136,23 @@ def enable_browser_pac(
     bypass_count: int,
     backup_path: Path,
     log: LogFn = _noop,
+    *,
+    pac_url: str | None = None,
 ) -> None:
     if not _is_windows():
         log("Browser PAC: Windows only")
         return
-    pac_url = f"http://127.0.0.1:{http_port}/proxy.pac"
+    url = (pac_url or "").strip() or f"http://127.0.0.1:{http_port}/proxy.pac"
     backup_win_proxy(backup_path)
     with _reg_key() as key:
         _set_reg_int(key, "ProxyEnable", 0)
         _set_reg_int(key, "AutoDetect", 0)
-        _set_reg_str(key, "AutoConfigURL", pac_url)
+        _set_reg_str(key, "AutoConfigURL", url)
     notify_proxy_change()
     if scope == "full":
-        log(f"Browser PAC FULL = {pac_url} (VPS except proxy_bypass={bypass_count})")
+        log(f"Browser PAC FULL = {url} (VPS except proxy_bypass={bypass_count})")
     else:
-        log(f"Browser PAC = {pac_url} (GitHub via VPS; bypass={bypass_count})")
+        log(f"Browser PAC = {url} (GitHub via VPS; bypass={bypass_count})")
     log("Restart Edge/Chrome tabs if sites still look cached/blocked")
 
 

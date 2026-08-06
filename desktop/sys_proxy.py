@@ -235,14 +235,23 @@ def enable_browser_pac(
     bypass_count: int,
     backup_path: Path,
     log: LogFn = _noop,
+    *,
+    pac_url: str | None = None,
 ) -> None:
     if sys.platform == "win32":
         from desktop.win_proxy import enable_browser_pac as win_enable
 
-        win_enable(http_port, scope, bypass_count, backup_path, log=log)
+        win_enable(
+            http_port,
+            scope,
+            bypass_count,
+            backup_path,
+            log=log,
+            pac_url=pac_url,
+        )
         return
 
-    pac_url = f"http://127.0.0.1:{http_port}/proxy.pac"
+    pac_url = (pac_url or "").strip() or f"http://127.0.0.1:{http_port}/proxy.pac"
     # Backup previous GNOME mode if any
     if not backup_path.is_file():
         mode = "none"

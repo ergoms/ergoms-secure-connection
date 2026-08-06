@@ -51,6 +51,14 @@
   ],
   "tun": {
     "sing_box_path": "",
-    "mtu": 1500
+    "mtu": 1400
+  },
+  "transport": {
+    "type": "vless-reality",
+    "uuid": "",
+    "public_key": "",
+    "short_id": "",
+    "server_name": "www.cloudflare.com",
+    "port": 443
   }
 }

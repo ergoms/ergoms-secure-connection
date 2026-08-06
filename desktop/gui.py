@@ -42,7 +42,11 @@ WIN_H = 640
 
 # UI labels → stored values
 CHOICES: dict[str, list[tuple[str, str]]] = {
-    "MODE": [("Туннель", "socks"), ("VPS", "vps")],
+    "MODE": [
+        ("Туннель", "socks"),
+        ("Быстрый", "singbox"),
+        ("VPS", "vps"),
+    ],
     "SOCKS_SCOPE": [("Всё", "full"), ("GitHub + Cursor", "github")],
     "TUN": [("Выкл", "0"), ("Вкл", "1")],
     "TUN_ELEVATE": [("Нет", "0"), ("Да", "1")],
@@ -516,6 +520,11 @@ class App:
             "proxy_bypass": tk.StringVar(value=""),
             "proxy_bypass_via": tk.StringVar(value="direct"),
             "sing_box_path": tk.StringVar(value=""),
+            "tr_uuid": tk.StringVar(value=""),
+            "tr_public_key": tk.StringVar(value=""),
+            "tr_short_id": tk.StringVar(value=""),
+            "tr_server_name": tk.StringVar(value="www.cloudflare.com"),
+            "tr_port": tk.StringVar(value="443"),
         }
 
         sections: list[tuple[str, list[tuple[str, str, Any]]]] = [
@@ -537,6 +546,16 @@ class App:
                     ("Порт SSH", "ssh_port", None),
                     ("Ключ SSH", "ssh_identity", "file"),
                     ("Локальный порт SOCKS", "ssh_socks", None),
+                ],
+            ),
+            (
+                "Быстрый режим (VLESS Reality)",
+                [
+                    ("UUID", "tr_uuid", None),
+                    ("Public key", "tr_public_key", None),
+                    ("Short ID", "tr_short_id", None),
+                    ("Server name (SNI)", "tr_server_name", None),
+                    ("Порт transport", "tr_port", None),
                 ],
             ),
             (
@@ -692,6 +711,14 @@ class App:
             self.vars["proxy_bypass"].set(", ".join(str(x) for x in bypass))
             self.vars["proxy_bypass_via"].set(str(cfg.get("proxy_bypass_via") or "direct"))
             self.vars["sing_box_path"].set(str(tun.get("sing_box_path") or ""))
+            tr = cfg.get("transport") or {}
+            self.vars["tr_uuid"].set(str(tr.get("uuid") or ""))
+            self.vars["tr_public_key"].set(str(tr.get("public_key") or ""))
+            self.vars["tr_short_id"].set(str(tr.get("short_id") or ""))
+            self.vars["tr_server_name"].set(
+                str(tr.get("server_name") or "www.cloudflare.com")
+            )
+            self.vars["tr_port"].set(str(tr.get("port") or 443))
 
     def _save_settings(self) -> None:
         try:
@@ -725,6 +752,15 @@ class App:
             cfg["proxy_bypass_via"] = self.vars["proxy_bypass_via"].get().strip() or "direct"
             cfg.setdefault("tun", {})
             cfg["tun"]["sing_box_path"] = self.vars["sing_box_path"].get().strip()
+            cfg.setdefault("transport", {})
+            cfg["transport"]["type"] = "vless-reality"
+            cfg["transport"]["uuid"] = self.vars["tr_uuid"].get().strip()
+            cfg["transport"]["public_key"] = self.vars["tr_public_key"].get().strip()
+            cfg["transport"]["short_id"] = self.vars["tr_short_id"].get().strip()
+            cfg["transport"]["server_name"] = (
+                self.vars["tr_server_name"].get().strip() or "www.cloudflare.com"
+            )
+            cfg["transport"]["port"] = int(self.vars["tr_port"].get().strip() or "443")
             save_config(self.paths.config_path, cfg)
             self._enqueue_log("Настройки сохранены")
             messagebox.showinfo(
@@ -819,27 +855,41 @@ class App:
         self._run_bg(lambda: self.client.probe(host, port), waiting="Проверка…")
 
     def _mode_label(self, mode: str) -> str:
-        return {"socks": "Туннель", "vps": "VPS"}.get(mode, mode or "—")
+        return {
+            "socks": "Туннель",
+            "singbox": "Быстрый",
+            "vps": "VPS",
+        }.get(mode, mode or "—")
 
     def _scope_label(self, scope: str) -> str:
         return {"full": "Всё", "github": "GitHub"}.get(scope, scope or "—")
 
     def _apply_status_ui(self, st: dict[str, Any]) -> None:
         ssh = bool(st.get("ssh_running"))
+        singbox = bool(st.get("singbox_running"))
         tun = bool(st.get("tun_running"))
-        active = bool(st.get("active")) or ssh
+        active = bool(st.get("active")) or ssh or singbox
         self._active = active
         self._tun = tun
 
         mode = self._mode_label(str(st.get("mode") or ""))
         scope = self._scope_label(str(st.get("socks_scope") or ""))
         target = str(st.get("ssh_target") or "—")
-        sig = f"{ssh}|{tun}|{active}|{mode}|{scope}|{target}|{(st.get('state') or {}).get('mode')}"
+        sig = (
+            f"{ssh}|{singbox}|{tun}|{active}|{mode}|{scope}|{target}|"
+            f"{(st.get('state') or {}).get('mode')}"
+        )
         if sig == self._last_status_sig or self._busy:
             return
         self._last_status_sig = sig
 
-        if tun and ssh:
+        if singbox and tun:
+            title, sub, color = "Защищено", "VLESS и TUN активны", C_ACCENT
+            self._recolor_btn(self.btn_power, danger=True, text="Отключить")
+        elif singbox:
+            title, sub, color = "Подключено", "Быстрый режим (VLESS)", C_OK
+            self._recolor_btn(self.btn_power, danger=True, text="Отключить")
+        elif tun and ssh:
             title, sub, color = "Защищено", "Туннель и TUN активны", C_ACCENT
             self._recolor_btn(self.btn_power, danger=True, text="Отключить")
         elif tun:
@@ -912,7 +962,11 @@ class App:
         self._stop_pulse()
         try:
             st = self.client.status()
-            if st.get("ssh_running") or st.get("bridge_running"):
+            if (
+                st.get("ssh_running")
+                or st.get("bridge_running")
+                or st.get("singbox_running")
+            ):
                 self.client.disable()
         except Exception:  # noqa: BLE001
             try:
