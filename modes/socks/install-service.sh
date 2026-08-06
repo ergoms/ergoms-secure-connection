@@ -33,6 +33,6 @@ echo "Installed: $UNIT_DST"
 echo "Status:    systemctl --user status ops-content-socks"
 echo "Logs:      journalctl --user -u ops-content-socks -f"
 echo
-echo "Client proxy (full internet) — add to ~/.bashrc or use:"
+echo "Client proxy — add to ~/.bashrc or use:"
 echo "  source $ROOT/var/cli.env"
-echo "Or: ./ops-content.sh on   # writes env + gsettings when SOCKS_SCOPE=full"
+echo "Control: ./ops-content.sh on|off|status"

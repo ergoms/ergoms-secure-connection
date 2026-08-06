@@ -1,10 +1,9 @@
-"""Core Windows client: tunnel / relay / status / probe / test."""
+"""Core Windows client: tunnel / status / probe / test."""
 
 from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 import socket
 import sys
@@ -33,8 +32,6 @@ from desktop.config_io import (
 )
 from desktop.docker_env import clear_docker_env, docker_smoke_test, write_docker_env
 from desktop.git_proxy import (
-    disable_relay_git,
-    enable_relay_git,
     git_get,
     set_git_http_proxy,
     write_cli_env,
@@ -858,27 +855,6 @@ class OpsClient:
         save_config(self.paths.config_path, cfg)
         self.log(f"tun.sing_box_path = {path}")
 
-    def enable_relay(self) -> None:
-        self.reload_env()
-        cfg = self.config()
-        secret = os.environ.get("OPS_CONTENT_SECRET") or ""
-        base = enable_relay_git(cfg, secret, self.paths.state_path, log=self.log)
-        state = {
-            "mode": "relay",
-            "base": base,
-            "started": datetime.now(timezone.utc).isoformat(),
-        }
-        self.paths.state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
-
-    def disable_relay(self) -> None:
-        cfg = None
-        try:
-            cfg = self.config()
-        except FileNotFoundError:
-            pass
-        disable_relay_git(cfg, self.paths.cli_env, self.paths.cli_ps1, log=self.log)
-        self.paths.state_path.unlink(missing_ok=True)
-
     def _maybe_autostart_tun(self) -> None:
         self.reload_env()
         if not get_tun_enabled():
@@ -978,23 +954,7 @@ class OpsClient:
             if spawn_watchdog:
                 self.ensure_watchdog_daemon()
             return
-        if mode == "vps":
-            cfg = self.config()
-            base = (cfg.get("worker_base_url") or "").strip()
-            bad = re.search(
-                r"YOUR_|ghfast|netlify|deno\.dev|pages\.dev|workers\.dev",
-                base,
-                re.I,
-            )
-            if base and not bad:
-                self.enable_relay()
-            else:
-                self.start_tunnel()
-                self._maybe_autostart_tun()
-            if spawn_watchdog:
-                self.ensure_watchdog_daemon()
-            return
-        raise RuntimeError(f"Unknown MODE={mode} (use socks|vps|singbox)")
+        raise RuntimeError(f"Unknown MODE={mode} (use socks|singbox)")
 
     def disable(self) -> None:
         self.reload_env()
@@ -1012,13 +972,6 @@ class OpsClient:
         else:
             # stop_tunnel already stops TUN process; keep TUN= flag in .env
             self.stop_tunnel()
-        if mode == "vps":
-            self.disable_relay()
-        else:
-            try:
-                self.disable_relay()
-            except Exception:  # noqa: BLE001
-                pass
 
     def status(self, *, include_git: bool = True) -> dict[str, Any]:
         """Snapshot of tunnel state.
@@ -1042,7 +995,6 @@ class OpsClient:
             "pac_port": get_pac_listen_port(),
             "corporate_proxy": "",
             "ssh_target": "",
-            "worker_base_url": "",
             "proxy_bypass_n": 0,
             "state": None,
             "lines": [],
@@ -1156,7 +1108,6 @@ class OpsClient:
             info["corporate_proxy"] = resolve_corporate_proxy(cfg)
             ssh = cfg.get("ssh") or {}
             info["ssh_target"] = f"{ssh.get('user')}@{ssh.get('host')}:{ssh.get('port')}"
-            info["worker_base_url"] = str(cfg.get("worker_base_url") or "")
             info["proxy_bypass_n"] = len(cfg.get("proxy_bypass") or [])
             info["sing_box_path"] = get_sing_box_path(cfg)
             tr = cfg.get("transport") or {}
@@ -1170,8 +1121,6 @@ class OpsClient:
                     f"transport       = {info['transport_type'] or 'vless-reality'} "
                     f"uuid={uuid_show} sni={tr.get('server_name') or ''}"
                 )
-            if info["worker_base_url"]:
-                lines.append(f"worker_base_url = {info['worker_base_url']}")
             lines.append(f"proxy_bypass    = {info['proxy_bypass_n']} entries")
             if info["sing_box_path"]:
                 lines.append(f"sing_box_path   = {info['sing_box_path']}")
@@ -1186,7 +1135,6 @@ class OpsClient:
             or info["bridge_running"]
             or info.get("singbox_running")
             or info.get("tun_running")
-            or (info.get("state") or {}).get("mode") == "relay"
         )
         return info
 

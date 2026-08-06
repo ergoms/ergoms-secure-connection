@@ -1,4 +1,4 @@
-"""Unified entry: same commands on Linux/Windows, CLI or GUI/EXE."""
+"""Unified entry: same commands on Linux/Windows, CLI or GUI."""
 
 from __future__ import annotations
 
@@ -20,8 +20,6 @@ COMMANDS = (
     "status",
     "probe",
     "test",
-    "relay-on",
-    "relay-off",
     "tun-on",
     "tun-off",
     "download-sing-box",
@@ -70,7 +68,6 @@ def _show_help() -> int:
   status               состояние
   probe HOST [PORT]    CONNECT через Squid
   test                 проверка обхода
-  relay-on / relay-off MODE=vps git relay
   tun-on / tun-off     TUN (socks: поверх SOCKS; singbox: в том же процессе)
   download-sing-box    скачать sing-box в tools/
   docker-env           var/docker.env + compose (прокси для контейнеров)
@@ -81,15 +78,12 @@ def _show_help() -> int:
 
 Режимы (.env MODE=):
   socks     SSH -D через Squid (sshd на VPS :443)
-  vps       HTTPS git-relay
   singbox   VLESS+Reality через Squid (sing-box на VPS :443)
 
 Запуск:
   python -m desktop <cmd> …
   ./ops-content.sh <cmd> …          # Linux
   .\\ops-content.ps1 <cmd> …        # Windows
-  OpsContent.exe <cmd> …            # Windows EXE
-  OpsContent.exe                    # GUI на Windows
 """
     )
     return 0
@@ -126,10 +120,6 @@ def _run_cli(cmd: str, rest: list[str]) -> int:
             return client.probe(host, port)
         elif cmd == "test":
             client.test_bypass()
-        elif cmd == "relay-on":
-            client.enable_relay()
-        elif cmd == "relay-off":
-            client.disable_relay()
         elif cmd == "tun-on":
             client.enable_tun()
         elif cmd == "tun-off":
@@ -185,10 +175,8 @@ def main(argv: list[str] | None = None) -> int:
     _ensure_utf8_stdio()
     argv = list(sys.argv[1:] if argv is None else argv)
 
-    # No args: Windows EXE → GUI; from source/scripts → help (explicit: gui)
+    # No args: help (explicit: gui)
     if not argv:
-        if getattr(sys, "frozen", False):
-            return _run_gui()
         if os.environ.get("OPS_CONTENT_GUI", "").strip() in ("1", "true", "yes"):
             return _run_gui()
         return _show_help()

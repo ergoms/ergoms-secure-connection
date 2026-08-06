@@ -1,4 +1,4 @@
-"""git config + CLI env helpers for the local HTTP bridge / VPS relay."""
+"""git config + CLI env helpers for the local HTTP bridge."""
 
 from __future__ import annotations
 
@@ -97,66 +97,17 @@ def set_git_http_proxy(proxy: str, log: LogFn = _noop) -> None:
 def clear_git_proxy(cli_env: Path, cli_ps1: Path, log: LogFn = _noop) -> None:
     _git("config", "--global", "--unset", "http.proxy")
     _git("config", "--global", "--unset", "https.proxy")
-    clear_cli_env_proxy(cli_env, cli_ps1)
-    log("git proxy cleared")
-
-
-def enable_relay_git(cfg: dict, secret: str, state_path: Path, log: LogFn = _noop) -> str:
-    base = (cfg.get("worker_base_url") or "").strip().rstrip("/")
-    if not base:
-        raise RuntimeError(
-            "Set worker_base_url in config.json to your VPS HTTPS relay, or use MODE=socks."
-        )
-    if re.search(
-        r"ghfast\.top|ghproxy|kkgithub|netlify\.app|deno\.dev|pages\.dev|workers\.dev",
-        base,
-        re.I,
-    ):
-        raise RuntimeError("worker_base_url must be YOUR VPS, not a public SaaS mirror.")
-
-    clear_git_proxy(
-        state_path.parent / "cli.env",
-        state_path.parent / "cli.ps1",
-        log=_noop,
-    )
     clear_instead_of(log)
-
-    hosts = [
-        ("https://github.com/", f"{base}/https/github.com/"),
-        ("https://api.github.com/", f"{base}/https/api.github.com/"),
-        ("https://codeload.github.com/", f"{base}/https/codeload.github.com/"),
-        ("https://raw.githubusercontent.com/", f"{base}/https/raw.githubusercontent.com/"),
-        ("https://objects.githubusercontent.com/", f"{base}/https/objects.githubusercontent.com/"),
-    ]
-    for frm, to in hosts:
-        _git("config", "--global", f"url.{to}.insteadOf", frm)
-
-    corp = cfg.get("corporate_proxy") or "10.16.0.8:3128"
-    _git("config", "--global", "http.proxy", f"http://{corp}")
-    _git("config", "--global", "https.proxy", f"http://{corp}")
     _git("config", "--global", "--unset-all", "http.extraHeader")
-    _git("config", "--global", "http.extraHeader", "Accept-Encoding: identity")
-    if secret:
-        _git("config", "--global", f"http.{base}/.extraHeader", f"X-Ops-Content-Token: {secret}")
-    else:
-        log("OPS_CONTENT_SECRET empty — relay auth disabled on client")
-    _git("config", "--global", "http.version", "HTTP/1.1")
-    _git("config", "--global", "protocol.version", "1")
-    _git("config", "--global", "http.postBuffer", "524288000")
-    log(f"Relay ON -> {base}")
-    return base
-
-
-def disable_relay_git(cfg: dict | None, cli_env: Path, cli_ps1: Path, log: LogFn = _noop) -> None:
-    base = ""
-    if cfg and cfg.get("worker_base_url"):
-        base = str(cfg["worker_base_url"]).strip().rstrip("/")
-    clear_instead_of(log)
-    clear_git_proxy(cli_env, cli_ps1, log=_noop)
-    _git("config", "--global", "--unset-all", "http.extraHeader")
-    if base:
-        _git("config", "--global", "--unset-all", f"http.{base}/.extraHeader")
+    # Leftovers from old HTTPS git-relay (url.*.insteadOf / http.<url>.extraHeader)
+    r = _git("config", "--global", "--get-regexp", r"^http\..*\.extraheader$")
+    if r.returncode == 0 and r.stdout:
+        for line in r.stdout.splitlines():
+            key = line.split(None, 1)[0]
+            if key:
+                _git("config", "--global", "--unset-all", key)
     _git("config", "--global", "--unset", "http.version")
     _git("config", "--global", "--unset", "protocol.version")
     _git("config", "--global", "--unset", "http.postBuffer")
-    log("Relay OFF")
+    clear_cli_env_proxy(cli_env, cli_ps1)
+    log("git proxy cleared")

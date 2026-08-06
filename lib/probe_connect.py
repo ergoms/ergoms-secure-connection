@@ -12,8 +12,11 @@ from pathlib import Path
 
 
 def load_proxy(default: str = "10.16.0.8:3128") -> tuple[str, int]:
-    cfg_path = Path(__file__).resolve().parent / "config.json"
-    value = os.environ.get("OPS_CONTENT_HTTP_PROXY", "")
+    root = Path(__file__).resolve().parent.parent
+    cfg_path = root / "config.json"
+    value = os.environ.get("OPS_CONTENT_HTTP_PROXY", "") or os.environ.get(
+        "CORPORATE_PROXY", ""
+    )
     if not value and cfg_path.exists():
         cfg = json.loads(cfg_path.read_text(encoding="utf-8-sig"))
         value = cfg.get("corporate_proxy") or default
@@ -52,7 +55,7 @@ def main() -> int:
     print(status)
     if "200" in status:
         print("OK: Squid allows CONNECT to this host:port")
-        print("You can use SSH tunnel (start) or HTTPS relay on this host.")
+        print("You can use SSH tunnel (Linux: ./ops-content.sh on) or an external VLESS client.")
         return 0
     print("FAIL: Squid denied/failed CONNECT")
     if args.port == 22:

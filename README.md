@@ -1,171 +1,88 @@
 # ops-content
 
-Набор сценариев для выхода в интернет и к GitHub из сети, где прямой доступ закрыт корпоративным посредником Squid (`10.16.0.8:3128`). Обход строится только через **свой виртуальный сервер**: чужие публичные зеркала не используются.
+Сценарии для выхода в интернет и к GitHub из сети, где прямой доступ закрыт корпоративным посредником Squid (`10.16.0.8:3128`). Обход строится только через **свой виртуальный сервер**.
 
-В этой сети обращения к `github.com` обычно отклоняются с кодом 403. Прямого выхода во внешнюю сеть нет. Squid разрешает защищённое соединение (CONNECT) на порт **443**, но блокирует обычный SSH-порт **22**. Поэтому на сервере поднимают SSH-службу именно на 443-м порту, а с рабочего компьютера к ней подключаются через корпоративный посредник.
+В этой сети обращения к `github.com` обычно отклоняются с кодом 403. Squid разрешает CONNECT на порт **443**, но блокирует SSH-порт **22**. Поэтому на сервере поднимают службу на 443-м порту.
 
----
+Цепочка (SOCKS):
 
-## Как это устроено
+**программа → локальный HTTP-мост → SSH SOCKS → Squid → ваш сервер :443 → интернет**
 
-На компьютере запускается локальный туннель: трафик идёт через Squid к вашему серверу, а уже с сервера — во внешний интернет. Для программ, которые умеют только обычный HTTP-посредник (в том числе `git` и его помощник учётных данных), рядом поднимается небольшой мост: локальный HTTP-порт пересылает запросы в туннель.
+Цепочка (singbox):
 
-Браузер можно направить через файл автонастройки (PAC): часть адресов пойдёт через туннель, часть — мимо него или обратно через корпоративный Squid — по правилам из `config.json`.
-
-Цепочка вкратце:
-
-**программа → локальный мост → туннель → Squid → ваш сервер (порт 443) → интернет**
+**программа → локальный HTTP/PAC → sing-box (VLESS+Reality) → Squid → ваш сервер :443 → интернет**
 
 ---
 
-## Подготовка сервера (один раз)
+## Подготовка сервера
 
-На виртуальном сервере, лучше из консоли хостинг-провайдера (пока туннель ещё не работает):
+### SSH на :443 (`MODE=socks`)
 
 ```bash
 bash modes/vps/bootstrap_sshd_443.sh
 ```
 
-Скрипт настраивает SSH-службу на порту 443. Без этого шаг дальше не пройти: корпоративный посредник не пустит соединение на порт 22.
+### sing-box VLESS+Reality на :443 (`MODE=singbox`)
 
----
-
-## Десктопное приложение (Windows EXE)
-
-Полный клиент с окном и иконкой в трее — без вызова `ops-content.ps1`. Нужны системные `ssh`, `git`, `curl` (как и для скрипта).
-
-### Установщик (рекомендуется)
-
-```powershell
-cd c:\projects\ops-content
-.\build-installer.ps1
-```
-
-Нужен [Inno Setup](https://jrsoftware.org/isinfo.php) 6+ (скрипт при отсутствии поставит через winget). Результат: `dist\OpsContent-Setup-1.0.0.exe`.
-
-Установка кладёт программу в `Program Files\ops-content`, ярлыки в меню Пуск; рабочие файлы (`config.json`, `.env`, ключи, логи, `tools\`) — в `%LOCALAPPDATA%\ops-content`.
-
-### Portable EXE
-
-```powershell
-.\build-desktop.ps1
-```
-
-Результат: `dist\OpsContent.exe`. Рядом с exe (или в корне репозитория при запуске из исходников) должны лежать `config.json`, `.env`, ключ SSH. При первом старте GUI создаст файлы из образцов, если их ещё нет.
-
-В трее: Включить / Выключить / Открыть / Выход. Закрытие окна сворачивает в трей; полный выход — через меню трея.
-
-Служебные режимы того же exe:
-
-```text
-OpsContent.exe connect HOST PORT
-OpsContent.exe on|off|status|probe|tun-on|tun-off|download-sing-box …
-```
-
-Разработка без сборки: `python -m desktop` (нужны `pip install -r requirements-desktop.txt`).
-
-### TUN (как VPN)
-
-Управляется из `.env` и `config.json` (GUI → Настройки тоже пишет туда же).
-
-| Файл | Ключи |
-|------|--------|
-| `.env` | `TUN=0\|1` — автоподъём TUN после `on`; `TUN_ELEVATE=0\|1` — UAC; кнопки TUN вкл/выкл пишут `TUN` |
-| `config.json` | `tun.sing_box_path` — путь к `sing-box.exe` (пусто = `tools/sing-box.exe`) |
-
-- **MODE=socks:** TUN = отдельный sing-box поверх локального SSH SOCKS `:1080`.
-- **MODE=singbox:** TUN = inbound в том же процессе, что и VLESS (отдельный «TUN поверх SOCKS» не нужен).
-
-1. **Скачать sing-box** или положить exe в `tools\` / указать `tun.sing_box_path`.
-2. Либо **TUN вкл** в GUI, либо `TUN=1` в `.env` и обычное **Включить** — TUN поднимется сам (UAC).
-3. **TUN выкл** → без TUN (+ `TUN=0` в `.env`).
-
-Частные сети, Squid и VPS в TUN не заворачиваются, чтобы не зациклить туннель.
-
-**TUN обязателен для DNS в Docker Desktop:** sing-box перехватывает UDP/53 от VM и отвечает системным резолвером хоста (до 8.8.8.8 из VM часто таймаут; SSH SOCKS не умеет UDP). При `TUN=1` клиент поднимает TUN после `on`; если sing-box упал — watchdog поднимает снова. Без живого TUN `getent pypi.org` в контейнере падает.
-
-Остальной трафик Docker/WSL идёт direct — для pip/npm без рабочего DNS используйте HTTP-мост на хосте (ниже).
-
-### Docker (контейнеры без рабочего DNS)
-
-Контейнер не видит WinINET/PAC. Без TUN не резолвит внешние имена (UDP/53 из VM). При `on` клиент пишет:
-
-| Файл | Назначение |
-|------|------------|
-| `var/docker.env` | `HTTP_PROXY` → IP хоста Docker Desktop (`192.168.65.254:1088`), без DNS |
-| `var/docker-compose.proxy.yml` | якорь `*ops-content-proxy` (env + `extra_hosts`) |
-| `var/docker.hosts` | IP, резолвнутые на хосте (`DOCKER_DNS_FIX`) |
-| `var/docker-run.ps1` | обёртка `docker run --env-file …` |
-
-В контейнере DNS обычно мёртв (в т.ч. `host.docker.internal`), поэтому в `docker.env` пишется **IP** host-gateway, а не имя.
-
-```powershell
-.\ops-content.ps1 on                   # SOCKS + TUN=1 → DNS в контейнерах
-.\ops-content.ps1 docker-test          # getent DNS + curl через мост
-# Если TUN жив — dns-fix / DOCKER_DNS_FIX в другом стеке не нужны:
-docker run --rm --network bridge alpine:3.20 getent hosts pypi.org
-# Запасной путь без DNS (прокси по IP хоста):
-docker run --rm --env-file .\var\docker.env curlimages/curl:8.5.0 -I https://pypi.org
-.\var\docker-run.ps1 -- --rm curlimages/curl:8.5.0 -I https://pypi.org
-```
-
-Compose: подключите якорь к сервису (`<<: *ops-content-proxy`) и добавьте `-f var/docker-compose.proxy.yml`.
-
-Опционально: `docker_dns_hosts` в `config.json`; `OPS_CONTENT_DOCKER_HOST_IP` — ручной IP хоста.
-
----
-
-## Быстрый старт на Windows
-
-```powershell
-cd c:\projects\ops-content
-.\ops-content.ps1 init
-```
-
-Дальше вручную:
-
-1. В корневом `.env` оставьте режим `MODE=socks` и область `SOCKS_SCOPE=full` (весь обычный веб-трафик через сервер, кроме исключений).
-2. В `config.json` укажите адрес сервера, пользователя, порт `443` и путь к закрытому ключу (`ssh.host`, `ssh.user`, `ssh.port`, `ssh.identity_file`).
-
-```powershell
-.\ops-content.ps1 probe АДРЕС_СЕРВЕРА 443
-.\ops-content.ps1 on
-git ls-remote https://github.com/git/git HEAD
-.\ops-content.ps1 off
-```
-
-Команда `probe` проверяет, что CONNECT через Squid до вашего сервера проходит. `on` поднимает туннель и настраивает `git` и систему; `off` всё снимает.
-
----
-
-## Быстрый старт на Linux
+На одном IP нельзя одновременно держать `sshd` и sing-box на 443.
 
 ```bash
-cd ~/ops-content
-chmod +x ops-content.sh deploy.sh modes/vps/*.sh modes/socks/*.sh
-./ops-content.sh init
-# правки в .env и config.json — как выше
-./ops-content.sh probe АДРЕС_СЕРВЕРА 443
-./ops-content.sh on
+bash modes/vps/disable_sshd_443.sh
+bash modes/vps/bootstrap_singbox_443.sh
 ```
 
-Чтобы туннель поднимался сам после входа в систему (служба пользователя systemd):
+Скрипт напечатает блок `transport` — скопируйте его в `config.json` на клиенте.
+
+Откат на SSH: `systemctl disable --now sing-box`, затем снова `bootstrap_sshd_443.sh`.
+
+Подсказки по режиму: `./deploy.sh` или `.\deploy.ps1` (читают `MODE` из `.env`).
+
+---
+
+## Клиент (CLI)
+
+Один Python-пакет `desktop/` на Windows и Linux:
+
+```text
+python -m desktop <команда>
+./ops-content.sh <команда>      # Linux
+.\ops-content.ps1 <команда>     # Windows
+```
+
+| Платформа | Возможности |
+|-----------|-------------|
+| Linux / Windows | `on` / `off` / `status`, TUN, Docker helpers, watchdog, `gui` |
+| Linux | дополнительно systemd: `install-service` / `uninstall-service` |
+
+### Быстрый старт
+
+```bash
+# Linux
+chmod +x ops-content.sh deploy.sh modes/vps/*.sh modes/socks/*.sh
+./ops-content.sh init
+# правки в .env (MODE=socks|singbox, TUN=…) и config.json
+./ops-content.sh probe АДРЕС_СЕРВЕРА 443
+./ops-content.sh on
+source ./var/cli.env
+```
+
+```powershell
+# Windows
+.\ops-content.ps1 init
+# правки в .env и config.json (для singbox — секция transport + TUN=1)
+.\ops-content.ps1 probe АДРЕС_СЕРВЕРА 443
+.\ops-content.ps1 on
+# или: python -m desktop on
+```
+
+Служба пользователя (Linux, MODE=socks):
 
 ```bash
 ./ops-content.sh install-service
-source ./var/cli.env
 systemctl --user status ops-content-socks
 ```
 
 Отключение: `./ops-content.sh off` или `./ops-content.sh uninstall-service`.
-
-Для программ в терминале после включения удобно подгрузить переменные окружения:
-
-```bash
-source ./var/cli.env
-```
-
-Сам `git` скрипт настраивает отдельно.
 
 ---
 
@@ -173,214 +90,96 @@ source ./var/cli.env
 
 | Путь | Назначение |
 |------|------------|
-| `config.json` | Рабочие параметры: корпоративный посредник, SSH, исключения из туннеля |
-| `config/` | Только образцы (`config.example.json`, `.env.example`) |
-| `.env` | Режим работы и область туннеля (в корне проекта) |
-| `creds/` | Ключи SSH known_hosts и прочие секреты |
-| `logs/` | Журналы отладки |
-| `var/` | Служебное состояние: номера процессов, резервные копии настроек посредника, `cli.env` |
-
-Файлы `.env`, `config.json`, содержимое `creds/`, `logs/` и `var/` в общее хранилище не коммитят.
+| `config.json` | Корп. прокси, SSH, исключения, `transport`, `tun` |
+| `config/` | Образцы |
+| `.env` | `MODE`, `SOCKS_SCOPE`, `TUN`, … |
+| `creds/` | Ключи SSH, known_hosts |
+| `logs/`, `var/` | Журналы и runtime |
 
 ### Пример `.env`
 
 ```env
-# socks | vps | singbox
-MODE=socks
-
-# full   — почти весь HTTP/HTTPS через сервер (кроме proxy_bypass)
-# github — только узлы, связанные с GitHub; остальное — как в сети обычно
+# socks | singbox
+MODE=singbox
 SOCKS_SCOPE=full
-
-# Порт локального HTTP (мост в socks; inbound sing-box в MODE=singbox)
+TUN=1
+TUN_ELEVATE=1
 # HTTP_BRIDGE_PORT=1088
-# PAC_LISTEN_PORT=1089
 ```
-
-Клиент и выкладка на сервер:
-
-| Система | Клиент (один и тот же Python-бэкенд) | Выкладка |
-|---------|--------------------------------------|----------|
-| Windows | `.\ops-content.ps1 <cmd>` или `OpsContent.exe <cmd>` / GUI | `.\deploy.ps1` |
-| Linux | `./ops-content.sh <cmd>` или `python -m desktop <cmd>` | `./deploy.sh` |
-| Любая | `python -m desktop on\|off\|status\|tun-on\|…` | |
-
-Команды `on` / `off` / `status` / `probe` / `tun-on` / `tun-off` и т.д. одинаковы везде; `.env` и `config.json` общие.
 
 ---
 
-## Режимы работы
+## TUN и Docker
 
-### `socks` (основной)
-
-Поднимается SSH-туннель к серверу на порту 443 через корпоративный Squid. Локально появляются SOCKS (обычно порт 1080) и HTTP-мост (обычно 1088). Браузер получает адрес файла автонастройки; `git` указывает на мост.
-
-- `SOCKS_SCOPE=full` — почти весь веб через ваш сервер.
-- `SOCKS_SCOPE=github` — через туннель только GitHub и родственные узлы; остальное идёт обычным путём сети.
-
-### `singbox` (быстрый, VLESS+Reality)
-
-Отдельный режим без SSH: один процесс **sing-box** на клиенте поднимает локальный SOCKS/HTTP и опционально TUN, а наружу ходит **VLESS+Reality** через Squid CONNECT на ваш VPS `:443`.
-
-На одном IP нельзя одновременно держать `sshd` на 443 и sing-box на 443 — это выбор деплоя на VPS. Режимы `socks` / `vps` в коде не ломаются: переключение только через `.env` (`MODE=singbox`).
-
-#### Что сделать на VPS
-
-С консоли хостинга (VNC / serial / SSH **не** через офисный Squid, пока на 443 ещё старый sshd):
-
-```bash
-# 1) Снять sshd с :443 (оставить :22 для консоли)
-bash modes/vps/disable_sshd_443.sh
-
-# 2) Поставить sing-box VLESS+Reality на :443
-bash modes/vps/bootstrap_singbox_443.sh
-```
-
-Скрипт установит sing-box, сгенерирует ключи, включит systemd и **напечатает блок** `transport` для клиента. Проверка на VPS:
-
-```bash
-systemctl status sing-box --no-pager
-ss -lntp | grep ':443'
-journalctl -u sing-box -n 50
-```
-
-#### На рабочей машине (офис)
-
-1. В `config.json` вставьте `transport` из вывода bootstrap (и тот же `ssh.host` = IP VPS).
-2. В `.env`: `MODE=singbox` и при необходимости `TUN=1`.
-3. `ops-content probe <IP> 443` → `ops-content on`.
-
-Локально: SOCKS `:1080`, HTTP `:1088` (sing-box), PAC на `:1089` (только файл автонастройки; PROXY в PAC указывает на `:1088`).
-
-Откат на SSH-туннель: на VPS `systemctl disable --now sing-box`, снова `bash modes/vps/bootstrap_sshd_443.sh`; на клиенте `MODE=socks`.
-
-### `vps`
-
-Если в `config.json` задан `worker_base_url` с адресом **вашего** HTTPS-посредника для git, команда `on` включает подмену адресов GitHub через этот узел (`relay-on`). Если адрес пуст или не подходит — используется тот же туннель, что и в режиме `socks`.
-
-Адрес посредника не должен указывать на чужие публичные зеркала.
+- `TUN=1` в `.env` — после `on` поднимается системный TUN (sing-box); нужен для DNS из Docker Desktop.
+- `python -m desktop tun-on` / `tun-off` — вручную; пишет `TUN=` в `.env`.
+- `python -m desktop download-sing-box` — скачать бинарник в `tools/`.
+- `python -m desktop docker-env` — `var/docker.env` + compose-сниппет.
+- `python -m desktop docker-test` — curl из контейнера через HTTP-мост.
 
 ---
 
 ## Исключения из туннеля
 
-В `config.json`:
-
 ```json
-"proxy_bypass": ["*.tu-bryansk.ru", "ergoms.tu-bryansk.ru", "*.local"],
+"proxy_bypass": ["*.tu-bryansk.ru", "*.local"],
 "proxy_bypass_via": "direct"
 ```
 
-Список `proxy_bypass` — узлы, которые **не** гоняют через туннель (например, внутренние сайты вуза).  
-`proxy_bypass_via`:
-
-- `direct` — напрямую, минуя и туннель, и корпоративный посредник;
-- `corporate` — через корпоративный Squid, но не через ваш сервер.
-
-Без таких исключений запросы к внутренним HTTP-сайтам могли бы попасть в туннель или ошибочно получить файл автонастройки вместо настоящей страницы.
+- `direct` — мимо туннеля и Squid;
+- `corporate` — через корпоративный Squid, не через ваш сервер.
 
 ---
 
-## Команды клиента
-
-Одинаково на Windows и Linux (и через EXE):
+## Команды
 
 ```text
 python -m desktop <команда>
-./ops-content.sh <команда>          # Linux-обёртка
-.\ops-content.ps1 <команда>         # Windows-обёртка
-OpsContent.exe <команда>            # Windows EXE
+./ops-content.sh <команда>          # Linux
+.\ops-content.ps1 <команда>         # Windows
 ```
 
 | Команда | Смысл |
 |---------|--------|
-| `init` | Создать рабочие файлы из образцов |
-| `on` / `off` | Включить или выключить режим из `MODE` (+ `TUN=1` → TUN) |
-| `start` / `stop` | Только SSH-туннель |
-| `probe ХОСТ [ПОРТ]` | Проверить CONNECT через Squid |
-| `status` | Текущее состояние |
-| `test` | Простая проверка обхода |
-| `relay-on` / `relay-off` | Только HTTPS-посредник для git (`MODE=vps`) |
-| `tun-on` / `tun-off` | TUN поверх SOCKS (sing-box; Windows UAC / Linux sudo) |
+| `init` | Создать `.env` / `config.json` из образцов |
+| `on` / `off` | Включить / выключить по `MODE` (+ TUN если `TUN=1`) |
+| `start` / `stop` | Только SSH-туннель (`MODE=socks`) |
+| `status` | Состояние |
+| `probe ХОСТ [ПОРТ]` | CONNECT через Squid |
+| `test` | Проверка обхода |
+| `tun-on` / `tun-off` | TUN поверх SOCKS / в sing-box |
 | `download-sing-box` | Скачать sing-box в `tools/` |
-| `docker-env` | Обновить `var/docker.env` / compose / `extra_hosts` |
-| `docker-test` | Проверка HTTPS из контейнера через мост |
-| `gui` | Окно (нужен дисплей) |
-| `install-service` / `uninstall-service` | Служба пользователя на Linux (только `.sh`) |
-| `deploy` | Выкладка посредника на сервер |
-| `help` | Краткая справка |
+| `docker-env` / `docker-test` | Прокси для контейнеров |
+| `watch` | Следить за SOCKS и переподключать |
+| `gui` | Окно настроек |
+| `install-service` / `uninstall-service` | systemd --user (Linux) |
+| `deploy` | Подсказки по подготовке VPS |
+| `help` | Справка |
 
 ---
 
-## Свой HTTPS-посредник для git на сервере
-
-Если нужен не полный туннель, а только проксирование обращений git к GitHub через HTTPS на вашем домене, см. `modes/vps/github_proxy.py` и образец `modes/vps/Caddyfile.example`.
-
-На сервере (за TLS-терминатором, только loopback):
-
-```bash
-export OPS_CONTENT_SECRET="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
-python3 modes/vps/github_proxy.py --port 8080
-```
-
-На рабочем компьютере в `config.json` и корневом `.env`:
-
-```json
-"worker_base_url": "https://git-proxy.ВАШ_ДОМЕН"
-```
-
-```env
-MODE=vps
-OPS_CONTENT_SECRET=тот_же_секрет_что_на_сервере
-```
-
-Затем `on` или `relay-on`. Клиент подставит заголовок доступа только для вашего узла.
-
-Учтите: SSH-служба на порту 443 и веб-сервер с TLS на том же адресе и порту одновременно не уживутся — нужен второй адрес, мультиплексор или выбор одного из режимов.
-
----
-
-## Защита (что ужесточено)
-
-- Локальный туннель и HTTP-мост слушают только `127.0.0.1`; мост отклоняет чужие адреса и запросы к частным сетям, link-local и типовым metadata-узлам (чтобы через сервер нельзя было бить во внутренние адреса).
-- Ключи узла SSH сохраняются в `creds/ssh_known_hosts` (проверка после первого успешного подключения).
-- Оболочка CONNECT через Squid принимает только адрес и порт из `config.json`, а не произвольные цели.
-- HTTPS-посредник для git: белый список узлов GitHub, только методы GET/HEAD/POST, без ухода по редиректам на чужие хосты, общий секрет `OPS_CONTENT_SECRET`.
-- Подготовка sshd на сервере отключает вход по паролю, если у root уже есть ключ в `authorized_keys`.
-- Каталог `creds/` на Linux старается держать с правами только для владельца.
-
-Перезапустите туннель после обновления (`off`, затем `on`), чтобы подтянуть новый мост.
-
----
-
-## Структура каталога
+## Структура
 
 ```
 ops-content/
-├── .env                  режим работы (локально)
-├── config.json           рабочие параметры (локально)
-├── ops-content.ps1/.sh   клиент (CLI)
-├── build-desktop.ps1     сборка Windows EXE
-├── desktop/              GUI-клиент (Python → OpsContent.exe)
-├── deploy.ps1/.sh        выкладка на сервер
-├── config/               образцы настроек
-├── creds/                ключи и known_hosts (локально)
-├── logs/                 журналы
-├── var/                  состояние во время работы
-├── lib/                  вспомогательные программы на Python и оболочке
+├── .env / config.json    локальные настройки
+├── ops-content.ps1/.sh   обёртки CLI
+├── desktop/              Python-клиент (python -m desktop)
+├── deploy.ps1/.sh        подсказки по MODE
+├── config/               образцы
+├── creds/                ключи
+├── lib/                  connect_proxy, http_via_socks, probe
 └── modes/
-    ├── socks/            служба systemd и запуск туннеля
-    └── vps/              sshd:443, sing-box Reality:443, git-proxy, Caddy
+    ├── socks/            systemd + run-tunnel.sh
+    └── vps/              bootstrap sshd / sing-box на :443
 ```
 
-Нужны: оболочка (`bash` или PowerShell), Python 3, `git`, `curl`, клиент SSH. На Linux для настройки среды рабочего стола GNOME может пригодиться `gsettings`.
+Нужны: `bash` или PowerShell, Python 3, `git`, `curl`, клиент SSH; для `MODE=singbox` / TUN — sing-box.
 
 ---
 
 ## На что обратить внимание
 
-- Удалённые репозитории лучше указывать по HTTPS (`https://github.com/...`), а не по git+ssh: корпоративная сеть режет порт 22.
-- Для закрытых репозиториев нужен личный токен доступа GitHub: [настройки токенов](https://github.com/settings/tokens).
-- Не публикуйте `.env`, `config.json`, каталоги `creds/`, `logs/`, `var/`.
-- Для режима `vps` обязательно задайте длинный `OPS_CONTENT_SECRET` и на сервере, и на клиенте; без него посредник доступен любому, кто знает адрес.
-- После `on` на Linux переменные для терминала подгружаются из `var/cli.env`; глобальные настройки `git` выставляет сам сценарий.
+- Репозитории лучше по HTTPS (`https://github.com/...`), не git+ssh (порт 22 режется).
+- Для закрытых репозиториев — [токен GitHub](https://github.com/settings/tokens).
+- Не публикуйте `.env`, `config.json`, `creds/`, `logs/`, `var/`.
