@@ -50,11 +50,19 @@ fi
 iptables -C INPUT -p tcp --dport 443 -j ACCEPT 2>/dev/null \
   || iptables -I INPUT -p tcp --dport 443 -j ACCEPT || true
 
-if systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null; then
-  echo "sshd listening on 22 and 443"
+# Socket-activated ssh (Ubuntu): regenerate ListenStream from Port lines.
+if systemctl daemon-reload 2>/dev/null; then
+  systemctl restart ssh.socket ssh.service 2>/dev/null \
+    || systemctl restart sshd.socket sshd.service 2>/dev/null \
+    || systemctl restart ssh.service 2>/dev/null \
+    || systemctl restart sshd.service 2>/dev/null \
+    || service ssh restart 2>/dev/null \
+    || service sshd restart
 else
-  service ssh restart 2>/dev/null || service sshd restart
+  systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null \
+    || service ssh restart 2>/dev/null || service sshd restart
 fi
+echo "sshd listening on 22 and 443"
 
 ss -lntp | grep -E ':443|:22' || netstat -lntp 2>/dev/null | grep -E ':443|:22' || true
 echo

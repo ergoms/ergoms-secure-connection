@@ -33,9 +33,19 @@ esac
 echo "==> Freeing :443 from sshd (if ops-content drop-in present)"
 if [[ -x "$ROOT/modes/vps/disable_sshd_443.sh" ]]; then
   bash "$ROOT/modes/vps/disable_sshd_443.sh" || true
-elif [[ -f /etc/ssh/sshd_config.d/99-ops-content-443.conf ]]; then
-  rm -f /etc/ssh/sshd_config.d/99-ops-content-443.conf
-  systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null || true
+else
+  for dropin in \
+    /etc/ssh/sshd_config.d/99-ops-content-443.conf \
+    /etc/ssh/sshd_config.d/99.ops-content-443.conf; do
+    if [[ -f "$dropin" ]]; then
+      rm -f "$dropin"
+    fi
+  done
+  systemctl daemon-reload 2>/dev/null || true
+  systemctl restart ssh.socket ssh.service 2>/dev/null \
+    || systemctl restart sshd.socket sshd.service 2>/dev/null \
+    || systemctl restart ssh.service 2>/dev/null \
+    || systemctl restart sshd.service 2>/dev/null || true
 fi
 
 if ss -lntp 2>/dev/null | grep -qE ':443\b' || netstat -lntp 2>/dev/null | grep -qE ':443\b'; then
