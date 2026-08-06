@@ -15,7 +15,6 @@ SCOPE="$(printf '%s' "${SOCKS_SCOPE:-full}" | tr '[:upper:]' '[:lower:]')"
 HOST="$(config_get ssh.host)"
 USER_NAME="$(config_get ssh.user)"
 PORT="$(config_get ssh.port)"
-IDENT="$(config_get ssh.identity_file)"
 SOCKS="$(config_get ssh.local_socks_port)"
 SOCKS="${SOCKS:-1080}"
 PORT="${PORT:-443}"
@@ -28,6 +27,25 @@ BRIDGE_PID=""
 
 export OPS_CONTENT_HTTP_PROXY="$CORP"
 PY="$(find_python)"
+
+# Auto-pick private key from creds/ (no identity_file in config)
+IDENT=""
+for cand in server-vps id_ed25519 id_rsa id_ecdsa id_dsa; do
+  if [[ -f "$CREDS_DIR/$cand" ]]; then
+    IDENT="$CREDS_DIR/$cand"
+    break
+  fi
+done
+if [[ -z "$IDENT" ]]; then
+  while IFS= read -r -d '' f; do
+    base="$(basename "$f")"
+    case "$base" in
+      .gitkeep|ssh_known_hosts|ssh_known_hosts.old|*.pub|*.old) continue ;;
+    esac
+    IDENT="$f"
+    break
+  done < <(find "$CREDS_DIR" -maxdepth 1 -type f -print0 2>/dev/null | sort -z)
+fi
 
 cleanup() {
   if [[ -n "${BRIDGE_PID:-}" ]] && kill -0 "$BRIDGE_PID" 2>/dev/null; then

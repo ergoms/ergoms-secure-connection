@@ -57,28 +57,26 @@ def _run_bridge(argv: list[str]) -> int:
 
 def _show_help() -> int:
     print(
-        """ops-content — единый клиент (Windows / Linux)
+        """ops-content — клиент VLESS+Reality (Windows / Linux)
 
 Конфиг: .env + config.json  (образцы в config/)
 
 Команды (одинаковы везде):
   init                 создать .env / config.json
-  on / off             включить / выключить MODE (+ TUN если TUN=1)
-  start / stop         только SSH-туннель (MODE=socks)
+  on / off             включить / выключить (+ TUN если TUN=1)
+  start / stop         то же, что on / off
   status               состояние
   probe HOST [PORT]    CONNECT через Squid
   test                 проверка обхода
-  tun-on / tun-off     TUN (socks: поверх SOCKS; singbox: в том же процессе)
+  tun-on / tun-off     TUN в процессе sing-box
   download-sing-box    скачать sing-box в tools/
   docker-env           var/docker.env + compose (прокси для контейнеров)
   docker-test          проверка: curl из контейнера через мост
-  watch                следить за SOCKS и переподключать (Ctrl+C)
+  watch                следить и переподключать (Ctrl+C)
   gui                  окно (нужен дисплей)
   help
 
-Режимы (.env MODE=):
-  socks     SSH -D через Squid (sshd на VPS :443)
-  singbox   VLESS+Reality через Squid (sing-box на VPS :443)
+Транспорт: VLESS+Reality через корпоративный Squid на VPS :443
 
 Запуск:
   python -m desktop <cmd> …
@@ -99,14 +97,10 @@ def _run_cli(cmd: str, rest: list[str]) -> int:
     try:
         if cmd == "init":
             client.init()
-        elif cmd == "on":
+        elif cmd in ("on", "start"):
             client.enable()
-        elif cmd == "off":
+        elif cmd in ("off", "stop"):
             client.disable()
-        elif cmd == "start":
-            client.start_tunnel()
-        elif cmd == "stop":
-            client.stop_tunnel()
         elif cmd == "status":
             st = client.status()
             for line in st["lines"]:

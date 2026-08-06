@@ -42,10 +42,6 @@ WIN_H = 640
 
 # UI labels → stored values
 CHOICES: dict[str, list[tuple[str, str]]] = {
-    "MODE": [
-        ("Туннель", "socks"),
-        ("Быстрый", "singbox"),
-    ],
     "SOCKS_SCOPE": [("Всё", "full"), ("GitHub + Cursor", "github")],
     "TUN": [("Выкл", "0"), ("Вкл", "1")],
     "TUN_ELEVATE": [("Нет", "0"), ("Да", "1")],
@@ -502,18 +498,15 @@ class App:
         canvas.bind("<Leave>", lambda _e: canvas.unbind_all("<MouseWheel>"))
 
         self.vars: dict[str, tk.StringVar] = {
-            "MODE": tk.StringVar(value="socks"),
             "SOCKS_SCOPE": tk.StringVar(value="full"),
             "TUN": tk.StringVar(value="0"),
             "TUN_ELEVATE": tk.StringVar(value="1"),
             "HTTP_BRIDGE_PORT": tk.StringVar(value="1088"),
             "CORPORATE_PROXY": tk.StringVar(value=""),
             "corporate_proxy": tk.StringVar(value=""),
-            "ssh_host": tk.StringVar(value=""),
-            "ssh_user": tk.StringVar(value="root"),
-            "ssh_port": tk.StringVar(value="443"),
-            "ssh_identity": tk.StringVar(value=""),
-            "ssh_socks": tk.StringVar(value="1080"),
+            "server_host": tk.StringVar(value=""),
+            "server_port": tk.StringVar(value="443"),
+            "server_socks": tk.StringVar(value="1080"),
             "proxy_bypass": tk.StringVar(value=""),
             "proxy_bypass_via": tk.StringVar(value="direct"),
             "sing_box_path": tk.StringVar(value=""),
@@ -526,9 +519,8 @@ class App:
 
         sections: list[tuple[str, list[tuple[str, str, Any]]]] = [
             (
-                "Режим",
+                "Клиент",
                 [
-                    ("Режим работы", "MODE", "choice"),
                     ("Область трафика", "SOCKS_SCOPE", "choice"),
                     ("TUN автоматически", "TUN", "choice"),
                     ("Запрос прав админа", "TUN_ELEVATE", "choice"),
@@ -536,18 +528,11 @@ class App:
                 ],
             ),
             (
-                "Сервер",
+                "Сервер VLESS",
                 [
-                    ("Адрес сервера", "ssh_host", None),
-                    ("Пользователь SSH", "ssh_user", None),
-                    ("Порт SSH", "ssh_port", None),
-                    ("Ключ SSH", "ssh_identity", "file"),
-                    ("Локальный порт SOCKS", "ssh_socks", None),
-                ],
-            ),
-            (
-                "Быстрый режим (VLESS Reality)",
-                [
+                    ("Адрес сервера", "server_host", None),
+                    ("Порт", "server_port", None),
+                    ("Локальный порт SOCKS", "server_socks", None),
                     ("UUID", "tr_uuid", None),
                     ("Public key", "tr_public_key", None),
                     ("Short ID", "tr_short_id", None),
@@ -677,14 +662,12 @@ class App:
             self._run_bg(self.client.enable_tun, waiting="Включаю TUN…")
 
     def _pick_file(self, key: str) -> None:
-        title = "Файл sing-box" if key == "sing_box_path" else "Приватный ключ SSH"
-        path = filedialog.askopenfilename(title=title)
+        path = filedialog.askopenfilename(title="Файл sing-box")
         if path:
             self.vars[key].set(path)
 
     def _load_settings(self) -> None:
         env = load_dotenv(self.paths.env_path)
-        self.vars["MODE"].set(env.get("MODE", "socks") or "socks")
         self.vars["SOCKS_SCOPE"].set(env.get("SOCKS_SCOPE", "full") or "full")
         self.vars["TUN"].set(env.get("TUN", "0") or "0")
         self.vars["TUN_ELEVATE"].set(env.get("TUN_ELEVATE", "1") or "1")
@@ -692,14 +675,12 @@ class App:
         self.vars["CORPORATE_PROXY"].set(env.get("CORPORATE_PROXY", "") or "")
         if self.paths.config_path.is_file():
             cfg = load_config(self.paths.config_path)
-            ssh = cfg.get("ssh") or {}
+            server = cfg.get("server") or cfg.get("ssh") or {}
             tun = cfg.get("tun") or {}
             self.vars["corporate_proxy"].set(str(cfg.get("corporate_proxy") or ""))
-            self.vars["ssh_host"].set(str(ssh.get("host") or ""))
-            self.vars["ssh_user"].set(str(ssh.get("user") or "root"))
-            self.vars["ssh_port"].set(str(ssh.get("port") or 443))
-            self.vars["ssh_identity"].set(str(ssh.get("identity_file") or ""))
-            self.vars["ssh_socks"].set(str(ssh.get("local_socks_port") or 1080))
+            self.vars["server_host"].set(str(server.get("host") or ""))
+            self.vars["server_port"].set(str(server.get("port") or 443))
+            self.vars["server_socks"].set(str(server.get("local_socks_port") or 1080))
             bypass = cfg.get("proxy_bypass") or []
             self.vars["proxy_bypass"].set(", ".join(str(x) for x in bypass))
             self.vars["proxy_bypass_via"].set(str(cfg.get("proxy_bypass_via") or "direct"))
@@ -716,7 +697,6 @@ class App:
     def _save_settings(self) -> None:
         try:
             env_vals = {
-                "MODE": self.vars["MODE"].get().strip(),
                 "SOCKS_SCOPE": self.vars["SOCKS_SCOPE"].get().strip(),
                 "TUN": self.vars["TUN"].get().strip() or "0",
                 "TUN_ELEVATE": self.vars["TUN_ELEVATE"].get().strip() or "1",
@@ -732,12 +712,12 @@ class App:
 
                 cfg = default_config_template()
             cfg["corporate_proxy"] = self.vars["corporate_proxy"].get().strip()
-            cfg.setdefault("ssh", {})
-            cfg["ssh"]["host"] = self.vars["ssh_host"].get().strip()
-            cfg["ssh"]["user"] = self.vars["ssh_user"].get().strip()
-            cfg["ssh"]["port"] = int(self.vars["ssh_port"].get().strip() or "443")
-            cfg["ssh"]["identity_file"] = self.vars["ssh_identity"].get().strip()
-            cfg["ssh"]["local_socks_port"] = int(self.vars["ssh_socks"].get().strip() or "1080")
+            cfg.pop("ssh", None)
+            cfg["server"] = {
+                "host": self.vars["server_host"].get().strip(),
+                "port": int(self.vars["server_port"].get().strip() or "443"),
+                "local_socks_port": int(self.vars["server_socks"].get().strip() or "1080"),
+            }
             cfg.pop("worker_base_url", None)
             raw_bypass = self.vars["proxy_bypass"].get().strip()
             cfg["proxy_bypass"] = [x.strip() for x in raw_bypass.split(",") if x.strip()]
@@ -835,8 +815,9 @@ class App:
     def _probe(self) -> None:
         try:
             cfg = self.client.config()
-            host = str((cfg.get("ssh") or {}).get("host") or "")
-            port = int((cfg.get("ssh") or {}).get("port") or 443)
+            server = cfg.get("server") or cfg.get("ssh") or {}
+            host = str(server.get("host") or "")
+            port = int(server.get("port") or 443)
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror("ops-content", str(exc))
             return
@@ -846,30 +827,19 @@ class App:
             return
         self._run_bg(lambda: self.client.probe(host, port), waiting="Проверка…")
 
-    def _mode_label(self, mode: str) -> str:
-        return {
-            "socks": "Туннель",
-            "singbox": "Быстрый",
-        }.get(mode, mode or "—")
-
     def _scope_label(self, scope: str) -> str:
         return {"full": "Всё", "github": "GitHub"}.get(scope, scope or "—")
 
     def _apply_status_ui(self, st: dict[str, Any]) -> None:
-        ssh = bool(st.get("ssh_running"))
         singbox = bool(st.get("singbox_running"))
         tun = bool(st.get("tun_running"))
-        active = bool(st.get("active")) or ssh or singbox
+        active = bool(st.get("active")) or singbox
         self._active = active
         self._tun = tun
 
-        mode = self._mode_label(str(st.get("mode") or ""))
         scope = self._scope_label(str(st.get("socks_scope") or ""))
-        target = str(st.get("ssh_target") or "—")
-        sig = (
-            f"{ssh}|{singbox}|{tun}|{active}|{mode}|{scope}|{target}|"
-            f"{(st.get('state') or {}).get('mode')}"
-        )
+        target = str(st.get("server_target") or st.get("ssh_target") or "—")
+        sig = f"{singbox}|{tun}|{active}|{scope}|{target}"
         if sig == self._last_status_sig or self._busy:
             return
         self._last_status_sig = sig
@@ -878,16 +848,10 @@ class App:
             title, sub, color = "Защищено", "VLESS и TUN активны", C_ACCENT
             self._recolor_btn(self.btn_power, danger=True, text="Отключить")
         elif singbox:
-            title, sub, color = "Подключено", "Быстрый режим (VLESS)", C_OK
-            self._recolor_btn(self.btn_power, danger=True, text="Отключить")
-        elif tun and ssh:
-            title, sub, color = "Защищено", "Туннель и TUN активны", C_ACCENT
+            title, sub, color = "Подключено", "VLESS+Reality", C_OK
             self._recolor_btn(self.btn_power, danger=True, text="Отключить")
         elif tun:
-            title, sub, color = "TUN", "Без SSH-туннеля", C_WARN
-            self._recolor_btn(self.btn_power, danger=True, text="Отключить")
-        elif ssh:
-            title, sub, color = "Подключено", "Туннель активен", C_OK
+            title, sub, color = "TUN", "Без VLESS", C_WARN
             self._recolor_btn(self.btn_power, danger=True, text="Отключить")
         elif active:
             title, sub, color = "Включено", "Активно", C_OK
@@ -904,7 +868,7 @@ class App:
             fg=C_ACCENT if tun else C_TEXT,
             highlightbackground=C_ACCENT if tun else C_BORDER,
         )
-        self.meta_rows["mode"].configure(text=mode)
+        self.meta_rows["mode"].configure(text="VLESS")
         self.meta_rows["scope"].configure(text=scope)
         self.meta_rows["target"].configure(text=target)
 

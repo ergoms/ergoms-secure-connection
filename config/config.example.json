@@ -1,10 +1,8 @@
 {
   "corporate_proxy": "192.0.2.10:3128",
-  "ssh": {
+  "server": {
     "host": "YOUR_VPS_IP_OR_HOSTNAME",
-    "user": "root",
     "port": 443,
-    "identity_file": "",
     "local_socks_port": 1080
   },
   "blocked_hosts": [
