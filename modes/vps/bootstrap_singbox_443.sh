@@ -224,12 +224,16 @@ On the office PC — config.json (merge into existing file):
 
 On the office PC — merge server + transport into config.json, then:
 
-  # .env
-  TUN=1
+  # config.json
+  "tun": { "enabled": true, "elevate": true, ... }
 
   ./ops-content.sh on
   # or: .\\ops-content.ps1 on
   # or: python -m desktop on
+
+  # optional: encrypt config for transfer to another PC
+  # ./ops-content.sh encrypt
+  # ./ops-content.sh decrypt config.json.enc
 
 Probe from office:
 

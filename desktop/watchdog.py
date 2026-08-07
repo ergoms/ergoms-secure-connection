@@ -154,9 +154,9 @@ def health_problem(client: OpsClient, *, probe: bool = False) -> str | None:
         if err:
             return f"SOCKS :{socks} zombie ({err})"
     # SOCKS alone is not enough for Docker Desktop: UDP/53 from the VM dies
-    # unless sing-box hijacks it. Recover TUN when .env says TUN=1.
+    # unless sing-box hijacks it. Recover TUN when config says tun.enabled.
     if tun_wanted and socks_up and not tun_up:
-        return "TUN=1 but sing-box down (Docker DNS)"
+        return "tun.enabled but sing-box down (Docker DNS)"
     return None
 
 

@@ -1,4 +1,4 @@
-"""Load/save .env and config.json; init from bundled examples."""
+"""Load/save config.json (single source of truth); migrate legacy .env; encrypt helpers."""
 
 from __future__ import annotations
 
@@ -14,29 +14,37 @@ from desktop.paths import Paths, bundle_dir
 
 LogFn = Callable[[str], None]
 
-# Keys persisted in root .env (runtime switches)
-ENV_KEYS = [
-    "SOCKS_SCOPE",
-    "HTTP_BRIDGE_PORT",
-    "CORPORATE_PROXY",
-    "TUN",
-    "TUN_ELEVATE",
-    "WATCHDOG",
-    "WATCHDOG_INTERVAL",
-    "WATCHDOG_MAX_RETRIES",
-    "PAC_LISTEN_PORT",
-]
+# Legacy .env keys → config.json (migration only)
+_ENV_BOOL_TRUE = frozenset({"1", "true", "yes", "on"})
 
 
 def _noop(msg: str) -> None:
     pass
 
 
-def _truthy(val: str | None) -> bool:
-    return (val or "").strip().lower() in ("1", "true", "yes", "on", "full")
+def _truthy(val: Any) -> bool:
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, (int, float)):
+        return bool(val)
+    return str(val or "").strip().lower() in _ENV_BOOL_TRUE
+
+
+def _as_bool(val: Any, default: bool = False) -> bool:
+    if val is None or val == "":
+        return default
+    return _truthy(val)
+
+
+def _as_int(val: Any, default: int) -> int:
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return default
 
 
 def load_dotenv(path: Path) -> dict[str, str]:
+    """Read a legacy .env file (migration / optional overrides)."""
     out: dict[str, str] = {}
     if not path.is_file():
         return out
@@ -54,8 +62,8 @@ def load_dotenv(path: Path) -> dict[str, str]:
     return out
 
 
-_env_cache: tuple[float, dict[str, str]] | None = None
 _config_cache: tuple[float, dict[str, Any]] | None = None
+_runtime_cfg: dict[str, Any] | None = None
 
 
 def _file_mtime(path: Path) -> float:
@@ -66,371 +74,21 @@ def _file_mtime(path: Path) -> float:
 
 
 def invalidate_config_cache() -> None:
-    """Drop cached .env / config.json reads (after save/update)."""
-    global _env_cache, _config_cache
-    _env_cache = None
+    """Drop cached config.json reads (after save/update)."""
+    global _config_cache, _runtime_cfg
     _config_cache = None
-
-
-def apply_dotenv(path: Path, *, force: bool = False) -> dict[str, str]:
-    """Load .env into process env (source of truth for MODE / TUN etc.)."""
-    global _env_cache
-    mtime = _file_mtime(path)
-    if not force and _env_cache and _env_cache[0] == mtime:
-        data = _env_cache[1]
-    else:
-        data = load_dotenv(path)
-        _env_cache = (mtime, data)
-    for k, v in data.items():
-        os.environ[k] = v
-    return data
-
-
-def _default_env_text(values: dict[str, str]) -> str:
-    tun = values.get("TUN", "0") or "0"
-    elevate = values.get("TUN_ELEVATE", "1") or "1"
-    lines = [
-        "# VLESS+Reality client (sing-box)",
-        "",
-        "# full | github",
-        f"SOCKS_SCOPE={values.get('SOCKS_SCOPE', 'full') or 'full'}",
-        "",
-        "# TUN in the same sing-box process",
-        f"TUN={tun}",
-        "# Request UAC when starting sing-box TUN",
-        f"TUN_ELEVATE={elevate}",
-        "",
-    ]
-    if values.get("HTTP_BRIDGE_PORT"):
-        lines.append(f"HTTP_BRIDGE_PORT={values['HTTP_BRIDGE_PORT']}")
-    else:
-        lines.append("# HTTP_BRIDGE_PORT=1088")
-    if values.get("PAC_LISTEN_PORT"):
-        lines.append(f"PAC_LISTEN_PORT={values['PAC_LISTEN_PORT']}")
-    else:
-        lines.append("# PAC_LISTEN_PORT=1089  (MODE=singbox PAC server)")
-    if values.get("CORPORATE_PROXY"):
-        lines.append(f"CORPORATE_PROXY={values['CORPORATE_PROXY']}")
-    else:
-        lines.append("# CORPORATE_PROXY=192.0.2.10:3128  (overrides config.json if set)")
-    lines.append("")
-    return "\n".join(lines)
-
-
-def save_dotenv(path: Path, values: dict[str, str], preserve_comments: bool = True) -> None:
-    """Write env keys; keep comment/blank structure when file exists."""
-    # Normalize known keys
-    cleaned = {k: (values.get(k) or "").strip() for k in ENV_KEYS if k in values}
-    # Always persist TUN defaults if provided in values or missing later
-    for k in ENV_KEYS:
-        if k in values:
-            cleaned[k] = (values.get(k) or "").strip()
-
-    existing_lines: list[str] = []
-    if preserve_comments and path.is_file():
-        existing_lines = path.read_text(encoding="utf-8-sig").splitlines()
-
-    if not existing_lines:
-        path.write_text(_default_env_text(cleaned), encoding="utf-8")
-        return
-
-    seen: set[str] = set()
-    out: list[str] = []
-    for line in existing_lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            out.append(line)
-            continue
-        key = stripped.split("=", 1)[0].strip()
-        if key in cleaned:
-            out.append(f"{key}={cleaned[key]}")
-            seen.add(key)
-        else:
-            out.append(line)
-
-    # Append missing keys that we care about
-    extras: list[str] = []
-    for key in ENV_KEYS:
-        if key not in cleaned or key in seen:
-            continue
-        # Skip empty optional secrets/ports unless TUN flags
-        if key in ("CORPORATE_PROXY", "HTTP_BRIDGE_PORT") and not cleaned[key]:
-            continue
-        extras.append(f"{key}={cleaned[key]}")
-        seen.add(key)
-    if extras:
-        if out and out[-1].strip():
-            out.append("")
-        if "TUN" in cleaned and "TUN" not in {
-            ln.split("=", 1)[0].strip()
-            for ln in existing_lines
-            if ln.strip() and not ln.strip().startswith("#") and "=" in ln
-        }:
-            out.append("# TUN over SOCKS (sing-box): 0=off, 1=auto after tunnel on")
-        out.extend(extras)
-
-    path.write_text("\n".join(out) + "\n", encoding="utf-8")
-    invalidate_config_cache()
-
-
-def update_env_key(path: Path, key: str, value: str) -> None:
-    """Set one .env key and reload into process env."""
-    data = load_dotenv(path)
-    data[key] = value
-    # Ensure TUN keys exist when touching TUN
-    if key == "TUN" and "TUN_ELEVATE" not in data:
-        data["TUN_ELEVATE"] = "1"
-    save_dotenv(path, data)
-    apply_dotenv(path)
-
-
-def load_config(path: Path, *, force: bool = False) -> dict[str, Any]:
-    global _config_cache
-    if not path.is_file():
-        raise FileNotFoundError(f"Missing config.json. Run init first: {path}")
-    mtime = _file_mtime(path)
-    if not force and _config_cache and _config_cache[0] == mtime:
-        return deepcopy(_config_cache[1])
-    cfg = ensure_config_defaults(json.loads(path.read_text(encoding="utf-8-sig")))
-    _config_cache = (mtime, cfg)
-    return deepcopy(cfg)
-
-
-def save_config(path: Path, cfg: dict[str, Any]) -> None:
-    path.write_text(
-        json.dumps(ensure_config_defaults(cfg), indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
-    invalidate_config_cache()
-
-
-def ensure_config_defaults(cfg: dict[str, Any]) -> dict[str, Any]:
-    """Fill missing sections without wiping user values."""
-    out = deepcopy(cfg) if cfg else {}
-    out.setdefault("corporate_proxy", "192.0.2.10:3128")
-
-    # Migrate legacy ssh{} → server{} (SSH tunnel mode removed)
-    legacy = out.pop("ssh", None)
-    server = out.get("server")
-    if not isinstance(server, dict):
-        server = {}
-    if isinstance(legacy, dict):
-        for key in ("host", "port", "local_socks_port"):
-            if key in legacy and key not in server:
-                server[key] = legacy[key]
-    out["server"] = server
-    server.setdefault("host", "YOUR_VPS_IP_OR_HOSTNAME")
-    server.setdefault("port", 443)
-    server.setdefault("local_socks_port", 1080)
-    server.pop("user", None)
-    server.pop("identity_file", None)
-
-    out.pop("worker_base_url", None)
-    out.setdefault("blocked_hosts", default_config_template()["blocked_hosts"])
-    out.setdefault("proxy_bypass", ["*.intranet.example", "*.local", "*.lan"])
-    out.setdefault("proxy_bypass_via", "direct")
-    tun = out.setdefault("tun", {})
-    if not isinstance(tun, dict):
-        tun = {}
-        out["tun"] = tun
-    tun.setdefault("sing_box_path", "")
-    tun.setdefault("mtu", 1500)
-    transport = out.setdefault("transport", {})
-    if not isinstance(transport, dict):
-        transport = {}
-        out["transport"] = transport
-    transport.setdefault("type", "vless-reality")
-    transport.setdefault("uuid", "")
-    transport.setdefault("public_key", "")
-    transport.setdefault("short_id", "")
-    transport.setdefault("server_name", "www.cloudflare.com")
-    transport.setdefault("port", 443)
-    return out
-
-
-def get_mode() -> str:
-    """Client is VLESS+Reality only."""
-    return "singbox"
-
-
-def get_server(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
-    if not cfg:
-        return {
-            "host": "YOUR_VPS_IP_OR_HOSTNAME",
-            "port": 443,
-            "local_socks_port": 1080,
-        }
-    server = cfg.get("server")
-    if isinstance(server, dict):
-        return server
-    legacy = cfg.get("ssh")
-    if isinstance(legacy, dict):
-        return legacy
-    return {}
-
-
-def get_server_host(cfg: dict[str, Any] | None = None) -> str:
-    return str(get_server(cfg).get("host") or "").strip()
-
-
-def get_local_socks_port(cfg: dict[str, Any] | None = None) -> int:
-    raw = get_server(cfg).get("local_socks_port") or 1080
-    try:
-        return int(raw)
-    except (TypeError, ValueError):
-        return 1080
-
-
-def get_pac_listen_port() -> int:
-    raw = (os.environ.get("PAC_LISTEN_PORT") or "").strip()
-    if raw:
-        return int(raw)
-    return 1089
-
-
-def get_socks_scope() -> str:
-    s = (os.environ.get("SOCKS_SCOPE") or "full").strip().lower()
-    if s in ("full", "all", "system"):
-        return "full"
-    if s in ("github", "pac", "partial"):
-        return "github"
-    return "full"
-
-
-def get_http_bridge_port() -> int:
-    raw = (os.environ.get("HTTP_BRIDGE_PORT") or "").strip()
-    if raw:
-        return int(raw)
-    return 1088
-
-
-def get_tun_enabled() -> bool:
-    """TUN flag from .env (applied to process env)."""
-    return _truthy(os.environ.get("TUN"))
-
-
-def get_tun_elevate() -> bool:
-    raw = os.environ.get("TUN_ELEVATE")
-    if raw is None or raw.strip() == "":
-        return True
-    return _truthy(raw)
-
-
-def get_watchdog_enabled() -> bool:
-    """Background reconnect; default on. Set WATCHDOG=0 to disable."""
-    raw = os.environ.get("WATCHDOG")
-    if raw is None or raw.strip() == "":
-        return True
-    return _truthy(raw)
-
-
-def get_watchdog_interval() -> int:
-    raw = (os.environ.get("WATCHDOG_INTERVAL") or "").strip()
-    if raw.isdigit():
-        return max(5, int(raw))
-    return 15
-
-
-def get_watchdog_max_retries() -> int:
-    raw = (os.environ.get("WATCHDOG_MAX_RETRIES") or "").strip()
-    if raw.isdigit():
-        return max(1, int(raw))
-    return 5
-
-
-def resolve_corporate_proxy(cfg: dict[str, Any] | None = None) -> str:
-    """CORPORATE_PROXY from .env overrides config.json."""
-    env_p = (os.environ.get("CORPORATE_PROXY") or "").strip()
-    if env_p:
-        return env_p.replace("http://", "").replace("https://", "").strip("/")
-    if cfg:
-        return str(cfg.get("corporate_proxy") or "192.0.2.10:3128")
-    return "192.0.2.10:3128"
-
-
-def get_sing_box_path(cfg: dict[str, Any] | None = None) -> str:
-    """Return configured sing-box path, or empty for auto (tools/sing-box).
-
-    Relative paths are resolved against the project data root.
-    """
-    from desktop.paths import data_root
-
-    raw = (os.environ.get("SING_BOX_PATH") or "").strip()
-    if not raw and cfg:
-        tun = cfg.get("tun") or {}
-        if isinstance(tun, dict):
-            raw = str(tun.get("sing_box_path") or "").strip()
-    if not raw:
-        return ""
-    path = Path(raw).expanduser()
-    if not path.is_absolute():
-        path = data_root() / path
-    return str(path)
-
-
-def get_tun_mtu(cfg: dict[str, Any] | None = None) -> int:
-    """TUN interface MTU (lower = fewer fragments over SSH SOCKS overlay)."""
-    raw = (os.environ.get("TUN_MTU") or "").strip()
-    if raw.isdigit():
-        return max(1280, min(1500, int(raw)))
-    if cfg:
-        tun = cfg.get("tun") or {}
-        if isinstance(tun, dict):
-            mtu = tun.get("mtu")
-            if isinstance(mtu, int) and 1280 <= mtu <= 1500:
-                return mtu
-            if isinstance(mtu, str) and mtu.isdigit():
-                return max(1280, min(1500, int(mtu)))
-    return 1500
-
-
-def invoke_init(paths: Paths, log: LogFn = _noop) -> None:
-    paths.ensure_dirs()
-    bundled = bundle_dir()
-    example_cfg = bundled / "config" / "config.example.json"
-    example_env = bundled / "config" / ".env.example"
-    if not example_cfg.is_file():
-        example_cfg = bundled / "config.example.json"
-    if not example_env.is_file():
-        example_env = bundled / ".env.example"
-
-    if not paths.config_path.is_file():
-        if not example_cfg.is_file():
-            raise FileNotFoundError(f"Missing example config: {example_cfg}")
-        shutil.copyfile(example_cfg, paths.config_path)
-        log("Created config.json")
-    else:
-        # Ensure tun section exists in older configs
-        try:
-            cfg = load_config(paths.config_path)
-            save_config(paths.config_path, cfg)
-        except Exception:  # noqa: BLE001
-            pass
-        log("config.json already exists")
-
-    if not paths.env_path.is_file() and example_env.is_file():
-        shutil.copyfile(example_env, paths.env_path)
-        log("Created .env from example")
-    elif paths.env_path.is_file():
-        # Merge missing TUN keys into existing .env
-        data = load_dotenv(paths.env_path)
-        changed = False
-        if "TUN" not in data:
-            data["TUN"] = "0"
-            changed = True
-        if "TUN_ELEVATE" not in data:
-            data["TUN_ELEVATE"] = "1"
-            changed = True
-        if changed:
-            save_dotenv(paths.env_path, data)
-            log("Updated .env with TUN keys")
-
-    apply_dotenv(paths.env_path)
+    _runtime_cfg = None
 
 
 def default_config_template() -> dict[str, Any]:
     return {
         "corporate_proxy": "192.0.2.10:3128",
+        "socks_scope": "full",
+        "http_bridge_port": 1088,
+        "pac_listen_port": 1089,
+        "watchdog": True,
+        "watchdog_interval": 15,
+        "watchdog_max_retries": 5,
         "server": {
             "host": "YOUR_VPS_IP_OR_HOSTNAME",
             "port": 443,
@@ -467,8 +125,10 @@ def default_config_template() -> dict[str, Any]:
         "proxy_bypass": ["*.intranet.example", "*.local", "*.lan"],
         "proxy_bypass_via": "direct",
         "tun": {
+            "enabled": False,
+            "elevate": True,
             "sing_box_path": "",
-            "mtu": 1400,
+            "mtu": 1500,
         },
         "transport": {
             "type": "vless-reality",
@@ -481,10 +141,455 @@ def default_config_template() -> dict[str, Any]:
     }
 
 
+def migrate_env_into_config(cfg: dict[str, Any], env: dict[str, str]) -> dict[str, Any]:
+    """Fold legacy .env keys into config (env wins only when key was present)."""
+    out = deepcopy(cfg)
+    tun = out.setdefault("tun", {})
+    if not isinstance(tun, dict):
+        tun = {}
+        out["tun"] = tun
+
+    if "SOCKS_SCOPE" in env and env["SOCKS_SCOPE"].strip():
+        out["socks_scope"] = env["SOCKS_SCOPE"].strip().lower()
+    if "HTTP_BRIDGE_PORT" in env and env["HTTP_BRIDGE_PORT"].strip():
+        out["http_bridge_port"] = _as_int(env["HTTP_BRIDGE_PORT"], 1088)
+    if "PAC_LISTEN_PORT" in env and env["PAC_LISTEN_PORT"].strip():
+        out["pac_listen_port"] = _as_int(env["PAC_LISTEN_PORT"], 1089)
+    if "CORPORATE_PROXY" in env and env["CORPORATE_PROXY"].strip():
+        p = env["CORPORATE_PROXY"].strip()
+        out["corporate_proxy"] = p.replace("http://", "").replace("https://", "").strip("/")
+    if "WATCHDOG" in env:
+        out["watchdog"] = _as_bool(env["WATCHDOG"], True)
+    if "WATCHDOG_INTERVAL" in env and env["WATCHDOG_INTERVAL"].strip():
+        out["watchdog_interval"] = max(5, _as_int(env["WATCHDOG_INTERVAL"], 15))
+    if "WATCHDOG_MAX_RETRIES" in env and env["WATCHDOG_MAX_RETRIES"].strip():
+        out["watchdog_max_retries"] = max(1, _as_int(env["WATCHDOG_MAX_RETRIES"], 5))
+    if "TUN" in env:
+        tun["enabled"] = _as_bool(env["TUN"], False)
+    if "TUN_ELEVATE" in env:
+        tun["elevate"] = _as_bool(env["TUN_ELEVATE"], True)
+    if "SING_BOX_PATH" in env and env["SING_BOX_PATH"].strip():
+        tun["sing_box_path"] = env["SING_BOX_PATH"].strip()
+    if "TUN_MTU" in env and env["TUN_MTU"].strip():
+        mtu = _as_int(env["TUN_MTU"], 1500)
+        tun["mtu"] = max(1280, min(1500, mtu))
+    return out
+
+
+def ensure_config_defaults(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Fill missing sections without wiping user values."""
+    tmpl = default_config_template()
+    out = deepcopy(cfg) if cfg else {}
+    out.setdefault("corporate_proxy", tmpl["corporate_proxy"])
+    out.setdefault("socks_scope", tmpl["socks_scope"])
+    out.setdefault("http_bridge_port", tmpl["http_bridge_port"])
+    out.setdefault("pac_listen_port", tmpl["pac_listen_port"])
+    out.setdefault("watchdog", tmpl["watchdog"])
+    out.setdefault("watchdog_interval", tmpl["watchdog_interval"])
+    out.setdefault("watchdog_max_retries", tmpl["watchdog_max_retries"])
+
+    # Migrate legacy ssh{} → server{} (SSH tunnel mode removed)
+    legacy = out.pop("ssh", None)
+    server = out.get("server")
+    if not isinstance(server, dict):
+        server = {}
+    if isinstance(legacy, dict):
+        for key in ("host", "port", "local_socks_port"):
+            if key in legacy and key not in server:
+                server[key] = legacy[key]
+    out["server"] = server
+    server.setdefault("host", "YOUR_VPS_IP_OR_HOSTNAME")
+    server.setdefault("port", 443)
+    server.setdefault("local_socks_port", 1080)
+    server.pop("user", None)
+    server.pop("identity_file", None)
+
+    out.pop("worker_base_url", None)
+    out.setdefault("blocked_hosts", tmpl["blocked_hosts"])
+    out.setdefault("proxy_bypass", tmpl["proxy_bypass"])
+    out.setdefault("proxy_bypass_via", tmpl["proxy_bypass_via"])
+
+    tun = out.setdefault("tun", {})
+    if not isinstance(tun, dict):
+        tun = {}
+        out["tun"] = tun
+    # Legacy top-level TUN-like keys
+    if "enabled" not in tun and "tun_enabled" in out:
+        tun["enabled"] = out.pop("tun_enabled")
+    tun.setdefault("enabled", False)
+    tun.setdefault("elevate", True)
+    tun.setdefault("sing_box_path", "")
+    tun.setdefault("mtu", 1500)
+    tun["enabled"] = _as_bool(tun.get("enabled"), False)
+    tun["elevate"] = _as_bool(tun.get("elevate"), True)
+
+    transport = out.setdefault("transport", {})
+    if not isinstance(transport, dict):
+        transport = {}
+        out["transport"] = transport
+    transport.setdefault("type", "vless-reality")
+    transport.setdefault("uuid", "")
+    transport.setdefault("public_key", "")
+    transport.setdefault("short_id", "")
+    transport.setdefault("server_name", "www.cloudflare.com")
+    transport.setdefault("port", 443)
+
+    # Normalize scope
+    scope = str(out.get("socks_scope") or "full").strip().lower()
+    if scope in ("full", "all", "system"):
+        out["socks_scope"] = "full"
+    elif scope in ("github", "pac", "partial"):
+        out["socks_scope"] = "github"
+    else:
+        out["socks_scope"] = "full"
+
+    out["http_bridge_port"] = _as_int(out.get("http_bridge_port"), 1088)
+    out["pac_listen_port"] = _as_int(out.get("pac_listen_port"), 1089)
+    out["watchdog"] = _as_bool(out.get("watchdog"), True)
+    out["watchdog_interval"] = max(5, _as_int(out.get("watchdog_interval"), 15))
+    out["watchdog_max_retries"] = max(1, _as_int(out.get("watchdog_max_retries"), 5))
+    mtu = tun.get("mtu")
+    tun["mtu"] = max(1280, min(1500, _as_int(mtu, 1500)))
+    return out
+
+
+def load_config(path: Path, *, force: bool = False) -> dict[str, Any]:
+    global _config_cache
+    if not path.is_file():
+        raise FileNotFoundError(f"Missing config.json. Run init first: {path}")
+    mtime = _file_mtime(path)
+    if not force and _config_cache and _config_cache[0] == mtime:
+        return deepcopy(_config_cache[1])
+    cfg = ensure_config_defaults(json.loads(path.read_text(encoding="utf-8-sig")))
+    _config_cache = (mtime, cfg)
+    return deepcopy(cfg)
+
+
+def save_config(path: Path, cfg: dict[str, Any]) -> None:
+    path.write_text(
+        json.dumps(ensure_config_defaults(cfg), indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    invalidate_config_cache()
+
+
+def apply_config(path: Path, *, force: bool = False, env_path: Path | None = None) -> dict[str, Any]:
+    """Load config.json into runtime cache and mirror key values to os.environ.
+
+    env_path is ignored (kept for call-site compat). Legacy .env is merged only in init.
+    """
+    global _runtime_cfg
+    del env_path  # legacy .env must not override config.json at runtime
+    cfg = load_config(path, force=force)
+    _runtime_cfg = cfg
+    _mirror_to_environ(cfg)
+    return deepcopy(cfg)
+
+
+def _mirror_to_environ(cfg: dict[str, Any]) -> None:
+    """Keep process env in sync for shell helpers / child processes."""
+    tun = cfg.get("tun") if isinstance(cfg.get("tun"), dict) else {}
+    os.environ["SOCKS_SCOPE"] = str(cfg.get("socks_scope") or "full")
+    os.environ["HTTP_BRIDGE_PORT"] = str(cfg.get("http_bridge_port") or 1088)
+    os.environ["PAC_LISTEN_PORT"] = str(cfg.get("pac_listen_port") or 1089)
+    os.environ["TUN"] = "1" if _as_bool(tun.get("enabled"), False) else "0"
+    os.environ["TUN_ELEVATE"] = "1" if _as_bool(tun.get("elevate"), True) else "0"
+    os.environ["WATCHDOG"] = "1" if _as_bool(cfg.get("watchdog"), True) else "0"
+    os.environ["WATCHDOG_INTERVAL"] = str(cfg.get("watchdog_interval") or 15)
+    os.environ["WATCHDOG_MAX_RETRIES"] = str(cfg.get("watchdog_max_retries") or 5)
+    corp = str(cfg.get("corporate_proxy") or "").strip()
+    if corp:
+        os.environ["CORPORATE_PROXY"] = corp
+
+
+# Back-compat aliases
+def apply_dotenv(path: Path, *, force: bool = False) -> dict[str, str]:
+    """Deprecated: prefer apply_config. Still syncs runtime from config (+ legacy .env)."""
+    root = path.parent if path.name == ".env" else path.parent
+    cfg_path = root / "config.json"
+    if cfg_path.is_file():
+        apply_config(cfg_path, force=force, env_path=path if path.is_file() else None)
+    elif path.is_file():
+        data = load_dotenv(path)
+        for k, v in data.items():
+            os.environ[k] = v
+        return data
+    return {
+        "SOCKS_SCOPE": os.environ.get("SOCKS_SCOPE", "full"),
+        "TUN": os.environ.get("TUN", "0"),
+        "TUN_ELEVATE": os.environ.get("TUN_ELEVATE", "1"),
+    }
+
+
+def save_dotenv(path: Path, values: dict[str, str], preserve_comments: bool = True) -> None:
+    """Deprecated: write runtime switches into config.json instead of .env."""
+    del preserve_comments  # unused
+    cfg_path = path.parent / "config.json"
+    if cfg_path.is_file():
+        cfg = load_config(cfg_path)
+    else:
+        cfg = default_config_template()
+    cfg = migrate_env_into_config(cfg, values)
+    save_config(cfg_path, cfg)
+    apply_config(cfg_path, force=True)
+
+
+def update_env_key(path: Path, key: str, value: str) -> None:
+    """Deprecated name: set one runtime key in config.json."""
+    update_config_key(path.parent / "config.json" if path.name == ".env" else path, key, value)
+
+
+def update_config_key(path: Path, key: str, value: Any) -> None:
+    """Set one config field (supports TUN / SOCKS_SCOPE legacy names)."""
+    cfg = load_config(path) if path.is_file() else default_config_template()
+    key_u = str(key).strip()
+    tun = cfg.setdefault("tun", {})
+    if not isinstance(tun, dict):
+        tun = {}
+        cfg["tun"] = tun
+
+    mapping = {
+        "TUN": ("tun.enabled", value),
+        "TUN_ELEVATE": ("tun.elevate", value),
+        "SOCKS_SCOPE": ("socks_scope", value),
+        "HTTP_BRIDGE_PORT": ("http_bridge_port", value),
+        "PAC_LISTEN_PORT": ("pac_listen_port", value),
+        "CORPORATE_PROXY": ("corporate_proxy", value),
+        "WATCHDOG": ("watchdog", value),
+        "WATCHDOG_INTERVAL": ("watchdog_interval", value),
+        "WATCHDOG_MAX_RETRIES": ("watchdog_max_retries", value),
+        "SING_BOX_PATH": ("tun.sing_box_path", value),
+        "TUN_MTU": ("tun.mtu", value),
+    }
+    if key_u in mapping:
+        target, raw = mapping[key_u]
+        if target == "tun.enabled":
+            tun["enabled"] = _as_bool(raw, False)
+        elif target == "tun.elevate":
+            tun["elevate"] = _as_bool(raw, True)
+        elif target == "tun.sing_box_path":
+            tun["sing_box_path"] = str(raw or "").strip()
+        elif target == "tun.mtu":
+            tun["mtu"] = max(1280, min(1500, _as_int(raw, 1500)))
+        elif target == "socks_scope":
+            cfg["socks_scope"] = str(raw or "full").strip().lower()
+        elif target == "corporate_proxy":
+            p = str(raw or "").strip()
+            cfg["corporate_proxy"] = p.replace("http://", "").replace("https://", "").strip("/")
+        elif target == "watchdog":
+            cfg["watchdog"] = _as_bool(raw, True)
+        elif target in ("http_bridge_port", "pac_listen_port", "watchdog_interval", "watchdog_max_retries"):
+            cfg[target] = _as_int(raw, cfg.get(target) or 0)
+    elif key_u.startswith("tun."):
+        sub = key_u.split(".", 1)[1]
+        if sub in ("enabled", "elevate"):
+            tun[sub] = _as_bool(value, sub == "elevate")
+        elif sub == "mtu":
+            tun["mtu"] = max(1280, min(1500, _as_int(value, 1500)))
+        else:
+            tun[sub] = value
+    else:
+        cfg[key_u] = value
+
+    if key_u == "TUN" and "elevate" not in tun:
+        tun["elevate"] = True
+    save_config(path, cfg)
+    apply_config(path, force=True)
+
+
+def _runtime() -> dict[str, Any]:
+    if _runtime_cfg is not None:
+        return _runtime_cfg
+    return {}
+
+
+def get_mode() -> str:
+    """Client is VLESS+Reality only."""
+    return "singbox"
+
+
+def get_server(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
+    if not cfg:
+        return {
+            "host": "YOUR_VPS_IP_OR_HOSTNAME",
+            "port": 443,
+            "local_socks_port": 1080,
+        }
+    server = cfg.get("server")
+    if isinstance(server, dict):
+        return server
+    legacy = cfg.get("ssh")
+    if isinstance(legacy, dict):
+        return legacy
+    return {}
+
+
+def get_server_host(cfg: dict[str, Any] | None = None) -> str:
+    return str(get_server(cfg).get("host") or "").strip()
+
+
+def get_local_socks_port(cfg: dict[str, Any] | None = None) -> int:
+    raw = get_server(cfg).get("local_socks_port") or 1080
+    return _as_int(raw, 1080)
+
+
+def get_pac_listen_port(cfg: dict[str, Any] | None = None) -> int:
+    raw = (os.environ.get("PAC_LISTEN_PORT") or "").strip()
+    if raw:
+        return _as_int(raw, 1089)
+    src = cfg if cfg is not None else _runtime()
+    return _as_int(src.get("pac_listen_port"), 1089)
+
+
+def get_socks_scope(cfg: dict[str, Any] | None = None) -> str:
+    env = (os.environ.get("SOCKS_SCOPE") or "").strip().lower()
+    if env:
+        s = env
+    else:
+        src = cfg if cfg is not None else _runtime()
+        s = str(src.get("socks_scope") or "full").strip().lower()
+    if s in ("full", "all", "system"):
+        return "full"
+    if s in ("github", "pac", "partial"):
+        return "github"
+    return "full"
+
+
+def get_http_bridge_port(cfg: dict[str, Any] | None = None) -> int:
+    raw = (os.environ.get("HTTP_BRIDGE_PORT") or "").strip()
+    if raw:
+        return _as_int(raw, 1088)
+    src = cfg if cfg is not None else _runtime()
+    return _as_int(src.get("http_bridge_port"), 1088)
+
+
+def get_tun_enabled(cfg: dict[str, Any] | None = None) -> bool:
+    raw = os.environ.get("TUN")
+    if raw is not None and str(raw).strip() != "":
+        return _truthy(raw)
+    src = cfg if cfg is not None else _runtime()
+    tun = src.get("tun") if isinstance(src.get("tun"), dict) else {}
+    return _as_bool(tun.get("enabled"), False)
+
+
+def get_tun_elevate(cfg: dict[str, Any] | None = None) -> bool:
+    raw = os.environ.get("TUN_ELEVATE")
+    if raw is not None and str(raw).strip() != "":
+        return _truthy(raw)
+    src = cfg if cfg is not None else _runtime()
+    tun = src.get("tun") if isinstance(src.get("tun"), dict) else {}
+    return _as_bool(tun.get("elevate"), True)
+
+
+def get_watchdog_enabled(cfg: dict[str, Any] | None = None) -> bool:
+    raw = os.environ.get("WATCHDOG")
+    if raw is not None and str(raw).strip() != "":
+        return _truthy(raw)
+    src = cfg if cfg is not None else _runtime()
+    return _as_bool(src.get("watchdog"), True)
+
+
+def get_watchdog_interval(cfg: dict[str, Any] | None = None) -> int:
+    raw = (os.environ.get("WATCHDOG_INTERVAL") or "").strip()
+    if raw.isdigit():
+        return max(5, int(raw))
+    src = cfg if cfg is not None else _runtime()
+    return max(5, _as_int(src.get("watchdog_interval"), 15))
+
+
+def get_watchdog_max_retries(cfg: dict[str, Any] | None = None) -> int:
+    raw = (os.environ.get("WATCHDOG_MAX_RETRIES") or "").strip()
+    if raw.isdigit():
+        return max(1, int(raw))
+    src = cfg if cfg is not None else _runtime()
+    return max(1, _as_int(src.get("watchdog_max_retries"), 5))
+
+
+def resolve_corporate_proxy(cfg: dict[str, Any] | None = None) -> str:
+    env_p = (os.environ.get("CORPORATE_PROXY") or "").strip()
+    if env_p:
+        return env_p.replace("http://", "").replace("https://", "").strip("/")
+    src = cfg if cfg is not None else _runtime()
+    if src:
+        return str(src.get("corporate_proxy") or "192.0.2.10:3128")
+    return "192.0.2.10:3128"
+
+
+def get_sing_box_path(cfg: dict[str, Any] | None = None) -> str:
+    """Return configured sing-box path, or empty for auto (tools/sing-box)."""
+    from desktop.paths import data_root
+
+    raw = (os.environ.get("SING_BOX_PATH") or "").strip()
+    src = cfg if cfg is not None else _runtime()
+    if not raw and src:
+        tun = src.get("tun") or {}
+        if isinstance(tun, dict):
+            raw = str(tun.get("sing_box_path") or "").strip()
+    if not raw:
+        return ""
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        path = data_root() / path
+    return str(path)
+
+
+def get_tun_mtu(cfg: dict[str, Any] | None = None) -> int:
+    raw = (os.environ.get("TUN_MTU") or "").strip()
+    if raw.isdigit():
+        return max(1280, min(1500, int(raw)))
+    src = cfg if cfg is not None else _runtime()
+    if src:
+        tun = src.get("tun") or {}
+        if isinstance(tun, dict):
+            return max(1280, min(1500, _as_int(tun.get("mtu"), 1500)))
+    return 1500
+
+
+def invoke_init(paths: Paths, log: LogFn = _noop) -> None:
+    paths.ensure_dirs()
+    bundled = bundle_dir()
+    example_cfg = bundled / "config" / "config.example.json"
+    if not example_cfg.is_file():
+        example_cfg = bundled / "config.example.json"
+
+    created = False
+    if not paths.config_path.is_file():
+        if example_cfg.is_file():
+            shutil.copyfile(example_cfg, paths.config_path)
+        else:
+            save_config(paths.config_path, default_config_template())
+        created = True
+        log("Created config.json")
+    else:
+        log("config.json already exists")
+
+    cfg = load_config(paths.config_path)
+    if paths.env_path.is_file():
+        before = json.dumps(cfg, sort_keys=True)
+        cfg = migrate_env_into_config(cfg, load_dotenv(paths.env_path))
+        cfg = ensure_config_defaults(cfg)
+        if json.dumps(cfg, sort_keys=True) != before:
+            log("Migrated settings from .env → config.json")
+        bak = paths.env_path.with_name(".env.migrated")
+        try:
+            if bak.is_file():
+                bak.unlink()
+            paths.env_path.rename(bak)
+            log(f"Renamed {paths.env_path.name} -> {bak.name} (legacy, unused)")
+        except OSError as exc:
+            log(f"Could not rename .env: {exc}")
+    save_config(paths.config_path, cfg)
+    apply_config(paths.config_path, force=True)
+
+
 def merge_settings_to_config(cfg: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
     out = deepcopy(cfg)
     for k, v in updates.items():
-        if k in ("ssh", "tun", "transport") and isinstance(v, dict):
+        if k in ("ssh", "server", "tun", "transport") and isinstance(v, dict):
             out.setdefault(k, {}).update(v)
         else:
             out[k] = v

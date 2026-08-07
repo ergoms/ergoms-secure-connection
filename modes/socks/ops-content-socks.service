@@ -7,7 +7,6 @@ Wants=network-online.target
 Type=simple
 # WorkingDirectory and EnvironmentFile are rewritten by: ./ops-content.sh install-service
 WorkingDirectory=/REPLACE/ops-content
-EnvironmentFile=-/REPLACE/ops-content/.env
 Environment=PYTHONUNBUFFERED=1
 ExecStart=/REPLACE/ops-content/modes/socks/run-tunnel.sh
 Restart=on-failure

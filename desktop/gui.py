@@ -12,13 +12,7 @@ from typing import Any, Callable
 
 from desktop import __version__
 from desktop.client import OpsClient
-from desktop.config_io import (
-    apply_dotenv,
-    load_config,
-    load_dotenv,
-    save_config,
-    save_dotenv,
-)
+from desktop.config_io import apply_config, load_config, save_config
 from desktop.paths import Paths, bundle_dir
 
 
@@ -193,7 +187,8 @@ class App:
     def __init__(self) -> None:
         self.paths = Paths()
         self.paths.ensure_dirs()
-        apply_dotenv(self.paths.env_path)
+        if self.paths.config_path.is_file():
+            apply_config(self.paths.config_path, env_path=self.paths.env_path)
         self.log_q: queue.Queue[str] = queue.Queue()
         self.client = OpsClient(paths=self.paths, log=self._enqueue_log)
 
@@ -228,10 +223,10 @@ class App:
         self._enqueue_log(f"ops-content {__version__}")
         self._enqueue_log(f"данные: {self.paths.root}")
 
-        if not self.paths.config_path.is_file() or not self.paths.env_path.is_file():
+        if not self.paths.config_path.is_file():
             try:
                 self.client.init()
-                self._enqueue_log("Созданы config.json и .env")
+                self._enqueue_log("Создан config.json")
             except Exception as exc:  # noqa: BLE001
                 self._enqueue_log(f"инициализация: {exc}")
 
@@ -502,7 +497,6 @@ class App:
             "TUN": tk.StringVar(value="0"),
             "TUN_ELEVATE": tk.StringVar(value="1"),
             "HTTP_BRIDGE_PORT": tk.StringVar(value="1088"),
-            "CORPORATE_PROXY": tk.StringVar(value=""),
             "corporate_proxy": tk.StringVar(value=""),
             "server_host": tk.StringVar(value=""),
             "server_port": tk.StringVar(value="443"),
@@ -543,8 +537,7 @@ class App:
             (
                 "Прокси и исключения",
                 [
-                    ("Корп. прокси (.env)", "CORPORATE_PROXY", None),
-                    ("Корп. прокси (config)", "corporate_proxy", None),
+                    ("Корп. прокси", "corporate_proxy", None),
                     ("Исключения (через запятую)", "proxy_bypass", None),
                     ("Исключения идут", "proxy_bypass_via", "choice"),
                     ("Путь к sing-box", "sing_box_path", "file"),
@@ -667,50 +660,44 @@ class App:
             self.vars[key].set(path)
 
     def _load_settings(self) -> None:
-        env = load_dotenv(self.paths.env_path)
-        self.vars["SOCKS_SCOPE"].set(env.get("SOCKS_SCOPE", "full") or "full")
-        self.vars["TUN"].set(env.get("TUN", "0") or "0")
-        self.vars["TUN_ELEVATE"].set(env.get("TUN_ELEVATE", "1") or "1")
-        self.vars["HTTP_BRIDGE_PORT"].set(env.get("HTTP_BRIDGE_PORT", "1088") or "1088")
-        self.vars["CORPORATE_PROXY"].set(env.get("CORPORATE_PROXY", "") or "")
-        if self.paths.config_path.is_file():
-            cfg = load_config(self.paths.config_path)
-            server = cfg.get("server") or cfg.get("ssh") or {}
-            tun = cfg.get("tun") or {}
-            self.vars["corporate_proxy"].set(str(cfg.get("corporate_proxy") or ""))
-            self.vars["server_host"].set(str(server.get("host") or ""))
-            self.vars["server_port"].set(str(server.get("port") or 443))
-            self.vars["server_socks"].set(str(server.get("local_socks_port") or 1080))
-            bypass = cfg.get("proxy_bypass") or []
-            self.vars["proxy_bypass"].set(", ".join(str(x) for x in bypass))
-            self.vars["proxy_bypass_via"].set(str(cfg.get("proxy_bypass_via") or "direct"))
-            self.vars["sing_box_path"].set(str(tun.get("sing_box_path") or ""))
-            tr = cfg.get("transport") or {}
-            self.vars["tr_uuid"].set(str(tr.get("uuid") or ""))
-            self.vars["tr_public_key"].set(str(tr.get("public_key") or ""))
-            self.vars["tr_short_id"].set(str(tr.get("short_id") or ""))
-            self.vars["tr_server_name"].set(
-                str(tr.get("server_name") or "www.cloudflare.com")
-            )
-            self.vars["tr_port"].set(str(tr.get("port") or 443))
+        if not self.paths.config_path.is_file():
+            return
+        cfg = load_config(self.paths.config_path)
+        server = cfg.get("server") or cfg.get("ssh") or {}
+        tun = cfg.get("tun") or {}
+        self.vars["SOCKS_SCOPE"].set(str(cfg.get("socks_scope") or "full"))
+        self.vars["TUN"].set("1" if tun.get("enabled") else "0")
+        self.vars["TUN_ELEVATE"].set("0" if tun.get("elevate") is False else "1")
+        self.vars["HTTP_BRIDGE_PORT"].set(str(cfg.get("http_bridge_port") or 1088))
+        self.vars["corporate_proxy"].set(str(cfg.get("corporate_proxy") or ""))
+        self.vars["server_host"].set(str(server.get("host") or ""))
+        self.vars["server_port"].set(str(server.get("port") or 443))
+        self.vars["server_socks"].set(str(server.get("local_socks_port") or 1080))
+        bypass = cfg.get("proxy_bypass") or []
+        self.vars["proxy_bypass"].set(", ".join(str(x) for x in bypass))
+        self.vars["proxy_bypass_via"].set(str(cfg.get("proxy_bypass_via") or "direct"))
+        self.vars["sing_box_path"].set(str(tun.get("sing_box_path") or ""))
+        tr = cfg.get("transport") or {}
+        self.vars["tr_uuid"].set(str(tr.get("uuid") or ""))
+        self.vars["tr_public_key"].set(str(tr.get("public_key") or ""))
+        self.vars["tr_short_id"].set(str(tr.get("short_id") or ""))
+        self.vars["tr_server_name"].set(
+            str(tr.get("server_name") or "www.cloudflare.com")
+        )
+        self.vars["tr_port"].set(str(tr.get("port") or 443))
 
     def _save_settings(self) -> None:
         try:
-            env_vals = {
-                "SOCKS_SCOPE": self.vars["SOCKS_SCOPE"].get().strip(),
-                "TUN": self.vars["TUN"].get().strip() or "0",
-                "TUN_ELEVATE": self.vars["TUN_ELEVATE"].get().strip() or "1",
-                "HTTP_BRIDGE_PORT": self.vars["HTTP_BRIDGE_PORT"].get().strip(),
-                "CORPORATE_PROXY": self.vars["CORPORATE_PROXY"].get().strip(),
-            }
-            save_dotenv(self.paths.env_path, env_vals)
-            apply_dotenv(self.paths.env_path)
             if self.paths.config_path.is_file():
                 cfg = load_config(self.paths.config_path)
             else:
                 from desktop.config_io import default_config_template
 
                 cfg = default_config_template()
+            cfg["socks_scope"] = self.vars["SOCKS_SCOPE"].get().strip() or "full"
+            cfg["http_bridge_port"] = int(
+                self.vars["HTTP_BRIDGE_PORT"].get().strip() or "1088"
+            )
             cfg["corporate_proxy"] = self.vars["corporate_proxy"].get().strip()
             cfg.pop("ssh", None)
             cfg["server"] = {
@@ -723,6 +710,12 @@ class App:
             cfg["proxy_bypass"] = [x.strip() for x in raw_bypass.split(",") if x.strip()]
             cfg["proxy_bypass_via"] = self.vars["proxy_bypass_via"].get().strip() or "direct"
             cfg.setdefault("tun", {})
+            cfg["tun"]["enabled"] = self.vars["TUN"].get().strip() in ("1", "true", "yes")
+            cfg["tun"]["elevate"] = self.vars["TUN_ELEVATE"].get().strip() not in (
+                "0",
+                "false",
+                "no",
+            )
             cfg["tun"]["sing_box_path"] = self.vars["sing_box_path"].get().strip()
             cfg.setdefault("transport", {})
             cfg["transport"]["type"] = "vless-reality"
@@ -734,6 +727,7 @@ class App:
             )
             cfg["transport"]["port"] = int(self.vars["tr_port"].get().strip() or "443")
             save_config(self.paths.config_path, cfg)
+            apply_config(self.paths.config_path, force=True)
             self._enqueue_log("Настройки сохранены")
             messagebox.showinfo(
                 "ops-content",

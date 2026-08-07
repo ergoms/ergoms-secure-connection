@@ -1,5 +1,11 @@
 {
   "corporate_proxy": "192.0.2.10:3128",
+  "socks_scope": "full",
+  "http_bridge_port": 1088,
+  "pac_listen_port": 1089,
+  "watchdog": true,
+  "watchdog_interval": 15,
+  "watchdog_max_retries": 5,
   "server": {
     "host": "YOUR_VPS_IP_OR_HOSTNAME",
     "port": 443,
@@ -40,6 +46,8 @@
   ],
   "proxy_bypass_via": "direct",
   "tun": {
+    "enabled": false,
+    "elevate": true,
     "sing_box_path": "",
     "mtu": 1500
   },
