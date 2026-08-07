@@ -1,5 +1,7 @@
 # Live site config (keep local)
 config.json
+config.json.enc
+*.enc
 
 # Tooling
 .tools/
@@ -24,6 +26,7 @@ var/*
 
 # Legacy root leftovers (if any)
 .env
+.env.migrated
 .cf_token
 .deno_token
 .netlify_token

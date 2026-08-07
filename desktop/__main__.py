@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import getpass
 import os
 import sys
 from pathlib import Path
@@ -27,6 +28,8 @@ COMMANDS = (
     "docker-env",
     "docker-test",
     "watch",
+    "encrypt",
+    "decrypt",
     "gui",
     "help",
 )
@@ -59,11 +62,11 @@ def _show_help() -> int:
     print(
         """ops-content — клиент VLESS+Reality (Windows / Linux)
 
-Конфиг: .env + config.json  (образцы в config/)
+Конфиг: один файл config.json  (образец: config/config.example.json)
 
 Команды (одинаковы везде):
-  init                 создать .env / config.json
-  on / off             включить / выключить (+ TUN если TUN=1)
+  init                 создать config.json
+  on / off             включить / выключить (+ TUN если tun.enabled)
   start / stop         то же, что on / off
   status               состояние
   probe HOST [PORT]    CONNECT через Squid
@@ -73,6 +76,8 @@ def _show_help() -> int:
   docker-env           var/docker.env + compose (прокси для контейнеров)
   docker-test          проверка: curl из контейнера через мост
   watch                следить и переподключать (Ctrl+C)
+  encrypt [OUT]        зашифровать config.json для передачи (пароль)
+  decrypt [IN]         расшифровать в config.json
   gui                  окно (нужен дисплей)
   help
 
@@ -87,7 +92,84 @@ def _show_help() -> int:
     return 0
 
 
+def _parse_password_args(rest: list[str]) -> tuple[list[str], str | None]:
+    password: str | None = None
+    out: list[str] = []
+    i = 0
+    while i < len(rest):
+        arg = rest[i]
+        if arg in ("-p", "--password") and i + 1 < len(rest):
+            password = rest[i + 1]
+            i += 2
+            continue
+        if arg.startswith("--password="):
+            password = arg.split("=", 1)[1]
+            i += 1
+            continue
+        out.append(arg)
+        i += 1
+    return out, password
+
+
+def _ask_password(*, confirm: bool = False) -> str:
+    password = getpass.getpass("Password: ")
+    if not password:
+        raise SystemExit("Password is required")
+    if confirm:
+        again = getpass.getpass("Confirm password: ")
+        if password != again:
+            raise SystemExit("Passwords do not match")
+    return password
+
+
+def _run_encrypt(rest: list[str]) -> int:
+    from desktop.config_crypto import encrypt_file
+    from desktop.config_io import apply_config, invoke_init
+    from desktop.paths import Paths
+
+    paths = Paths()
+    paths.ensure_dirs()
+    if not paths.config_path.is_file():
+        invoke_init(paths)
+    args, password = _parse_password_args(rest)
+    out = Path(args[0]) if args else paths.root / "config.json.enc"
+    if not out.is_absolute():
+        out = Path.cwd() / out
+    password = password or _ask_password(confirm=True)
+    apply_config(paths.config_path, force=True, env_path=paths.env_path)
+    encrypt_file(paths.config_path, out, password)
+    print(f"[ops-content] encrypted → {out}")
+    return 0
+
+
+def _run_decrypt(rest: list[str]) -> int:
+    from desktop.config_crypto import decrypt_file
+    from desktop.config_io import apply_config, ensure_config_defaults, save_config
+    from desktop.paths import Paths
+
+    paths = Paths()
+    paths.ensure_dirs()
+    args, password = _parse_password_args(rest)
+    src = Path(args[0]) if args else paths.root / "config.json.enc"
+    if not src.is_absolute():
+        src = Path.cwd() / src
+    if not src.is_file():
+        print(f"[ops-content] ERROR: file not found: {src}", file=sys.stderr)
+        return 1
+    password = password or _ask_password(confirm=False)
+    cfg = decrypt_file(src, paths.config_path, password)
+    save_config(paths.config_path, ensure_config_defaults(cfg))
+    apply_config(paths.config_path, force=True)
+    print(f"[ops-content] decrypted → {paths.config_path}")
+    return 0
+
+
 def _run_cli(cmd: str, rest: list[str]) -> int:
+    if cmd == "encrypt":
+        return _run_encrypt(rest)
+    if cmd == "decrypt":
+        return _run_decrypt(rest)
+
     from desktop.client import OpsClient
 
     def log(msg: str) -> None:

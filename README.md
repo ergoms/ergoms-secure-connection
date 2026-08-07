@@ -38,7 +38,7 @@ bash modes/vps/bootstrap_singbox_443.sh
 
 То же: `python -m desktop …` или `./ops-content.sh …`.
 
-В `.env`: `TUN=1` поднимает TUN вместе с `on`. Опционально `pip install -r requirements-desktop.txt` для GUI-трея (`python -m desktop gui`).
+В `config.json`: `"tun": { "enabled": true }` поднимает TUN вместе с `on`. Опционально `pip install -r requirements-desktop.txt` для GUI-трея (`python -m desktop gui`).
 
 Локально после `on`: SOCKS `:1080`, HTTP `:1088`, PAC `:1089`.
 
@@ -46,14 +46,29 @@ bash modes/vps/bootstrap_singbox_443.sh
 
 ## Настройки
 
-| Путь | Назначение |
+Всё в одном файле `config.json` (образец: `config/config.example.json`).
+
+| Ключ | Назначение |
 |------|------------|
-| `config.json` → `server.host` | IP/hostname VPS |
-| `config.json` → `transport` | uuid, public_key, short_id, server_name |
-| `.env` → `TUN`, `SOCKS_SCOPE` | TUN и область PAC |
+| `server.host` | IP/hostname VPS |
+| `transport` | uuid, public_key, short_id, server_name |
+| `socks_scope` | `full` или `github` (область PAC) |
+| `tun.enabled` / `tun.elevate` | TUN вместе с `on`, запрос прав |
+| `corporate_proxy` | корпоративный Squid |
 | `tun.sing_box_path` | пусто = авто `tools/sing-box` |
 
-Образцы: `config/config.example.json`, `config/.env.example`.
+Старый `.env` при `init` один раз мигрируется в `config.json`.
+
+### Передача конфига (шифрование)
+
+```powershell
+.\ops-content.ps1 encrypt                  # → config.json.enc (спросит пароль)
+.\ops-content.ps1 encrypt share.enc -p '…' # свой путь / пароль в аргументе
+# на другом ПК:
+.\ops-content.ps1 decrypt share.enc
+```
+
+Формат: пароль + PBKDF2-HMAC-SHA256 + HMAC-CTR + HMAC-SHA256 (без внешних зависимостей).
 
 ---
 
@@ -61,10 +76,11 @@ bash modes/vps/bootstrap_singbox_443.sh
 
 | Команда | Смысл |
 |---------|--------|
-| `init` | Создать `.env` / `config.json` |
+| `init` | Создать `config.json` |
 | `on` / `off` | Включить / выключить |
 | `status` / `probe` / `test` | Состояние и проверки |
 | `tun-on` / `tun-off` | TUN |
+| `encrypt` / `decrypt` | Зашифровать / расшифровать конфиг |
 | `download-sing-box` | Скачать бинарник в `tools/` |
 | `docker-env` / `docker-test` | Прокси для контейнеров |
 | `gui` | Окно |
@@ -85,4 +101,4 @@ ops-content/
 └── modes/vps/         bootstrap sing-box на :443
 ```
 
-Не коммитьте `.env`, `config.json`, `creds/`, `logs/`, `var/`.
+Не коммитьте `config.json`, `config.json.enc`, `creds/`, `logs/`, `var/`.

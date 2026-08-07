@@ -15,7 +15,7 @@ from typing import Any, Callable
 from desktop import procutil
 from desktop.bridge import HttpBridge
 from desktop.config_io import (
-    apply_dotenv,
+    apply_config,
     get_http_bridge_port,
     get_local_socks_port,
     get_mode,
@@ -31,7 +31,7 @@ from desktop.config_io import (
     invoke_init,
     load_config,
     resolve_corporate_proxy,
-    update_env_key,
+    update_config_key,
 )
 from desktop.docker_env import clear_docker_env, docker_smoke_test, write_docker_env
 from desktop.git_proxy import (
@@ -124,7 +124,8 @@ class OpsClient:
         self.log = log
         self.bridge = HttpBridge()
         self.paths.ensure_dirs()
-        apply_dotenv(self.paths.env_path)
+        if self.paths.config_path.is_file():
+            apply_config(self.paths.config_path, env_path=self.paths.env_path)
         self.tun = TunManager(
             self.paths.var_dir,
             self.paths.tools_dir,
@@ -139,7 +140,12 @@ class OpsClient:
         )
 
     def reload_env(self) -> None:
-        apply_dotenv(self.paths.env_path)
+        if self.paths.config_path.is_file():
+            apply_config(
+                self.paths.config_path,
+                force=True,
+                env_path=self.paths.env_path,
+            )
 
     def init(self) -> None:
         invoke_init(self.paths, log=self.log)
@@ -804,18 +810,16 @@ class OpsClient:
     def enable_tun(self, *, persist: bool = True) -> None:
         self.reload_env()
         if persist:
-            update_env_key(self.paths.env_path, "TUN", "1")
-            self.log("TUN=1 записан в .env")
-            apply_dotenv(self.paths.env_path, force=True)
+            update_config_key(self.paths.config_path, "tun.enabled", True)
+            self.log("tun.enabled=true записан в config.json")
         # Restart sing-box process with TUN inbound
         self.start_singbox_mode()
 
     def disable_tun(self, *, persist: bool = True) -> None:
         self.reload_env()
         if persist:
-            update_env_key(self.paths.env_path, "TUN", "0")
-            self.log("TUN=0 записан в .env")
-            apply_dotenv(self.paths.env_path, force=True)
+            update_config_key(self.paths.config_path, "tun.enabled", False)
+            self.log("tun.enabled=false записан в config.json")
         if self.singbox.running() or (
             self.paths.state_path.is_file()
             and "singbox"
@@ -842,13 +846,13 @@ class OpsClient:
     def _maybe_autostart_tun(self) -> None:
         self.reload_env()
         if not get_tun_enabled():
-            self.log("TUN=0 (.env) — системный TUN не поднимаем")
+            self.log("tun.enabled=false — системный TUN не поднимаем")
             self.log(
                 "Без TUN DNS в Docker Desktop часто мёртв "
-                "(getent/pip к внешним именам). Нужен TUN=1 или HTTP_PROXY из var/docker.env"
+                "(getent/pip к внешним именам). Нужен tun.enabled=true или HTTP_PROXY из var/docker.env"
             )
             return
-        self.log("TUN=1 (.env) — поднимаем TUN поверх SOCKS (нужен для DNS в Docker)")
+        self.log("tun.enabled=true — поднимаем TUN поверх SOCKS (нужен для DNS в Docker)")
         try:
             self.enable_tun(persist=False)
         except Exception as exc:  # noqa: BLE001
@@ -972,7 +976,7 @@ class OpsClient:
         info["tun_env"] = get_tun_enabled()
         lines.append("mode             = vless-reality")
         lines.append(f"SOCKS_SCOPE       = {info['socks_scope']}")
-        lines.append(f"TUN (.env)        = {1 if info['tun_env'] else 0}")
+        lines.append(f"tun.enabled       = {1 if info['tun_env'] else 0}")
         if include_git:
             info["git_http_proxy"] = git_get("http.proxy")
             info["git_https_proxy"] = git_get("https.proxy")

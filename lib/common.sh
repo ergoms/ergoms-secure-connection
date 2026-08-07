@@ -12,9 +12,9 @@ LOGS_DIR="$ROOT/logs"
 VAR_DIR="$ROOT/var"
 CONFIG_PATH="$ROOT/config.json"
 CONFIG_EXAMPLE_PATH="$CONFIG_DIR/config.example.json"
-ENV_EXAMPLE_PATH="$CONFIG_DIR/.env.example"
 ENV_PATH="$ROOT/.env"
 ENV_LEGACY_PATH="$CREDS_DIR/.env"
+CONFIG_ENC_PATH="$ROOT/config.json.enc"
 KNOWN_HOSTS_PATH="$CREDS_DIR/ssh_known_hosts"
 PID_PATH="$VAR_DIR/ssh.pid"
 STATE_PATH="$VAR_DIR/state.json"
@@ -36,6 +36,7 @@ _migrate_one() {
 harden_creds_perms() {
   # Best-effort: keep secrets readable only by the user
   chmod 700 "$CREDS_DIR" 2>/dev/null || true
+  [[ -f "$CONFIG_PATH" ]] && chmod 600 "$CONFIG_PATH" 2>/dev/null || true
   [[ -f "$ENV_PATH" ]] && chmod 600 "$ENV_PATH" 2>/dev/null || true
   [[ -f "$KNOWN_HOSTS_PATH" ]] && chmod 600 "$KNOWN_HOSTS_PATH" 2>/dev/null || true
 }
@@ -59,7 +60,6 @@ ensure_data_dirs() {
   _migrate_one "$ROOT/.ops-content.proxy.cmd" "$VAR_DIR/proxy.cmd" "proxy.cmd -> var/"
   _migrate_one "$ROOT/.ops-content.env" "$ENV_EXPORT_PATH" "cli.env -> var/"
   # legacy examples → config/
-  _migrate_one "$ROOT/.env.example" "$ENV_EXAMPLE_PATH" ".env.example -> config/"
   _migrate_one "$ROOT/config.example.json" "$CONFIG_EXAMPLE_PATH" "config.example.json -> config/"
   # legacy helpers → lib/
   _migrate_one "$ROOT/connect_proxy.py" "$CONNECT_PY" "connect_proxy.py -> lib/"
@@ -71,10 +71,58 @@ ok() { printf '\033[32m[ops-content]\033[0m %s\n' "$*"; }
 warn() { printf '\033[33m[ops-content]\033[0m %s\n' "$*"; }
 die() { printf '\033[31m[ops-content]\033[0m %s\n' "$*" >&2; exit 1; }
 
+load_config_runtime() {
+  # Export runtime switches from config.json (and optional legacy .env overlay)
+  ensure_data_dirs
+  require_config
+  local py path
+  py="$(find_python)"
+  path="$(_py_path "$CONFIG_PATH")"
+  # shellcheck disable=SC2094
+  eval "$("$py" - "$path" <<'PY'
+import json, sys
+from pathlib import Path
+
+cfg_path = Path(sys.argv[1])
+cfg = json.loads(cfg_path.read_text(encoding="utf-8-sig"))
+
+def truthy(v, default=False):
+    if v is None or v == "":
+        return default
+    if isinstance(v, bool):
+        return v
+    return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+tun = cfg.get("tun") if isinstance(cfg.get("tun"), dict) else {}
+scope = cfg.get("socks_scope") or "full"
+http_port = cfg.get("http_bridge_port") or 1088
+pac_port = cfg.get("pac_listen_port") or 1089
+tun_on = tun.get("enabled", False)
+elevate = tun.get("elevate", True)
+corp = cfg.get("corporate_proxy") or "10.16.0.8:3128"
+corp = str(corp).replace("http://", "").replace("https://", "").strip("/")
+
+def sh(s):
+    return "'" + str(s).replace("'", "'\\''") + "'"
+
+print(f"export SOCKS_SCOPE={sh(str(scope).lower())}")
+print(f"export HTTP_BRIDGE_PORT={sh(http_port)}")
+print(f"export PAC_LISTEN_PORT={sh(pac_port)}")
+print(f"export TUN={sh('1' if truthy(tun_on) else '0')}")
+print(f"export TUN_ELEVATE={sh('1' if truthy(elevate, True) else '0')}")
+print(f"export CORPORATE_PROXY={sh(corp)}")
+PY
+)"
+}
+
+# Back-compat name used by older scripts
 load_dotenv() {
+  if [[ -f "$CONFIG_PATH" ]]; then
+    load_config_runtime
+    return 0
+  fi
   ensure_data_dirs
   local path="${1:-$ENV_PATH}"
-  # fallback: legacy creds/.env
   if [[ ! -f "$path" && -f "$ENV_LEGACY_PATH" ]]; then
     path="$ENV_LEGACY_PATH"
   fi
@@ -93,14 +141,18 @@ load_dotenv() {
     val="${val%\"}"; val="${val#\"}"
     val="${val%\'}"; val="${val#\'}"
     [[ -z "$key" ]] && continue
-    # .env is source of truth for this project (stale exported MODE breaks switches)
     export "$key=$val"
   done <"$path"
 }
 
 get_socks_scope() {
   local s
-  s="$(printf '%s' "${SOCKS_SCOPE:-full}" | tr '[:upper:]' '[:lower:]')"
+  if [[ -z "${SOCKS_SCOPE:-}" && -f "$CONFIG_PATH" ]]; then
+    s="$(config_get socks_scope)"
+  else
+    s="${SOCKS_SCOPE:-full}"
+  fi
+  s="$(printf '%s' "$s" | tr '[:upper:]' '[:lower:]')"
   case "$s" in
     full|all|system) printf 'full' ;;
     github|pac|partial) printf 'github' ;;
@@ -109,7 +161,17 @@ get_socks_scope() {
 }
 
 http_bridge_port() {
-  printf '%s' "${HTTP_BRIDGE_PORT:-1088}"
+  if [[ -n "${HTTP_BRIDGE_PORT:-}" ]]; then
+    printf '%s' "$HTTP_BRIDGE_PORT"
+    return
+  fi
+  if [[ -f "$CONFIG_PATH" ]]; then
+    local p
+    p="$(config_get http_bridge_port)"
+    printf '%s' "${p:-1088}"
+    return
+  fi
+  printf '1088'
 }
 
 get_mode() {
@@ -132,7 +194,7 @@ _py_path() {
 }
 
 config_get() {
-  # config_get 'corporate_proxy' or 'ssh.host' → value
+  # config_get 'corporate_proxy' or 'server.host' / legacy 'ssh.host' → value
   local expr="$1" py path
   py="$(find_python)"
   path="$(_py_path "$CONFIG_PATH")"
@@ -140,16 +202,21 @@ config_get() {
 import json, sys
 path, expr = sys.argv[1], sys.argv[2]
 data = json.loads(open(path, encoding="utf-8-sig").read())
+# legacy ssh.* → server.*
+parts = [p for p in expr.lstrip(".").split(".") if p]
+if parts and parts[0] == "ssh":
+    parts[0] = "server"
 cur = data
-for part in expr.lstrip(".").split("."):
-    if not part:
-        continue
+for part in parts:
     if isinstance(cur, dict) and part in cur:
         cur = cur[part]
     else:
         print("")
         raise SystemExit(0)
-print("" if cur is None else cur)
+if isinstance(cur, bool):
+    print("1" if cur else "0")
+else:
+    print("" if cur is None else cur)
 PY
 }
 
