@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 from desktop import procutil
 from desktop.tun import (
+    RUSTDESK_PORTS,
     TunManager,
     _direct_python_paths,
     _resolve_host,
@@ -148,7 +149,21 @@ class SingboxModeManager:
         ]
 
         rules: list[dict[str, Any]] = []
-        # Dial Squid / avoid looping VPS through TUN
+        # Dial Squid / avoid looping VPS:443 through TUN.
+        # Office RST-kills :21114/:21116 on the VPS IP — send those via VLESS :443.
+        vpn_port = int(transport.get("port") or 443)
+        vps_ip = _resolve_host(server_host)
+        if vps_ip:
+            rules.append(
+                {"ip_cidr": [f"{vps_ip}/32"], "port": vpn_port, "outbound": "direct"}
+            )
+            rules.append(
+                {
+                    "ip_cidr": [f"{vps_ip}/32"],
+                    "port": RUSTDESK_PORTS,
+                    "outbound": "proxy",
+                }
+            )
         if exclude_ips:
             rules.append(
                 {"ip_cidr": [f"{ip}/32" for ip in exclude_ips], "outbound": "direct"}
