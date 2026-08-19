@@ -125,6 +125,47 @@ def _direct_python_paths() -> list[str]:
     return found
 
 
+def _remote_desktop_process_names() -> list[str]:
+    """Kept for optional TUN bypass; ID/relay on the VPN VPS must use VLESS (office RST on :21116)."""
+    return ["rustdesk.exe", "RustDesk.exe"]
+
+
+RUSTDESK_PORTS = [21114, 21115, 21116, 21117, 21118, 21119]
+
+
+def _remote_desktop_process_paths() -> list[str]:
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def add(p: Path) -> None:
+        if not p.is_file():
+            return
+        resolved = p.resolve()
+        key = str(resolved).lower()
+        if key in seen:
+            return
+        seen.add(key)
+        found.append(str(resolved).replace("\\", "/"))
+
+    if sys.platform == "win32":
+        local = os.environ.get("LOCALAPPDATA") or ""
+        roots = [
+            Path(r"C:\Program Files\RustDesk"),
+            Path(r"C:\Program Files (x86)\RustDesk"),
+        ]
+        if local:
+            roots.extend([Path(local) / "rustdesk", Path(local) / "RustDesk"])
+        for root in roots:
+            add(root / "rustdesk.exe")
+            add(root / "RustDesk.exe")
+    else:
+        for name in ("rustdesk",):
+            w = shutil.which(name)
+            if w:
+                add(Path(w))
+    return found
+
+
 class TunManager:
     """Start/stop sing-box TUN that forwards into an existing local SOCKS5."""
 
@@ -247,6 +288,8 @@ class TunManager:
         rules: list[dict[str, Any]] = []
         ips = [ip for ip in exclude_ips if ip]
         if ips:
+            rules.append({"ip_cidr": [f"{ip}/32" for ip in ips], "port": 443, "outbound": "direct"})
+            rules.append({"ip_cidr": [f"{ip}/32" for ip in ips], "port": RUSTDESK_PORTS, "outbound": "socks-out"})
             rules.append({"ip_cidr": [f"{ip}/32" for ip in ips], "outbound": "direct"})
         bypass_suffixes, bypass_domains = bypass_to_singbox(bypass_hosts or [])
         if bypass_suffixes:
