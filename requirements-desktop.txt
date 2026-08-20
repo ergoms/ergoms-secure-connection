@@ -1,3 +1,3 @@
-# Optional GUI tray (CLI works without these)
-pystray>=0.19
-Pillow>=10.0
+# Optional GUI (CLI works without these)
+# Essentials: Qt Quick / Widgets / QML — без Qt3D/Charts (~170MB)
+PySide6_Essentials>=6.6
