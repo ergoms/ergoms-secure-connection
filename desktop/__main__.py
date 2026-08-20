@@ -78,7 +78,7 @@ def _show_help() -> int:
   watch                следить и переподключать (Ctrl+C)
   encrypt [OUT]        зашифровать config.json для передачи (пароль)
   decrypt [IN]         расшифровать в config.json
-  gui                  окно (нужен дисплей)
+  gui                  окно Qt Quick (нужен дисплей, pip install -r requirements-desktop.txt)
   help
 
 Транспорт: VLESS+Reality через корпоративный Squid на VPS :443

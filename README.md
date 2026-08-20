@@ -38,7 +38,7 @@ bash modes/vps/bootstrap_singbox_443.sh
 
 То же: `python -m desktop …` или `./ops-content.sh …`.
 
-В `config.json`: `"tun": { "enabled": true }` поднимает TUN вместе с `on`. Опционально `pip install -r requirements-desktop.txt` для GUI-трея (`python -m desktop gui`).
+В `config.json`: `"tun": { "enabled": true }` поднимает TUN вместе с `on`. Для окна: `pip install -r requirements-desktop.txt`, затем `python -m desktop gui`.
 
 Локально после `on`: SOCKS `:1080`, HTTP `:1088`, PAC `:1089`.
 
