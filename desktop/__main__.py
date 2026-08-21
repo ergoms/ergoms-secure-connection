@@ -251,9 +251,14 @@ def main(argv: list[str] | None = None) -> int:
     _ensure_utf8_stdio()
     argv = list(sys.argv[1:] if argv is None else argv)
 
-    # No args: help (explicit: gui)
+    # No args: GUI when frozen (double-click exe); else help
     if not argv:
-        if os.environ.get("OPS_CONTENT_GUI", "").strip() in ("1", "true", "yes"):
+        frozen = bool(getattr(sys, "frozen", False))
+        if frozen or os.environ.get("OPS_CONTENT_GUI", "").strip() in (
+            "1",
+            "true",
+            "yes",
+        ):
             return _run_gui()
         return _show_help()
 

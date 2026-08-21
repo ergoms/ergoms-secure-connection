@@ -2,19 +2,22 @@
 
 from __future__ import annotations
 
+import json
 import threading
 from pathlib import Path
 from typing import Any, Callable
 
 from PySide6.QtCore import Property, QObject, QTimer, Signal, Slot
 from PySide6.QtQml import QQmlPropertyMap
-from PySide6.QtWidgets import QFileDialog
+from PySide6.QtWidgets import QFileDialog, QInputDialog, QLineEdit
 
 from desktop import __version__
 from desktop.client import OpsClient
+from desktop.config_crypto import MAGIC, decrypt_config
 from desktop.config_io import (
     apply_config,
     default_config_template,
+    ensure_config_defaults,
     load_config,
     save_config,
 )
@@ -64,6 +67,7 @@ class GuiBridge(QObject):
     singboxUpChanged = Signal()
     powerTextChanged = Signal()
     tunButtonTextChanged = Signal()
+    configReadyChanged = Signal()
 
     _bgFinished = Signal(str)
     _statusReady = Signal(object, bool)
@@ -101,6 +105,7 @@ class GuiBridge(QObject):
         self._singbox_up = False
         self._power_text = "Подключить"
         self._tun_button_text = "TUN вкл"
+        self._config_ready = False
         self._last_status_sig = ""
         self._status_busy = False
         self._closing = False
@@ -124,6 +129,7 @@ class GuiBridge(QObject):
         self._enqueue_log(f"данные: {self.paths.root}")
 
         self.loadSettings()
+        self._sync_config_ready()
 
         self._status_timer = QTimer(self)
         self._status_timer.setSingleShot(True)
@@ -221,6 +227,10 @@ class GuiBridge(QObject):
     def tunButtonText(self) -> str:
         return self._tun_button_text
 
+    @Property(bool, notify=configReadyChanged)
+    def configReady(self) -> bool:
+        return self._config_ready
+
     @Property(str, constant=True)
     def version(self) -> str:
         return __version__
@@ -245,6 +255,9 @@ class GuiBridge(QObject):
     @Slot()
     def toggleConnection(self) -> None:
         if self._busy:
+            return
+        if not self._config_ready and not self._active:
+            self.importConfigFile()
             return
         if self._active:
             self._run_bg(self.client.disable, waiting="Отключение…")
@@ -303,6 +316,7 @@ class GuiBridge(QObject):
     @Slot()
     def loadSettings(self) -> None:
         if not self.paths.config_path.is_file():
+            self._sync_config_ready()
             return
         cfg = load_config(self.paths.config_path)
         server = cfg.get("server") or cfg.get("ssh") or {}
@@ -329,6 +343,70 @@ class GuiBridge(QObject):
             "trServerName", str(tr.get("server_name") or "www.cloudflare.com")
         )
         self._settings.insert("trPort", str(tr.get("port") or 443))
+        self._sync_config_ready()
+
+    @Slot()
+    def importConfigFile(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            None,
+            "Конфиг ops-content",
+            "",
+            "Config (*.json *.enc);;JSON (*.json);;Encrypted (*.enc);;All files (*)",
+        )
+        if not path:
+            return
+        try:
+            self._import_config_path(Path(path))
+        except Exception as exc:  # noqa: BLE001
+            self.toast.emit(str(exc), "error")
+
+    def _import_config_path(self, src: Path) -> None:
+        raw = src.read_bytes()
+        encrypted = raw.startswith(MAGIC) or src.suffix.lower() == ".enc"
+        if encrypted:
+            password, ok = QInputDialog.getText(
+                None,
+                "ops-content",
+                "Пароль к файлу:",
+                QLineEdit.EchoMode.Password,
+            )
+            if not ok or not password:
+                return
+            cfg = decrypt_config(raw, password)
+        else:
+            data = json.loads(raw.decode("utf-8-sig"))
+            if not isinstance(data, dict):
+                raise ValueError("Файл не JSON-объект")
+            cfg = data
+        cfg = ensure_config_defaults(cfg)
+        self.paths.ensure_dirs()
+        save_config(self.paths.config_path, cfg)
+        apply_config(self.paths.config_path, force=True)
+        self.loadSettings()
+        self._enqueue_log(f"Конфиг загружен из {src}")
+        self.toast.emit("Конфиг загружен", "info")
+        self._refresh_status(force=True)
+
+    def _sync_config_ready(self) -> None:
+        uuid = str(self._settings.value("trUuid") or "").strip()
+        host = str(self._settings.value("serverHost") or "").strip()
+        ready = (
+            bool(uuid)
+            and "REPLACE" not in uuid.upper()
+            and len(uuid) >= 8
+            and bool(host)
+            and "YOUR_VPS" not in host
+        )
+        if ready != self._config_ready:
+            self._config_ready = ready
+            self.configReadyChanged.emit()
+        if not ready and not self._active and not self._busy:
+            self._status_title = "Нет конфига"
+            self._status_sub = "Загрузите config.json или .enc"
+            self._power_text = "Загрузить конфиг"
+            self.statusTitleChanged.emit()
+            self.statusSubChanged.emit()
+            self.powerTextChanged.emit()
 
     @Slot()
     def saveSettings(self) -> None:
@@ -376,9 +454,10 @@ class GuiBridge(QObject):
             apply_config(self.paths.config_path, force=True)
             self._enqueue_log("Настройки сохранены")
             self.toast.emit(
-                "Сохранено. Если туннель был включён — выключите и включите снова.",
+                "Сохранено.\nЕсли туннель был включён — выключите и включите снова.",
                 "info",
             )
+            self._sync_config_ready()
             self._refresh_status(force=True)
         except Exception as exc:  # noqa: BLE001
             self.toast.emit(str(exc), "error")
@@ -561,8 +640,12 @@ class GuiBridge(QObject):
             title, sub, color = "Включено", "Активно", _C_OK
             power = "Отключить"
         else:
-            title, sub, color = "Отключено", "Нажмите «Подключить»", _C_MUTED
-            power = "Подключить"
+            title, sub, color = (
+                ("Нет конфига", "Загрузите config.json или .enc", _C_MUTED)
+                if not self._config_ready
+                else ("Отключено", "Нажмите «Подключить»", _C_MUTED)
+            )
+            power = "Загрузить конфиг" if not self._config_ready else "Подключить"
 
         self._status_title = title
         self._status_sub = sub

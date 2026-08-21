@@ -232,8 +232,8 @@ Item {
                 spacing: 8
                 PrimaryButton {
                     Layout.fillWidth: true
-                    text: "Загрузить"
-                    onClicked: bridge.loadSettings()
+                    text: "Из файла"
+                    onClicked: bridge.importConfigFile()
                 }
                 PrimaryButton {
                     Layout.fillWidth: true
