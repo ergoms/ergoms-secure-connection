@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from desktop import procutil
+from desktop.paths import bundle_dir, is_frozen
 from lib.http_via_socks import bypass_to_singbox
 
 LogFn = Callable[[str], None]
@@ -203,6 +204,9 @@ class TunManager:
         candidates: list[Path] = []
         if explicit:
             candidates.append(Path(explicit))
+        packed = self._materialize_bundled()
+        if packed:
+            candidates.append(packed)
         env = (os.environ.get("SING_BOX_PATH") or "").strip()
         if env:
             candidates.append(Path(env))
@@ -232,6 +236,29 @@ class TunManager:
             if sys.platform == "win32" or os.access(c, os.X_OK):
                 return c.resolve()
         return None
+
+    def _bundled_sing_box(self) -> Path | None:
+        packed = bundle_dir() / "tools" / self._bin_name()
+        if self._is_native_sing_box(packed):
+            return packed
+        return None
+
+    def _materialize_bundled(self) -> Path | None:
+        """Copy packed sing-box to writable tools/ (UAC + onefile temp)."""
+        src = self._bundled_sing_box()
+        if src is None:
+            return None
+        if not is_frozen():
+            return src
+        dest = self.tools_dir / src.name
+        try:
+            self.tools_dir.mkdir(parents=True, exist_ok=True)
+            if dest.is_file() and dest.stat().st_size == src.stat().st_size:
+                return dest
+            shutil.copy2(src, dest)
+            return dest
+        except OSError:
+            return src
 
     def build_config(
         self,

@@ -55,8 +55,7 @@ def data_root() -> Path:
     """Writable project root.
 
     - Dev: repository root
-    - Portable frozen: directory next to the exe
-    - Installed (Program Files / installed.flag): %LOCALAPPDATA%\\ops-content
+    - Frozen exe: %LOCALAPPDATA%\\ops-content (config imported via GUI)
     - Override: OPS_CONTENT_DATA
     """
     override = (os.environ.get("OPS_CONTENT_DATA") or "").strip()
@@ -64,10 +63,7 @@ def data_root() -> Path:
         return Path(override).expanduser()
 
     if is_frozen():
-        exe_dir = Path(sys.executable).resolve().parent
-        if (exe_dir / "installed.flag").is_file() or _under_program_files(exe_dir):
-            return _appdata_root()
-        return exe_dir
+        return _appdata_root()
 
     return Path(__file__).resolve().parent.parent
 
