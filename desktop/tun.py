@@ -301,6 +301,8 @@ class TunManager:
             "com.docker.backend.exe",
             "com.docker.build.exe",
             "com.docker.proxy.exe",
+            "com.docker.admin.exe",
+            "com.docker.dev-envs.exe",
             "Docker Desktop.exe",
             "docker.exe",
             "dockerd.exe",

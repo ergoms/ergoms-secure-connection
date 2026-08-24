@@ -141,6 +141,8 @@ class SingboxModeManager:
             "com.docker.backend.exe",
             "com.docker.build.exe",
             "com.docker.proxy.exe",
+            "com.docker.admin.exe",
+            "com.docker.dev-envs.exe",
             "Docker Desktop.exe",
             "docker.exe",
             "dockerd.exe",
@@ -174,6 +176,10 @@ class SingboxModeManager:
         if bypass_domains:
             rules.append({"domain": bypass_domains, "outbound": "direct"})
         rules.append({"port": 53, "action": "hijack-dns"})
+        # HTTP/SOCKS inbounds (Docker Desktop httpproxy, git, curl) must use
+        # VLESS. process_name docker→direct would steal CONNECT and send it
+        # out the office NIC.
+        rules.append({"inbound": ["socks-in", "http-in"], "outbound": "proxy"})
         rules.append({"process_name": docker_wsl_procs, "outbound": "direct"})
         rules.append({"process_name": proc_names, "outbound": "direct"})
         py_paths = _direct_python_paths()

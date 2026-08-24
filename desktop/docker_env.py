@@ -194,10 +194,14 @@ def write_docker_env(
     else:
         proxy_host = "host.docker.internal"
     proxy = f"http://{proxy_host}:{port}"
+    base_noproxy = (
+        "localhost,127.0.0.1,::1,host.docker.internal,"
+        "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+    )
     if proxy_ip:
-        noproxy = f"localhost,127.0.0.1,::1,host.docker.internal,{proxy_ip}"
+        noproxy = f"{base_noproxy},{proxy_ip}"
     else:
-        noproxy = "localhost,127.0.0.1,::1,host.docker.internal"
+        noproxy = base_noproxy
 
     if active:
         env_lines = [

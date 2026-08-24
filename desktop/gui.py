@@ -83,18 +83,26 @@ def _icon_path() -> Path | None:
 
 
 def _fallback_icon() -> QIcon:
-    from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
+    from PySide6.QtCore import QRectF, Qt
+    from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 
     pix = QPixmap(64, 64)
     pix.fill(QColor(0, 0, 0, 0))
     painter = QPainter(pix)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setBrush(QColor(45, 212, 168))
-    painter.setPen(QColor(0, 0, 0, 0))
-    painter.drawEllipse(6, 6, 52, 52)
-    painter.setBrush(QColor(16, 20, 26))
-    painter.drawRect(28, 16, 8, 32)
-    painter.drawRect(18, 28, 28, 8)
+    painter.setBrush(QColor(12, 16, 23))
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.drawRoundedRect(2, 2, 60, 60, 14, 14)
+    mint = QColor(45, 212, 168)
+    pen = QPen(mint)
+    pen.setWidth(6)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(pen)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.drawArc(QRectF(16, 16, 32, 32), 115 * 16, 310 * 16)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(mint)
+    painter.drawEllipse(28, 28, 8, 8)
     painter.end()
     return QIcon(pix)
 
