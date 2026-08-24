@@ -125,6 +125,7 @@ class Paths:
         self.docker_hosts = self.var_dir / "docker.hosts"
         self.docker_run_ps1 = self.var_dir / "docker-run.ps1"
         self.docker_run_sh = self.var_dir / "docker-run.sh"
+        self.docker_proxy_backup = self.var_dir / "docker-proxy.bak.json"
         self.watchdog_pid = self.var_dir / "watchdog.pid"
         self.proxy_cmd = self.var_dir / "proxy.cmd"
         self.connect_py = self.root / "lib" / "connect_proxy.py"

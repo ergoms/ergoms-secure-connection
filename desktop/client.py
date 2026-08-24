@@ -33,7 +33,8 @@ from desktop.config_io import (
     resolve_corporate_proxy,
     update_config_key,
 )
-from desktop.docker_env import clear_docker_env, docker_smoke_test, write_docker_env
+from desktop.docker_env import docker_smoke_test, write_docker_env
+from desktop.docker_proxy import disable_docker_desktop_proxy, enable_docker_desktop_proxy
 from desktop.git_proxy import (
     git_get,
     set_git_http_proxy,
@@ -595,15 +596,7 @@ class OpsClient:
         disable_browser_proxy(self.paths.proxy_backup, log=self.log)
         disable_linux_env_proxy(self.paths.env_proxy_backup, log=self.log)
         clear_git_proxy(self.paths.cli_env, self.paths.cli_ps1, log=self.log)
-        clear_docker_env(
-            self.paths.docker_env,
-            self.paths.docker_compose_proxy,
-            self.paths.docker_hosts,
-            http_port=get_http_bridge_port(),
-            log=self.log,
-            run_ps1=self.paths.docker_run_ps1,
-            run_sh=self.paths.docker_run_sh,
-        )
+        self.write_docker_helpers(http_port=get_http_bridge_port(), active=False)
         clear_instead_of(self.log)
         self.paths.state_path.unlink(missing_ok=True)
 
@@ -651,6 +644,14 @@ class OpsClient:
             run_ps1=self.paths.docker_run_ps1,
             run_sh=self.paths.docker_run_sh,
         )
+        if active:
+            enable_docker_desktop_proxy(
+                port, self.paths.docker_proxy_backup, log=self.log
+            )
+        else:
+            disable_docker_desktop_proxy(
+                self.paths.docker_proxy_backup, http_port=port, log=self.log
+            )
 
     def docker_env(self) -> None:
         """Refresh Docker helper files (proxy must already be up for full effect)."""
@@ -795,15 +796,7 @@ class OpsClient:
         socks_port = int((self.config().get("ssh") or {}).get("local_socks_port") or 1080)
         self._reap_socks_orphans(socks_port)
         clear_git_proxy(self.paths.cli_env, self.paths.cli_ps1, log=self.log)
-        clear_docker_env(
-            self.paths.docker_env,
-            self.paths.docker_compose_proxy,
-            self.paths.docker_hosts,
-            http_port=get_http_bridge_port(),
-            log=self.log,
-            run_ps1=self.paths.docker_run_ps1,
-            run_sh=self.paths.docker_run_sh,
-        )
+        self.write_docker_helpers(http_port=get_http_bridge_port(), active=False)
         clear_instead_of(self.log)
         self.paths.state_path.unlink(missing_ok=True)
 
