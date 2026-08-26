@@ -154,6 +154,7 @@ Item {
             Chip { label: "PAC :" + bridge.pacPort; lit: bridge.pacUp }
             Chip { label: "TUN"; lit: bridge.tun }
             Chip { label: "watchdog"; lit: bridge.watchdogUp }
+            Chip { label: "SSH :" + bridge.reverseSshPort; lit: bridge.reverseSshUp }
         }
 
         Text {

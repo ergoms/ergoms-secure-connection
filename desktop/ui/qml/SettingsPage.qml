@@ -82,6 +82,28 @@ Item {
                             label: "Порт HTTP-моста"
                             settingKey: "httpBridgePort"
                         }
+                        Text { text: "SSH с VPS на этот ПК"; color: T.muted; font.pixelSize: 11; font.family: T.fontUi }
+                        Segmented {
+                            width: parent.width
+                            value: bridge.settings.reverseSsh ? "1" : "0"
+                            model: [
+                                { label: "Выкл", value: "0" },
+                                { label: "Вкл", value: "1" }
+                            ]
+                            onActivated: (v) => { bridge.settings.reverseSsh = (v === "1") }
+                        }
+                        SettingField {
+                            label: "Порт на VPS (127.0.0.1)"
+                            settingKey: "reverseSshListen"
+                        }
+                        SettingField {
+                            label: "Пользователь SSH на VPS"
+                            settingKey: "reverseSshVpsUser"
+                        }
+                        SettingField {
+                            label: "Порт sshd на VPS"
+                            settingKey: "reverseSshVpsPort"
+                        }
                     }
                 }
 

@@ -12,7 +12,9 @@ from typing import Callable
 
 from desktop.client import OpsClient, _port_open
 from desktop.config_io import (
+    get_local_socks_port,
     get_mode,
+    get_reverse_ssh_enabled,
     get_tun_enabled,
     get_watchdog_enabled,
     get_watchdog_interval,
@@ -38,8 +40,7 @@ def _noop(_msg: str) -> None:
 
 def socks_port_from_client(client: OpsClient) -> int:
     try:
-        cfg = client.config()
-        return int((cfg.get("ssh") or {}).get("local_socks_port") or 1080)
+        return get_local_socks_port(client.config())
     except Exception:  # noqa: BLE001
         return 1080
 
@@ -283,6 +284,7 @@ class TunnelWatchdog:
                 self.log("watchdog: tunnel healthy again")
             self._fail_streak = 0
             self._probe_fails = 0
+            self._ensure_reverse_ssh()
             return
         else:
             # Hard failure (port closed / ssh dead) — reset soft probe counter
@@ -363,6 +365,20 @@ class TunnelWatchdog:
             self._notify("Ошибка переподключения", str(exc)[:120])
         finally:
             self._reconnecting = False
+
+    def _ensure_reverse_ssh(self) -> None:
+        if not get_reverse_ssh_enabled():
+            return
+        try:
+            if self.client.reverse_ssh.running():
+                return
+        except Exception:  # noqa: BLE001
+            return
+        self.log("watchdog: reverse-ssh down — поднимаю")
+        try:
+            self.client._maybe_start_reverse_ssh()  # noqa: SLF001
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"watchdog: reverse-ssh: {exc}")
 
     def _notify(self, title: str, message: str) -> None:
         if self.on_notify:
