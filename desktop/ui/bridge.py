@@ -64,6 +64,8 @@ class GuiBridge(QObject):
     httpUpChanged = Signal()
     pacUpChanged = Signal()
     watchdogUpChanged = Signal()
+    reverseSshUpChanged = Signal()
+    reverseSshPortChanged = Signal()
     singboxUpChanged = Signal()
     powerTextChanged = Signal()
     tunButtonTextChanged = Signal()
@@ -102,6 +104,8 @@ class GuiBridge(QObject):
         self._http_up = False
         self._pac_up = False
         self._watchdog_up = False
+        self._reverse_ssh_up = False
+        self._reverse_ssh_port = 2222
         self._singbox_up = False
         self._power_text = "Подключить"
         self._tun_button_text = "TUN вкл"
@@ -214,6 +218,14 @@ class GuiBridge(QObject):
     @Property(bool, notify=watchdogUpChanged)
     def watchdogUp(self) -> bool:
         return self._watchdog_up
+
+    @Property(bool, notify=reverseSshUpChanged)
+    def reverseSshUp(self) -> bool:
+        return self._reverse_ssh_up
+
+    @Property(int, notify=reverseSshPortChanged)
+    def reverseSshPort(self) -> int:
+        return self._reverse_ssh_port
 
     @Property(bool, notify=singboxUpChanged)
     def singboxUp(self) -> bool:
@@ -343,6 +355,11 @@ class GuiBridge(QObject):
             "trServerName", str(tr.get("server_name") or "www.cloudflare.com")
         )
         self._settings.insert("trPort", str(tr.get("port") or 443))
+        rev = cfg.get("reverse_ssh") or {}
+        self._settings.insert("reverseSsh", bool(rev.get("enabled")))
+        self._settings.insert("reverseSshListen", str(rev.get("listen_port") or 2222))
+        self._settings.insert("reverseSshVpsUser", str(rev.get("vps_user") or "root"))
+        self._settings.insert("reverseSshVpsPort", str(rev.get("vps_port") or 22))
         self._sync_config_ready()
 
     @Slot()
@@ -449,6 +466,17 @@ class GuiBridge(QObject):
             )
             cfg["transport"]["port"] = int(
                 str(s.value("trPort") or "443").strip() or "443"
+            )
+            cfg.setdefault("reverse_ssh", {})
+            cfg["reverse_ssh"]["enabled"] = bool(s.value("reverseSsh"))
+            cfg["reverse_ssh"]["listen_port"] = int(
+                str(s.value("reverseSshListen") or "2222").strip() or "2222"
+            )
+            cfg["reverse_ssh"]["vps_user"] = (
+                str(s.value("reverseSshVpsUser") or "").strip() or "root"
+            )
+            cfg["reverse_ssh"]["vps_port"] = int(
+                str(s.value("reverseSshVpsPort") or "22").strip() or "22"
             )
             save_config(self.paths.config_path, cfg)
             apply_config(self.paths.config_path, force=True)
@@ -600,7 +628,10 @@ class GuiBridge(QObject):
         active = bool(st.get("active")) or singbox
         scope = _scope_label(str(st.get("socks_scope") or ""))
         target = str(st.get("server_target") or st.get("ssh_target") or "—")
-        sig = f"{singbox}|{tun}|{active}|{scope}|{target}|{st.get('watchdog_running')}"
+        sig = (
+            f"{singbox}|{tun}|{active}|{scope}|{target}|{st.get('watchdog_running')}"
+            f"|{st.get('reverse_ssh_running')}|{st.get('reverse_ssh_listen')}"
+        )
         if not force and (sig == self._last_status_sig or self._busy):
             return
         self._last_status_sig = sig
@@ -609,6 +640,8 @@ class GuiBridge(QObject):
         self._tun = tun
         self._singbox_up = singbox
         self._watchdog_up = bool(st.get("watchdog_running"))
+        self._reverse_ssh_up = bool(st.get("reverse_ssh_running"))
+        self._reverse_ssh_port = int(st.get("reverse_ssh_listen") or 2222)
         self._socks_up = singbox
         self._http_up = singbox
         self._pac_up = singbox
@@ -656,6 +689,8 @@ class GuiBridge(QObject):
         self.tunChanged.emit()
         self.singboxUpChanged.emit()
         self.watchdogUpChanged.emit()
+        self.reverseSshUpChanged.emit()
+        self.reverseSshPortChanged.emit()
         self.socksUpChanged.emit()
         self.httpUpChanged.emit()
         self.pacUpChanged.emit()
@@ -690,6 +725,10 @@ def _settings_defaults() -> dict[str, Any]:
         "trShortId": "",
         "trServerName": "www.cloudflare.com",
         "trPort": "443",
+        "reverseSsh": False,
+        "reverseSshListen": "2222",
+        "reverseSshVpsUser": "root",
+        "reverseSshVpsPort": "22",
     }
 
 

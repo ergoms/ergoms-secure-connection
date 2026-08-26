@@ -58,5 +58,13 @@
     "short_id": "",
     "server_name": "www.cloudflare.com",
     "port": 443
+  },
+  "reverse_ssh": {
+    "enabled": false,
+    "vps_user": "root",
+    "vps_port": 22,
+    "listen_port": 2222,
+    "local_port": 22,
+    "identity_file": ""
   }
 }

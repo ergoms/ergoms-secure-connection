@@ -138,6 +138,14 @@ def default_config_template() -> dict[str, Any]:
             "server_name": "www.cloudflare.com",
             "port": 443,
         },
+        "reverse_ssh": {
+            "enabled": False,
+            "vps_user": "root",
+            "vps_port": 22,
+            "listen_port": 2222,
+            "local_port": 22,
+            "identity_file": "",
+        },
     }
 
 
@@ -173,6 +181,10 @@ def migrate_env_into_config(cfg: dict[str, Any], env: dict[str, str]) -> dict[st
     if "TUN_MTU" in env and env["TUN_MTU"].strip():
         mtu = _as_int(env["TUN_MTU"], 1500)
         tun["mtu"] = max(1280, min(1500, mtu))
+    if "REVERSE_SSH" in env:
+        rev = out.setdefault("reverse_ssh", {})
+        if isinstance(rev, dict):
+            rev["enabled"] = _as_bool(env["REVERSE_SSH"], False)
     return out
 
 
@@ -233,6 +245,23 @@ def ensure_config_defaults(cfg: dict[str, Any]) -> dict[str, Any]:
     transport.setdefault("short_id", "")
     transport.setdefault("server_name", "www.cloudflare.com")
     transport.setdefault("port", 443)
+
+    rev = out.setdefault("reverse_ssh", {})
+    if not isinstance(rev, dict):
+        rev = {}
+        out["reverse_ssh"] = rev
+    rev.setdefault("enabled", False)
+    rev.setdefault("vps_user", "root")
+    rev.setdefault("vps_port", 22)
+    rev.setdefault("listen_port", 2222)
+    rev.setdefault("local_port", 22)
+    rev.setdefault("identity_file", "")
+    rev["enabled"] = _as_bool(rev.get("enabled"), False)
+    rev["vps_port"] = max(1, min(65535, _as_int(rev.get("vps_port"), 22)))
+    rev["listen_port"] = max(1, min(65535, _as_int(rev.get("listen_port"), 2222)))
+    rev["local_port"] = max(1, min(65535, _as_int(rev.get("local_port"), 22)))
+    rev["vps_user"] = str(rev.get("vps_user") or "root").strip() or "root"
+    rev["identity_file"] = str(rev.get("identity_file") or "").strip()
 
     # Normalize scope
     scope = str(out.get("socks_scope") or "full").strip().lower()
@@ -364,6 +393,7 @@ def update_config_key(path: Path, key: str, value: Any) -> None:
         "WATCHDOG_MAX_RETRIES": ("watchdog_max_retries", value),
         "SING_BOX_PATH": ("tun.sing_box_path", value),
         "TUN_MTU": ("tun.mtu", value),
+        "REVERSE_SSH": ("reverse_ssh.enabled", value),
     }
     if key_u in mapping:
         target, raw = mapping[key_u]
@@ -382,8 +412,26 @@ def update_config_key(path: Path, key: str, value: Any) -> None:
             cfg["corporate_proxy"] = p.replace("http://", "").replace("https://", "").strip("/")
         elif target == "watchdog":
             cfg["watchdog"] = _as_bool(raw, True)
+        elif target == "reverse_ssh.enabled":
+            r = cfg.setdefault("reverse_ssh", {})
+            if not isinstance(r, dict):
+                r = {}
+                cfg["reverse_ssh"] = r
+            r["enabled"] = _as_bool(raw, False)
         elif target in ("http_bridge_port", "pac_listen_port", "watchdog_interval", "watchdog_max_retries"):
             cfg[target] = _as_int(raw, cfg.get(target) or 0)
+    elif key_u.startswith("reverse_ssh."):
+        r = cfg.setdefault("reverse_ssh", {})
+        if not isinstance(r, dict):
+            r = {}
+            cfg["reverse_ssh"] = r
+        sub = key_u.split(".", 1)[1]
+        if sub == "enabled":
+            r[sub] = _as_bool(value, False)
+        elif sub in ("vps_port", "listen_port", "local_port"):
+            r[sub] = max(1, min(65535, _as_int(value, 22)))
+        else:
+            r[sub] = value
     elif key_u.startswith("tun."):
         sub = key_u.split(".", 1)[1]
         if sub in ("enabled", "elevate"):
@@ -537,6 +585,33 @@ def get_sing_box_path(cfg: dict[str, Any] | None = None) -> str:
     return str(path)
 
 
+def get_reverse_ssh(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
+    src = cfg if cfg is not None else _runtime()
+    rev = src.get("reverse_ssh") if isinstance(src.get("reverse_ssh"), dict) else {}
+    return {
+        "enabled": _as_bool(rev.get("enabled"), False),
+        "vps_user": str(rev.get("vps_user") or "root").strip() or "root",
+        "vps_port": max(1, min(65535, _as_int(rev.get("vps_port"), 22))),
+        "listen_port": max(1, min(65535, _as_int(rev.get("listen_port"), 2222))),
+        "local_port": max(1, min(65535, _as_int(rev.get("local_port"), 22))),
+        "identity_file": str(rev.get("identity_file") or "").strip(),
+    }
+
+
+def get_reverse_ssh_enabled(cfg: dict[str, Any] | None = None) -> bool:
+    raw = os.environ.get("REVERSE_SSH")
+    if raw is not None and str(raw).strip() != "":
+        return _truthy(raw)
+    return bool(get_reverse_ssh(cfg).get("enabled"))
+
+
+def get_vps_proxy_ports(cfg: dict[str, Any] | None = None) -> list[int]:
+    """TCP ports on the VPS IP that must go via VLESS (office RST on :22)."""
+    rev = get_reverse_ssh(cfg)
+    ports = {22, int(rev.get("vps_port") or 22)}
+    return sorted(p for p in ports if 1 <= p <= 65535)
+
+
 def get_tun_mtu(cfg: dict[str, Any] | None = None) -> int:
     raw = (os.environ.get("TUN_MTU") or "").strip()
     if raw.isdigit():
@@ -589,7 +664,7 @@ def invoke_init(paths: Paths, log: LogFn = _noop) -> None:
 def merge_settings_to_config(cfg: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
     out = deepcopy(cfg)
     for k, v in updates.items():
-        if k in ("ssh", "server", "tun", "transport") and isinstance(v, dict):
+        if k in ("ssh", "server", "tun", "transport", "reverse_ssh") and isinstance(v, dict):
             out.setdefault(k, {}).update(v)
         else:
             out[k] = v

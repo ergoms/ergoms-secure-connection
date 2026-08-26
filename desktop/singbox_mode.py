@@ -101,6 +101,7 @@ class SingboxModeManager:
         enable_tun: bool,
         bypass_hosts: list[str] | None = None,
         mtu: int = 1400,
+        vps_proxy_ports: list[int] | None = None,
     ) -> dict[str, Any]:
         squid_host, squid_port = parse_corporate_proxy(corporate_proxy)
         if not squid_host:
@@ -166,6 +167,16 @@ class SingboxModeManager:
                     "outbound": "proxy",
                 }
             )
+            # Office RST on VPS :22. Reverse SSH and ssh-to-VPS must go via VLESS.
+            ssh_ports = [int(p) for p in (vps_proxy_ports or [22]) if 1 <= int(p) <= 65535]
+            if ssh_ports:
+                rules.append(
+                    {
+                        "ip_cidr": [f"{vps_ip}/32"],
+                        "port": ssh_ports if len(ssh_ports) > 1 else ssh_ports[0],
+                        "outbound": "proxy",
+                    }
+                )
         if exclude_ips:
             rules.append(
                 {"ip_cidr": [f"{ip}/32" for ip in exclude_ips], "outbound": "direct"}
@@ -357,6 +368,7 @@ class SingboxModeManager:
         elevate: bool = True,
         bypass_hosts: list[str] | None = None,
         mtu: int = 1400,
+        vps_proxy_ports: list[int] | None = None,
         force_restart: bool = False,
     ) -> None:
         exe = self.find_sing_box(sing_box_path)
@@ -374,6 +386,7 @@ class SingboxModeManager:
             enable_tun=enable_tun,
             bypass_hosts=bypass_hosts,
             mtu=mtu,
+            vps_proxy_ports=vps_proxy_ports,
         )
         config_text = json.dumps(cfg, indent=2)
         if self.running():

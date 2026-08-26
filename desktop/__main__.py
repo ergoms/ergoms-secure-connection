@@ -23,6 +23,8 @@ COMMANDS = (
     "test",
     "tun-on",
     "tun-off",
+    "reverse-on",
+    "reverse-off",
     "download-sing-box",
     "sing-box",
     "docker-env",
@@ -51,6 +53,16 @@ def _run_connect(argv: list[str]) -> int:
     return int(connect_proxy.main())
 
 
+def _run_connect_socks(argv: list[str]) -> int:
+    if len(argv) != 2:
+        print("usage: ops-content connect-socks <host> <port>", file=sys.stderr)
+        return 2
+    import lib.connect_socks as connect_socks
+
+    sys.argv = ["connect_socks.py", argv[0], argv[1]]
+    return int(connect_socks.main())
+
+
 def _run_bridge(argv: list[str]) -> int:
     import lib.http_via_socks as http_via_socks
 
@@ -72,6 +84,7 @@ def _show_help() -> int:
   probe HOST [PORT]    CONNECT через Squid
   test                 проверка обхода
   tun-on / tun-off     TUN в процессе sing-box
+  reverse-on / reverse-off  SSH с VPS на этот ПК (через SOCKS, не :22 офиса)
   download-sing-box    скачать sing-box в tools/
   docker-env           var/docker.env + compose (прокси для контейнеров)
   docker-test          проверка: curl из контейнера через мост
@@ -200,6 +213,10 @@ def _run_cli(cmd: str, rest: list[str]) -> int:
             client.enable_tun()
         elif cmd == "tun-off":
             client.disable_tun()
+        elif cmd == "reverse-on":
+            client.enable_reverse_ssh()
+        elif cmd == "reverse-off":
+            client.disable_reverse_ssh()
         elif cmd in ("download-sing-box", "sing-box"):
             client.download_sing_box()
         elif cmd == "docker-env":
@@ -265,6 +282,8 @@ def main(argv: list[str] | None = None) -> int:
     head = argv[0].lower()
     if head in ("connect", "proxy-command"):
         return _run_connect(argv[1:])
+    if head in ("connect-socks", "socks-command"):
+        return _run_connect_socks(argv[1:])
     if head == "bridge":
         return _run_bridge(argv[1:])
     if head == "pac-serve":

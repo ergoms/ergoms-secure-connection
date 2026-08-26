@@ -56,6 +56,7 @@ bash modes/vps/bootstrap_singbox_443.sh
 | `tun.enabled` / `tun.elevate` | TUN вместе с `on`, запрос прав |
 | `corporate_proxy` | корпоративный Squid |
 | `tun.sing_box_path` | пусто = авто `tools/sing-box` |
+| `reverse_ssh.enabled` | проброс sshd клиента на `127.0.0.1:listen_port` VPS |
 
 Старый `.env` при `init` один раз мигрируется в `config.json`.
 
@@ -80,12 +81,40 @@ bash modes/vps/bootstrap_singbox_443.sh
 | `on` / `off` | Включить / выключить |
 | `status` / `probe` / `test` | Состояние и проверки |
 | `tun-on` / `tun-off` | TUN |
+| `reverse-on` / `reverse-off` | SSH с VPS на этот ПК |
 | `encrypt` / `decrypt` | Зашифровать / расшифровать конфиг |
 | `download-sing-box` | Скачать бинарник в `tools/` |
 | `docker-env` / `docker-test` | Прокси для контейнеров |
 | `gui` | Окно |
 | `deploy` | Подсказки по VPS |
 | `help` | Справка |
+
+---
+
+## SSH на клиент без публичного IP
+
+Офисный Squid рвёт прямые соединения на VPS `:22`. Клиент сам открывает обратный туннель **через уже поднятый SOCKS/VLESS**.
+
+После обновления клиента один раз `off` / `on` — в sing-box добавлен маршрут «VPS :22 через VLESS» (иначе офис снова даст `connection reset`).
+
+На клиенте (OpenSSH Server + ключ в `creds/`, тот же что в `authorized_keys` на VPS):
+
+```powershell
+.\ops-content.ps1 on
+.\ops-content.ps1 reverse-on
+.\ops-content.ps1 status
+```
+
+Или в `config.json`: `"reverse_ssh": { "enabled": true }` — тогда `on` поднимает проброс сам.
+
+С этого VPS:
+
+```bash
+bash modes/vps/ssh-to-client.sh 2222 ПОЛЬЗОВАТЕЛЬ_КЛИЕНТА
+# то же: ssh -p 2222 ПОЛЬЗОВАТЕЛЬ_КЛИЕНТА@127.0.0.1
+```
+
+Слушает только `127.0.0.1` на VPS. Несколько клиентов — разные `reverse_ssh.listen_port`.
 
 ---
 
@@ -97,7 +126,7 @@ ops-content/
 ├── ops-content.ps1/.sh
 ├── deploy.ps1/.sh
 ├── config/            образцы
-├── lib/               connect_proxy, http_via_socks, probe
+├── lib/               connect_proxy, connect_socks, http_via_socks, probe
 └── modes/vps/         bootstrap sing-box на :443
 ```
 

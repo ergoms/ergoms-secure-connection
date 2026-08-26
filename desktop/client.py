@@ -27,6 +27,9 @@ from desktop.config_io import (
     get_tun_elevate,
     get_tun_enabled,
     get_tun_mtu,
+    get_reverse_ssh,
+    get_reverse_ssh_enabled,
+    get_vps_proxy_ports,
     get_watchdog_enabled,
     invoke_init,
     load_config,
@@ -43,6 +46,7 @@ from desktop.git_proxy import (
     clear_instead_of,
 )
 from desktop.paths import Paths, bundle_dir, is_frozen, resolve_ssh_identity, self_command
+from desktop.reverse_ssh import ReverseSshManager
 from desktop.singbox_mode import SingboxModeManager, require_transport
 from desktop.tun import TunManager
 from desktop.sys_proxy import (
@@ -139,6 +143,7 @@ class OpsClient:
             self.paths.logs_dir,
             log=self.log,
         )
+        self.reverse_ssh = ReverseSshManager(self.paths, log=self.log)
 
     def reload_env(self) -> None:
         if self.paths.config_path.is_file():
@@ -569,9 +574,11 @@ class OpsClient:
             elevate=get_tun_elevate() if enable_tun else False,
             bypass_hosts=bypass,
             mtu=get_tun_mtu(cfg),
+            vps_proxy_ports=get_vps_proxy_ports(cfg),
             force_restart=True,
         )
         self.set_git_singbox(cfg, http_port)
+        self._maybe_start_reverse_ssh(cfg)
         state = {
             "mode": "singbox",
             "scope": get_socks_scope(),
@@ -588,6 +595,10 @@ class OpsClient:
         )
 
     def stop_singbox_mode(self) -> None:
+        try:
+            self.reverse_ssh.stop()
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"reverse-ssh stop: {exc}")
         try:
             self.singbox.stop()
         except Exception as exc:  # noqa: BLE001
@@ -920,6 +931,38 @@ class OpsClient:
             return
         self.log(f"watchdog pid={proc.pid} (logs/watchdog.log)")
 
+    def _maybe_start_reverse_ssh(self, cfg: dict[str, Any] | None = None) -> None:
+        if cfg is None:
+            cfg = self.config()
+        if not get_reverse_ssh_enabled(cfg):
+            if self.reverse_ssh.running():
+                self.reverse_ssh.stop()
+            return
+        try:
+            self.reverse_ssh.start(cfg)
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"reverse-ssh: {exc}")
+            self.log("Туннель оставлен. Повторите reverse-on после ключа/sshd.")
+
+    def enable_reverse_ssh(self, *, persist: bool = True) -> None:
+        self.reload_env()
+        if persist:
+            update_config_key(self.paths.config_path, "reverse_ssh.enabled", True)
+            self.log("reverse_ssh.enabled=true в config.json")
+        cfg = self.config()
+        if not self.singbox.running() and not _port_open(
+            "127.0.0.1", get_local_socks_port(cfg)
+        ):
+            raise RuntimeError("Сначала включите туннель: ops-content on")
+        self.reverse_ssh.start(cfg)
+
+    def disable_reverse_ssh(self, *, persist: bool = True) -> None:
+        self.reload_env()
+        if persist:
+            update_config_key(self.paths.config_path, "reverse_ssh.enabled", False)
+            self.log("reverse_ssh.enabled=false в config.json")
+        self.reverse_ssh.stop()
+
     def enable(self, *, spawn_watchdog: bool = True) -> None:
         self.reload_env()
         self.log(f"VLESS+Reality TUN={1 if get_tun_enabled() else 0}")
@@ -1049,6 +1092,37 @@ class OpsClient:
             or info.get("state")
         ):
             lines.append("watchdog         = off")
+
+        rev = {}
+        try:
+            rev = get_reverse_ssh(self.config()) if self.paths.config_path.is_file() else {}
+        except Exception:  # noqa: BLE001
+            rev = {}
+        info["reverse_ssh_enabled"] = bool(rev.get("enabled"))
+        info["reverse_ssh_listen"] = int(rev.get("listen_port") or 2222)
+        info["reverse_ssh_running"] = self.reverse_ssh.running()
+        info["reverse_ssh_pid"] = self.reverse_ssh.pid()
+        if info["reverse_ssh_running"]:
+            lines.append(
+                f"reverse-ssh pid={info['reverse_ssh_pid']} "
+                f"VPS:127.0.0.1:{info['reverse_ssh_listen']} → клиент:{rev.get('local_port') or 22}"
+            )
+            hint = self.paths.var_dir / "reverse-ssh.txt"
+            if hint.is_file():
+                first = next(
+                    (
+                        ln.strip()
+                        for ln in hint.read_text(encoding="utf-8").splitlines()
+                        if ln.strip() and not ln.startswith("#")
+                    ),
+                    "",
+                )
+                if first:
+                    lines.append(f"с VPS           = {first}")
+        elif info["reverse_ssh_enabled"] and (
+            info.get("singbox_running") or info.get("state")
+        ):
+            lines.append("reverse-ssh      = down (reverse-on)")
 
         if info.get("state"):
             lines.append(f"state: {json.dumps(info['state'])}")
