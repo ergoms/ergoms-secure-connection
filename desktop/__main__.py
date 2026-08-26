@@ -30,6 +30,8 @@ COMMANDS = (
     "docker-env",
     "docker-test",
     "watch",
+    "install-service",
+    "uninstall-service",
     "encrypt",
     "decrypt",
     "gui",
@@ -89,6 +91,8 @@ def _show_help() -> int:
   docker-env           var/docker.env + compose (прокси для контейнеров)
   docker-test          проверка: curl из контейнера через мост
   watch                следить и переподключать (Ctrl+C)
+  install-service      systemd: поставить VPN службой и включить автозапуск (Linux, sudo)
+  uninstall-service    убрать systemd-службу
   encrypt [OUT]        зашифровать config.json для передачи (пароль)
   decrypt [IN]         расшифровать в config.json
   gui                  окно Qt Quick (нужен дисплей, pip install -r requirements-desktop.txt)
@@ -133,6 +137,22 @@ def _ask_password(*, confirm: bool = False) -> str:
         if password != again:
             raise SystemExit("Passwords do not match")
     return password
+
+
+def _run_linux_service(cmd: str) -> int:
+    import subprocess
+
+    if sys.platform == "win32":
+        print(
+            "[ops-content] systemd service is Linux-only: ./ops-content.sh install-service",
+            file=sys.stderr,
+        )
+        return 0
+    script = _ROOT / "modes" / "linux" / f"{cmd}.sh"
+    if not script.is_file():
+        print(f"[ops-content] ERROR: missing {script}", file=sys.stderr)
+        return 1
+    return int(subprocess.call(["bash", str(script)]))
 
 
 def _run_encrypt(rest: list[str]) -> int:
@@ -182,6 +202,8 @@ def _run_cli(cmd: str, rest: list[str]) -> int:
         return _run_encrypt(rest)
     if cmd == "decrypt":
         return _run_decrypt(rest)
+    if cmd in ("install-service", "uninstall-service"):
+        return _run_linux_service(cmd)
 
     from desktop.client import OpsClient
 

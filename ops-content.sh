@@ -25,9 +25,9 @@ CMD="${1:-help}"
 case "$CMD" in
   install-service|uninstall-service)
     if [[ "$CMD" == install-service ]]; then
-      bash "$ROOT/modes/socks/install-service.sh"
+      exec bash "$ROOT/modes/linux/install-service.sh"
     else
-      bash "$ROOT/modes/socks/uninstall-service.sh"
+      exec bash "$ROOT/modes/linux/uninstall-service.sh"
     fi
     ;;
   deploy)
