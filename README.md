@@ -38,6 +38,13 @@ bash modes/vps/bootstrap_singbox_443.sh
 
 То же: `python -m desktop …` или `./ops-content.sh …`.
 
+Автозапуск (Linux, systemd, одна команда — спросит sudo):
+
+```bash
+./ops-content.sh install-service
+# снять: ./ops-content.sh uninstall-service
+```
+
 В `config.json`: `"tun": { "enabled": true }` поднимает TUN вместе с `on`. Для окна: `pip install -r requirements-desktop.txt`, затем `python -m desktop gui`.
 
 Локально после `on`: SOCKS `:1080`, HTTP `:1088`, PAC `:1089`.
@@ -85,6 +92,7 @@ bash modes/vps/bootstrap_singbox_443.sh
 | `encrypt` / `decrypt` | Зашифровать / расшифровать конфиг |
 | `download-sing-box` | Скачать бинарник в `tools/` |
 | `docker-env` / `docker-test` | Прокси для контейнеров |
+| `install-service` / `uninstall-service` | systemd-служба VPN (Linux) |
 | `gui` | Окно |
 | `deploy` | Подсказки по VPS |
 | `help` | Справка |
@@ -127,6 +135,7 @@ ops-content/
 ├── deploy.ps1/.sh
 ├── config/            образцы
 ├── lib/               connect_proxy, connect_socks, http_via_socks, probe
+├── modes/linux/       systemd-служба клиента
 └── modes/vps/         bootstrap sing-box на :443
 ```
 
