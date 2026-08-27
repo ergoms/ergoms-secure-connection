@@ -19,6 +19,18 @@ def creationflags() -> int:
     return 0
 
 
+def is_admin() -> bool:
+    """True when this process already has admin/root (no UAC/sudo needed)."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            return bool(ctypes.windll.shell32.IsUserAnAdmin())  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            return False
+    return bool(hasattr(os, "geteuid") and os.geteuid() == 0)
+
+
 def invalidate_proc_cache() -> None:
     """Drop cached PID lookups (call before kill/stop)."""
     _proc_cache.clear()

@@ -458,7 +458,7 @@ class SingboxModeManager:
 
     def _launch(self, exe: Path, *, elevate: bool) -> int | None:
         args = [str(exe), "run", "-c", str(self.config_path)]
-        if sys.platform == "win32" and elevate:
+        if sys.platform == "win32" and elevate and not procutil.is_admin():
             return self._start_elevated_win(exe, self.config_path)
 
         if (

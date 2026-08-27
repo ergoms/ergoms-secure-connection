@@ -38,8 +38,13 @@ if ($Command -eq 'deploy') {
 }
 
 if ($Command -in @('install-service', 'uninstall-service')) {
-    Write-Host '[ops-content] systemd service is Linux-only: ./ops-content.sh install-service' -ForegroundColor Yellow
-    exit 0
+    $script = Join-Path $Root "modes\windows\$Command.ps1"
+    if (-not (Test-Path -LiteralPath $script)) {
+        Write-Error "missing $script"
+        exit 1
+    }
+    & $script
+    exit $LASTEXITCODE
 }
 
 $Py = Get-PythonExe

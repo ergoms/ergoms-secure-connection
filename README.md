@@ -38,10 +38,15 @@ bash modes/vps/bootstrap_singbox_443.sh
 
 То же: `python -m desktop …` или `./ops-content.sh …`.
 
-Автозапуск (Linux, systemd, одна команда — спросит sudo):
+Автозапуск (служба, одна команда — спросит админа/sudo):
+
+```powershell
+.\ops-content.ps1 install-service     # Windows (WinSW, LocalSystem, TUN без UAC)
+# снять: .\ops-content.ps1 uninstall-service
+```
 
 ```bash
-./ops-content.sh install-service
+./ops-content.sh install-service      # Linux (systemd)
 # снять: ./ops-content.sh uninstall-service
 ```
 
@@ -92,7 +97,7 @@ bash modes/vps/bootstrap_singbox_443.sh
 | `encrypt` / `decrypt` | Зашифровать / расшифровать конфиг |
 | `download-sing-box` | Скачать бинарник в `tools/` |
 | `docker-env` / `docker-test` | Прокси для контейнеров |
-| `install-service` / `uninstall-service` | systemd-служба VPN (Linux) |
+| `install-service` / `uninstall-service` | служба VPN (Windows / Linux) |
 | `gui` | Окно |
 | `deploy` | Подсказки по VPS |
 | `help` | Справка |
@@ -136,6 +141,7 @@ ops-content/
 ├── config/            образцы
 ├── lib/               connect_proxy, connect_socks, http_via_socks, probe
 ├── modes/linux/       systemd-служба клиента
+├── modes/windows/     WinSW-служба клиента
 └── modes/vps/         bootstrap sing-box на :443
 ```
 
