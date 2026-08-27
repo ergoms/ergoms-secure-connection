@@ -91,8 +91,8 @@ def _show_help() -> int:
   docker-env           var/docker.env + compose (прокси для контейнеров)
   docker-test          проверка: curl из контейнера через мост
   watch                следить и переподключать (Ctrl+C)
-  install-service      systemd: поставить VPN службой и включить автозапуск (Linux, sudo)
-  uninstall-service    убрать systemd-службу
+  install-service      служба VPN + автозапуск (Linux: systemd; Windows: WinSW, админ)
+  uninstall-service    убрать службу
   encrypt [OUT]        зашифровать config.json для передачи (пароль)
   decrypt [IN]         расшифровать в config.json
   gui                  окно Qt Quick (нужен дисплей, pip install -r requirements-desktop.txt)
@@ -139,15 +139,30 @@ def _ask_password(*, confirm: bool = False) -> str:
     return password
 
 
-def _run_linux_service(cmd: str) -> int:
+def _run_service(cmd: str) -> int:
     import subprocess
 
     if sys.platform == "win32":
-        print(
-            "[ops-content] systemd service is Linux-only: ./ops-content.sh install-service",
-            file=sys.stderr,
+        script = _ROOT / "modes" / "windows" / f"{cmd}.ps1"
+        if not script.is_file():
+            print(f"[ops-content] ERROR: missing {script}", file=sys.stderr)
+            return 1
+        powershell = os.path.join(
+            os.environ.get("SystemRoot", r"C:\Windows"),
+            r"System32\WindowsPowerShell\v1.0\powershell.exe",
         )
-        return 0
+        return int(
+            subprocess.call(
+                [
+                    powershell,
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(script),
+                ]
+            )
+        )
     script = _ROOT / "modes" / "linux" / f"{cmd}.sh"
     if not script.is_file():
         print(f"[ops-content] ERROR: missing {script}", file=sys.stderr)
@@ -203,7 +218,7 @@ def _run_cli(cmd: str, rest: list[str]) -> int:
     if cmd == "decrypt":
         return _run_decrypt(rest)
     if cmd in ("install-service", "uninstall-service"):
-        return _run_linux_service(cmd)
+        return _run_service(cmd)
 
     from desktop.client import OpsClient
 
