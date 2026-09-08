@@ -1,55 +1,70 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""One-file GUI/CLI build → build/OpsContent.exe"""
+"""One-file GUI/CLI build → dist/OpsContent.exe"""
 
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_all
-
 root = Path(SPECPATH).resolve()
-
-datas, binaries, hiddenimports = collect_all("PySide6")
 
 sb = root / "tools" / "sing-box.exe"
 if not sb.is_file():
     raise SystemExit(
         "tools/sing-box.exe missing — run: python -m desktop download-sing-box"
     )
-binaries += [(str(sb), "tools")]
-datas += [
-    (str(root / "desktop" / "ui" / "qml"), "desktop/ui/qml"),
-    (str(root / "desktop" / "app_icon.ico"), "desktop"),
-    (str(root / "lib"), "lib"),
-]
-hiddenimports += [
-    "desktop",
-    "desktop.gui",
-    "desktop.ui",
-    "desktop.ui.bridge",
-    "desktop.client",
-    "desktop.reverse_ssh",
-    "desktop.__main__",
-    "lib.connect_socks",
-    "lib.connect_proxy",
-    "PySide6.QtCore",
-    "PySide6.QtGui",
-    "PySide6.QtWidgets",
-    "PySide6.QtQml",
-    "PySide6.QtQuick",
-    "PySide6.QtQuickControls2",
-    "PySide6.QtNetwork",
-    "PySide6.QtOpenGL",
-]
 
 a = Analysis(
     [str(root / "desktop" / "entry.py")],
     pathex=[str(root)],
-    binaries=binaries,
-    datas=datas,
-    hiddenimports=hiddenimports,
+    binaries=[(str(sb), "tools")],
+    datas=[
+        (str(root / "desktop" / "ui" / "qml"), "desktop/ui/qml"),
+        (str(root / "desktop" / "app_icon.ico"), "desktop"),
+        (str(root / "lib"), "lib"),
+    ],
+    hiddenimports=[
+        "desktop",
+        "desktop.gui",
+        "desktop.ui",
+        "desktop.ui.bridge",
+        "desktop.client",
+        "desktop.reverse_ssh",
+        "desktop.autostart",
+        "desktop.__main__",
+        "lib.connect_socks",
+        "lib.connect_proxy",
+        "PySide6.QtCore",
+        "PySide6.QtGui",
+        "PySide6.QtWidgets",
+        "PySide6.QtQml",
+        "PySide6.QtQuick",
+        "PySide6.QtQuickControls2",
+        "PySide6.QtNetwork",
+        "PySide6.QtOpenGL",
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=["tkinter", "matplotlib", "numpy", "PIL"],
+    excludes=[
+        "tkinter",
+        "matplotlib",
+        "numpy",
+        "PIL",
+        "PySide6.QtWebEngine",
+        "PySide6.QtWebEngineCore",
+        "PySide6.QtWebEngineWidgets",
+        "PySide6.Qt3DAnimation",
+        "PySide6.Qt3DCore",
+        "PySide6.Qt3DExtras",
+        "PySide6.Qt3DInput",
+        "PySide6.Qt3DLogic",
+        "PySide6.Qt3DRender",
+        "PySide6.QtCharts",
+        "PySide6.QtDataVisualization",
+        "PySide6.QtPdf",
+        "PySide6.QtBluetooth",
+        "PySide6.QtMultimedia",
+        "PySide6.QtLocation",
+        "PySide6.QtTextToSpeech",
+    ],
     noarchive=False,
 )
 pyz = PYZ(a.pure)

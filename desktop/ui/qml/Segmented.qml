@@ -10,6 +10,7 @@ Rectangle {
     radius: 10
     color: T.surface2
     clip: true
+    opacity: enabled ? 1 : 0.45
 
     Row {
         anchors.fill: parent
@@ -38,7 +39,8 @@ Rectangle {
 
                 MouseArea {
                     anchors.fill: parent
-                    cursorShape: Qt.PointingHandCursor
+                    enabled: root.enabled
+                    cursorShape: root.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
                     onClicked: root.activated(modelData.value)
                 }
             }

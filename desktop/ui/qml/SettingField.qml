@@ -8,6 +8,7 @@ Column {
     property string settingKey: ""
     property bool password: false
     spacing: 6
+    opacity: enabled ? 1 : 0.45
     width: parent ? parent.width : 280
 
     Text {
@@ -30,7 +31,8 @@ Column {
         font.family: T.fontUi
         leftPadding: 12
         rightPadding: 12
-        onTextEdited: bridge.settings[root.settingKey] = text
+        readOnly: !root.enabled
+        onTextEdited: if (root.enabled) bridge.settings[root.settingKey] = text
         background: Rectangle {
             color: T.surface2
             radius: 10

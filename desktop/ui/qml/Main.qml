@@ -7,7 +7,7 @@ import "Theme.js" as T
 
 ApplicationWindow {
     id: win
-    title: "ops-content"
+    title: "ERGOMS VPN"
     width: 420
     height: 680
     minimumWidth: 420
@@ -57,20 +57,10 @@ ApplicationWindow {
                     anchors.left: parent.left
                     anchors.leftMargin: 18
                     anchors.verticalCenter: parent.verticalCenter
-                    text: "ops-content"
+                    text: "ERGOMS VPN"
                     color: T.text
                     font.pixelSize: 16
                     font.bold: true
-                    font.family: T.fontUi
-                }
-
-                Text {
-                    anchors.left: parent.left
-                    anchors.leftMargin: 128
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: "v" + bridge.version
-                    color: T.muted
-                    font.pixelSize: 11
                     font.family: T.fontUi
                 }
 

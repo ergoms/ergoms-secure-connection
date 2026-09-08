@@ -14,6 +14,10 @@ from desktop.paths import Paths, bundle_dir
 
 LogFn = Callable[[str], None]
 
+CORPORATE_PROXY_PRESET = "10.16.0.8:3128"
+CORPORATE_BYPASS_PRESET = ["*.tu-bryansk.ru", "*.local", "*.lan"]
+STANDARD_BYPASS_PRESET = ["*.local", "*.lan"]
+
 # Legacy .env keys → config.json (migration only)
 _ENV_BOOL_TRUE = frozenset({"1", "true", "yes", "on"})
 
@@ -82,7 +86,9 @@ def invalidate_config_cache() -> None:
 
 def default_config_template() -> dict[str, Any]:
     return {
-        "corporate_proxy": "10.16.0.8:3128",
+        "corporate": False,
+        "use_proxy": False,
+        "corporate_proxy": "",
         "socks_scope": "full",
         "http_bridge_port": 1088,
         "pac_listen_port": 1089,
@@ -122,7 +128,7 @@ def default_config_template() -> dict[str, Any]:
             "authenticate.cursor.sh",
             "authenticator.cursor.sh",
         ],
-        "proxy_bypass": ["*.tu-bryansk.ru", "*.local", "*.lan"],
+        "proxy_bypass": list(STANDARD_BYPASS_PRESET),
         "proxy_bypass_via": "direct",
         "tun": {
             "enabled": False,
@@ -188,10 +194,47 @@ def migrate_env_into_config(cfg: dict[str, Any], env: dict[str, str]) -> dict[st
     return out
 
 
+def infer_corporate(cfg: dict[str, Any] | None) -> bool:
+    """Office profile only when explicitly enabled — leftover proxy fields are ignored."""
+    if not cfg:
+        return False
+    return _as_bool(cfg.get("corporate"), False)
+
+
+def apply_corporate_profile(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Office defaults: GitHub+Cursor via proxy, university bypass."""
+    out = cfg
+    out["corporate"] = True
+    out["use_proxy"] = True
+    out["socks_scope"] = "github"
+    out["corporate_proxy"] = CORPORATE_PROXY_PRESET
+    out["proxy_bypass"] = list(CORPORATE_BYPASS_PRESET)
+    out.setdefault("proxy_bypass_via", "direct")
+    return out
+
+
+def apply_standard_profile(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Ordinary VPN: all traffic, no office proxy."""
+    out = cfg
+    out["corporate"] = False
+    out["use_proxy"] = False
+    out["socks_scope"] = "full"
+    out["corporate_proxy"] = ""
+    out["proxy_bypass"] = list(STANDARD_BYPASS_PRESET)
+    out["proxy_bypass_via"] = "direct"
+    rev = out.setdefault("reverse_ssh", {})
+    if isinstance(rev, dict):
+        rev["enabled"] = False
+    return out
+
+
 def ensure_config_defaults(cfg: dict[str, Any]) -> dict[str, Any]:
     """Fill missing sections without wiping user values."""
     tmpl = default_config_template()
     out = deepcopy(cfg) if cfg else {}
+    if "corporate" not in out:
+        out["corporate"] = False
+    out.setdefault("use_proxy", False)
     out.setdefault("corporate_proxy", tmpl["corporate_proxy"])
     out.setdefault("socks_scope", tmpl["socks_scope"])
     out.setdefault("http_bridge_port", tmpl["http_bridge_port"])
@@ -272,6 +315,8 @@ def ensure_config_defaults(cfg: dict[str, Any]) -> dict[str, Any]:
     else:
         out["socks_scope"] = "full"
 
+    out["corporate"] = _as_bool(out.get("corporate"), False)
+    out["use_proxy"] = _as_bool(out.get("use_proxy"), False) or out["corporate"]
     out["http_bridge_port"] = _as_int(out.get("http_bridge_port"), 1088)
     out["pac_listen_port"] = _as_int(out.get("pac_listen_port"), 1089)
     out["watchdog"] = _as_bool(out.get("watchdog"), True)
@@ -330,9 +375,11 @@ def _mirror_to_environ(cfg: dict[str, Any]) -> None:
     os.environ["WATCHDOG"] = "1" if _as_bool(cfg.get("watchdog"), True) else "0"
     os.environ["WATCHDOG_INTERVAL"] = str(cfg.get("watchdog_interval") or 15)
     os.environ["WATCHDOG_MAX_RETRIES"] = str(cfg.get("watchdog_max_retries") or 5)
-    corp = str(cfg.get("corporate_proxy") or "").strip()
+    corp = resolve_corporate_proxy(cfg)
     if corp:
         os.environ["CORPORATE_PROXY"] = corp
+    else:
+        os.environ.pop("CORPORATE_PROXY", None)
 
 
 # Back-compat aliases
@@ -494,12 +541,14 @@ def get_pac_listen_port(cfg: dict[str, Any] | None = None) -> int:
 
 
 def get_socks_scope(cfg: dict[str, Any] | None = None) -> str:
+    src = cfg if cfg is not None else _runtime()
+    if not infer_corporate(src):
+        return "full"
     env = (os.environ.get("SOCKS_SCOPE") or "").strip().lower()
     if env:
         s = env
     else:
-        src = cfg if cfg is not None else _runtime()
-        s = str(src.get("socks_scope") or "full").strip().lower()
+        s = str((src or {}).get("socks_scope") or "full").strip().lower()
     if s in ("full", "all", "system"):
         return "full"
     if s in ("github", "pac", "partial"):
@@ -525,12 +574,7 @@ def get_tun_enabled(cfg: dict[str, Any] | None = None) -> bool:
 
 
 def get_tun_elevate(cfg: dict[str, Any] | None = None) -> bool:
-    raw = os.environ.get("TUN_ELEVATE")
-    if raw is not None and str(raw).strip() != "":
-        return _truthy(raw)
-    src = cfg if cfg is not None else _runtime()
-    tun = src.get("tun") if isinstance(src.get("tun"), dict) else {}
-    return _as_bool(tun.get("elevate"), True)
+    return True
 
 
 def get_watchdog_enabled(cfg: dict[str, Any] | None = None) -> bool:
@@ -558,13 +602,16 @@ def get_watchdog_max_retries(cfg: dict[str, Any] | None = None) -> int:
 
 
 def resolve_corporate_proxy(cfg: dict[str, Any] | None = None) -> str:
-    env_p = (os.environ.get("CORPORATE_PROXY") or "").strip()
-    if env_p:
-        return env_p.replace("http://", "").replace("https://", "").strip("/")
     src = cfg if cfg is not None else _runtime()
-    if src:
-        return str(src.get("corporate_proxy") or "10.16.0.8:3128")
-    return "10.16.0.8:3128"
+    if not src:
+        return ""
+    use = infer_corporate(src) or _as_bool(src.get("use_proxy"), False)
+    if not use:
+        return ""
+    raw = str(src.get("corporate_proxy") or "").strip()
+    if not raw:
+        raw = (os.environ.get("CORPORATE_PROXY") or "").strip()
+    return raw.replace("http://", "").replace("https://", "").strip("/")
 
 
 def get_sing_box_path(cfg: dict[str, Any] | None = None) -> str:

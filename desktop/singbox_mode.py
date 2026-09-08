@@ -104,17 +104,20 @@ class SingboxModeManager:
         vps_proxy_ports: list[int] | None = None,
     ) -> dict[str, Any]:
         squid_host, squid_port = parse_corporate_proxy(corporate_proxy)
-        if not squid_host:
-            raise RuntimeError("corporate_proxy empty")
+        use_office_proxy = bool(squid_host)
 
         exclude_ips: list[str] = []
-        for h in (squid_host, server_host):
+        hosts = [server_host]
+        if use_office_proxy:
+            hosts.insert(0, squid_host)
+        for h in hosts:
             ip = _resolve_host(h)
             if ip:
                 exclude_ips.append(ip)
 
-        # Prefer underlay NIC toward Squid so TUN auto_route cannot steal dials.
-        bind_iface = detect_bind_interface(exclude_ips[0] if exclude_ips else squid_host)
+        # Prefer underlay NIC toward office proxy (or VPS) so TUN cannot steal dials.
+        bind_target = exclude_ips[0] if exclude_ips else (squid_host or server_host)
+        bind_iface = detect_bind_interface(bind_target) if bind_target else ""
 
         route_exclude = [
             "10.0.0.0/8",
@@ -272,13 +275,19 @@ class SingboxModeManager:
             },
             "inbounds": inbounds,
             "outbounds": [
-                {
-                    "type": "http",
-                    "tag": "squid",
-                    "server": squid_host,
-                    "server_port": int(squid_port),
-                    **({"bind_interface": bind_iface} if bind_iface else {}),
-                },
+                *(
+                    [
+                        {
+                            "type": "http",
+                            "tag": "squid",
+                            "server": squid_host,
+                            "server_port": int(squid_port),
+                            **({"bind_interface": bind_iface} if bind_iface else {}),
+                        }
+                    ]
+                    if use_office_proxy
+                    else []
+                ),
                 {
                     "type": "vless",
                     "tag": "proxy",
@@ -297,7 +306,7 @@ class SingboxModeManager:
                             "short_id": transport["short_id"],
                         },
                     },
-                    "detour": "squid",
+                    **({"detour": "squid"} if use_office_proxy else {}),
                 },
                 {
                     "type": "direct",
@@ -331,13 +340,17 @@ class SingboxModeManager:
                 pid = int(self.pid_path.read_text(encoding="utf-8").strip())
             except ValueError:
                 pid = None
-            if pid and procutil.pid_alive(pid):
+            if pid and procutil.pid_alive(pid) and procutil.is_sing_box_pid(pid):
                 return pid
         now = time.monotonic()
         if now - self._pid_scan_at < 2.0 and self._pid_scan_result:
-            if procutil.pid_alive(self._pid_scan_result):
+            if procutil.pid_alive(self._pid_scan_result) and procutil.is_sing_box_pid(
+                self._pid_scan_result
+            ):
                 return self._pid_scan_result
         found = self._find_pid()
+        if found and not procutil.is_sing_box_pid(found):
+            found = None
         self._pid_scan_at = now
         self._pid_scan_result = found
         if found:
@@ -350,10 +363,8 @@ class SingboxModeManager:
         return None
 
     def tun_active(self) -> bool:
-        """True if our mode process is up and TUN iface exists."""
-        if not self.running():
-            return False
-        return self._tun_helper._tun_iface_present()  # noqa: SLF001
+        """True if the sing-box process is up (TUN lives in the same process)."""
+        return self.running()
 
     def start(
         self,
@@ -407,8 +418,9 @@ class SingboxModeManager:
 
         need_admin = bool(enable_tun and elevate)
         self.log(
-            f"Starting MODE=singbox → VLESS {server_host}:{transport['port']} "
-            f"via Squid; socks=:{socks_port} http=:{http_port} tun={int(enable_tun)}"
+            f"Starting MODE=singbox → VLESS {server_host}:{transport['port']}"
+            f"{' via proxy' if (corporate_proxy or '').strip() else ''}"
+            f"; socks=:{socks_port} http=:{http_port} tun={int(enable_tun)}"
         )
         if need_admin:
             self.log("Нужны права администратора для TUN")
@@ -417,27 +429,15 @@ class SingboxModeManager:
         if pid:
             self.pid_path.write_text(str(pid), encoding="utf-8")
 
-        deadline = time.monotonic() + (12.0 if enable_tun else 8.0)
+        deadline = time.monotonic() + 6.0
         interval = 0.05
         while time.monotonic() < deadline:
-            if _port_open("127.0.0.1", socks_port) and _port_open(
-                "127.0.0.1", http_port
-            ):
-                if enable_tun:
-                    if self.tun_active() or self.running():
-                        # iface may lag a bit after ports open
-                        if self.tun_active() or time.monotonic() + 0.5 > deadline:
-                            self.log("MODE=singbox активен (mixed + TUN → VLESS)")
-                            return
-                else:
-                    self.log("MODE=singbox активен (mixed → VLESS)")
-                    return
+            if _port_open("127.0.0.1", socks_port):
+                kind = "mixed + TUN → VLESS" if enable_tun else "mixed → VLESS"
+                self.log(f"MODE=singbox активен ({kind})")
+                return
             time.sleep(interval)
-            interval = min(interval * 1.3, 0.25)
-
-        if _port_open("127.0.0.1", socks_port):
-            self.log("MODE=singbox: SOCKS up (TUN may still be starting)")
-            return
+            interval = min(interval * 1.3, 0.2)
 
         raise RuntimeError(
             "sing-box mode не поднял SOCKS/HTTP. "
@@ -449,7 +449,7 @@ class SingboxModeManager:
         if pid:
             procutil.kill_pid(pid)
             self.log(f"sing-box mode pid={pid} stopped")
-        for orphan in procutil.pids_cmdline_match("sing-box-mode.json", cache=False):
+        for orphan in procutil.pids_named("sing-box.exe", "sing-box"):
             if orphan != pid:
                 procutil.kill_pid(orphan)
         self._pid_scan_at = 0.0
@@ -494,8 +494,13 @@ class SingboxModeManager:
                 f"UAC для sing-box mode не удался (код {rc}). "
                 "Запустите от администратора или TUN=0."
             )
-        time.sleep(1.0)
-        return self._find_pid()
+        deadline = time.monotonic() + 4.0
+        while time.monotonic() < deadline:
+            found = self._find_pid()
+            if found:
+                return found
+            time.sleep(0.05)
+        return None
 
     def _start_elevated_linux(self, args: list[str]) -> int | None:
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -524,7 +529,7 @@ class SingboxModeManager:
         )
 
     def _find_pid(self) -> int | None:
-        for pid in procutil.pids_cmdline_match("sing-box-mode.json"):
+        for pid in procutil.pids_named("sing-box.exe", "sing-box"):
             return pid
         return None
 

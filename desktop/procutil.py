@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import os
 import re
 import subprocess
@@ -98,9 +99,110 @@ def popen(
     return subprocess.Popen(**kw)
 
 
-def pid_alive(pid: int) -> bool:
+def process_basename(pid: int) -> str:
+    """Lowercase executable filename for pid, or empty if unknown."""
+    if pid <= 0:
+        return ""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, int(pid))
+            if not handle:
+                return ""
+            try:
+                buf = ctypes.create_unicode_buffer(32768)
+                size = wintypes.DWORD(len(buf))
+                if kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
+                    path = buf.value.replace("/", "\\")
+                    return path.rsplit("\\", 1)[-1].lower()
+            finally:
+                kernel32.CloseHandle(handle)
+        except Exception:  # noqa: BLE001
+            return ""
+        return ""
+    try:
+        with open(f"/proc/{pid}/comm", encoding="utf-8", errors="replace") as fh:
+            return fh.read().strip().lower()
+    except OSError:
+        return ""
+
+
+def is_sing_box_pid(pid: int) -> bool:
+    return process_basename(pid) in {"sing-box", "sing-box.exe"}
+
+
+def pids_named(*names: str) -> list[int]:
+    """PIDs whose executable basename matches (no PowerShell)."""
+    want = {n.lower() for n in names if n}
+    if not want:
+        return []
+    if sys.platform == "win32":
+        return _pids_named_win(want)
+    found: list[int] = []
+    proc = "/proc"
+    if not os.path.isdir(proc):
+        return found
+    for name in os.listdir(proc):
+        if not name.isdigit():
+            continue
+        try:
+            with open(os.path.join(proc, name, "comm"), encoding="utf-8", errors="replace") as fh:
+                comm = fh.read().strip().lower()
+        except OSError:
+            continue
+        if comm in want:
+            found.append(int(name))
+    return found
+
+
+def _pids_named_win(want: set[str]) -> list[int]:
+    import ctypes
+    from ctypes import wintypes
+
+    TH32CS_SNAPPROCESS = 0x00000002
+
+    class PROCESSENTRY32W(ctypes.Structure):
+        _fields_ = [
+            ("dwSize", wintypes.DWORD),
+            ("cntUsage", wintypes.DWORD),
+            ("th32ProcessID", wintypes.DWORD),
+            ("th32DefaultHeapID", ctypes.c_void_p),
+            ("th32ModuleID", wintypes.DWORD),
+            ("cntThreads", wintypes.DWORD),
+            ("th32ParentProcessID", wintypes.DWORD),
+            ("pcPriClassBase", ctypes.c_long),
+            ("dwFlags", wintypes.DWORD),
+            ("szExeFile", wintypes.WCHAR * 260),
+        ]
+
+    kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+    snap = kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if snap in (0, -1, 0xFFFFFFFF):
+        return []
+    found: list[int] = []
+    try:
+        pe = PROCESSENTRY32W()
+        pe.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+        if not kernel32.Process32FirstW(snap, ctypes.byref(pe)):
+            return []
+        while True:
+            if pe.szExeFile.lower() in want:
+                found.append(int(pe.th32ProcessID))
+            if not kernel32.Process32NextW(snap, ctypes.byref(pe)):
+                break
+    finally:
+        kernel32.CloseHandle(snap)
+    return found
+
+
+def pid_alive(pid: int, *, names: Sequence[str] | None = None) -> bool:
     if pid <= 0:
         return False
+    alive = False
     if sys.platform == "win32":
         try:
             import ctypes
@@ -110,15 +212,20 @@ def pid_alive(pid: int) -> bool:
             handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, int(pid))
             if handle:
                 kernel32.CloseHandle(handle)
-                return True
-            return False
+                alive = True
         except Exception:  # noqa: BLE001
-            return False
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
+            alive = False
+    else:
+        try:
+            os.kill(pid, 0)
+            alive = True
+        except OSError:
+            alive = False
+    if not alive:
         return False
+    if not names:
+        return True
+    return process_basename(pid) in {n.lower() for n in names}
 
 
 def kill_pid(pid: int) -> None:
@@ -191,12 +298,12 @@ def pids_listening_on(
     return found
 
 
-def _wmi_escape_like(value: str) -> str:
-    return value.replace("\\", "\\\\").replace("%", "[%]").replace("_", "[_]")
-
-
 def pids_cmdline_match(substr: str, *, cache: bool = True) -> list[int]:
-    """PIDs whose command line contains substr (case-insensitive on Windows)."""
+    """PIDs whose command line contains substr (case-insensitive on Windows).
+
+    The search string is not placed literally on the scanner command line,
+    otherwise the PowerShell/pgrep helper matches itself (false 'VPN on').
+    """
     if not substr:
         return []
     key = ("cmdline", substr.lower())
@@ -205,24 +312,36 @@ def pids_cmdline_match(substr: str, *, cache: bool = True) -> list[int]:
         if cached is not None:
             return cached
     found: list[int] = []
+    me = os.getpid()
     if sys.platform == "win32":
-        needle = _wmi_escape_like(substr).replace("'", "''")
+        token = base64.b64encode(substr.encode("utf-8")).decode("ascii")
         ps = (
-            "Get-CimInstance Win32_Process "
-            f"-Filter \"CommandLine LIKE '%{needle}%'\" | "
-            "Select-Object -ExpandProperty ProcessId"
+            f"$n = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{token}')); "
+            "Get-CimInstance Win32_Process | "
+            "Where-Object { "
+            "$_.CommandLine -and $_.CommandLine.ToLower().Contains($n.ToLower()) "
+            "} | Select-Object -ExpandProperty ProcessId"
         )
         r = run(["powershell", "-NoProfile", "-Command", ps])
         for line in (r.stdout or "").splitlines():
             line = line.strip()
             if line.isdigit():
-                found.append(int(line))
+                pid = int(line)
+                if pid != me:
+                    found.append(pid)
     else:
-        r = run(["pgrep", "-f", substr])
+        # [s]ing-box… trick so pgrep -f does not match its own argv
+        if len(substr) >= 2:
+            pattern = f"[{substr[0]}]{substr[1:]}"
+        else:
+            pattern = substr
+        r = run(["pgrep", "-f", pattern])
         for line in (r.stdout or "").splitlines():
             line = line.strip()
             if line.isdigit():
-                found.append(int(line))
+                pid = int(line)
+                if pid != me:
+                    found.append(pid)
     if cache:
         return _proc_cache_set(key, found)
     return found

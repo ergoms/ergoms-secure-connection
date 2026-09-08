@@ -12,12 +12,19 @@ from PySide6.QtQml import QQmlPropertyMap
 from PySide6.QtWidgets import QFileDialog, QInputDialog, QLineEdit
 
 from desktop import __version__
+from desktop import autostart
 from desktop.client import OpsClient
 from desktop.config_crypto import MAGIC, decrypt_config
 from desktop.config_io import (
+    CORPORATE_BYPASS_PRESET,
+    CORPORATE_PROXY_PRESET,
+    STANDARD_BYPASS_PRESET,
     apply_config,
+    apply_corporate_profile,
+    apply_standard_profile,
     default_config_template,
     ensure_config_defaults,
+    infer_corporate,
     load_config,
     save_config,
 )
@@ -70,6 +77,8 @@ class GuiBridge(QObject):
     powerTextChanged = Signal()
     tunButtonTextChanged = Signal()
     configReadyChanged = Signal()
+    corporateChanged = Signal()
+    autostartChanged = Signal()
 
     _bgFinished = Signal(str)
     _statusReady = Signal(object, bool)
@@ -95,7 +104,7 @@ class GuiBridge(QObject):
         self._status_color = _C_MUTED
         self._server_target = "—"
         self._scope = "—"
-        self._mode_label = "VLESS"
+        self._mode_label = "VPN"
         self._page = "home"
         self._socks_port = 1080
         self._http_port = 1088
@@ -110,6 +119,9 @@ class GuiBridge(QObject):
         self._power_text = "Подключить"
         self._tun_button_text = "TUN вкл"
         self._config_ready = False
+        self._corporate = False
+        self._autostart = autostart.is_enabled()
+        self._start_hidden = False
         self._last_status_sig = ""
         self._status_busy = False
         self._closing = False
@@ -140,6 +152,10 @@ class GuiBridge(QObject):
         self._status_timer.timeout.connect(self._on_poll_tick)
         self._schedulePoll.connect(self._status_timer.start)
         QTimer.singleShot(300, self._on_poll_tick)
+        if autostart.launched_from_autostart():
+            self._start_hidden = True
+            if self._config_ready:
+                QTimer.singleShot(600, self.enableConnection)
 
     # ── properties ──────────────────────────────────────────────────────
 
@@ -243,6 +259,18 @@ class GuiBridge(QObject):
     def configReady(self) -> bool:
         return self._config_ready
 
+    @Property(bool, notify=corporateChanged)
+    def corporate(self) -> bool:
+        return self._corporate
+
+    @Property(bool, notify=autostartChanged)
+    def autostart(self) -> bool:
+        return self._autostart
+
+    @Property(bool, constant=True)
+    def startHidden(self) -> bool:
+        return self._start_hidden
+
     @Property(str, constant=True)
     def version(self) -> str:
         return __version__
@@ -306,26 +334,6 @@ class GuiBridge(QObject):
             self._run_bg(self.client.disable_tun, waiting="Выключаю TUN…")
 
     @Slot()
-    def probe(self) -> None:
-        try:
-            cfg = self.client.config()
-            server = cfg.get("server") or cfg.get("ssh") or {}
-            host = str(server.get("host") or "")
-            port = int(server.get("port") or 443)
-        except Exception as exc:  # noqa: BLE001
-            self.toast.emit(str(exc), "error")
-            return
-        if not host or "YOUR_VPS" in host:
-            self.toast.emit("Укажите адрес сервера в настройках", "warn")
-            self.setPage("settings")
-            return
-        self._run_bg(lambda: self.client.probe(host, port), waiting="Проверка…")
-
-    @Slot()
-    def testBypass(self) -> None:
-        self._run_bg(self.client.test_bypass, waiting="Тест…")
-
-    @Slot()
     def loadSettings(self) -> None:
         if not self.paths.config_path.is_file():
             self._sync_config_ready()
@@ -335,10 +343,16 @@ class GuiBridge(QObject):
         tun = cfg.get("tun") or {}
         tr = cfg.get("transport") or {}
         bypass = cfg.get("proxy_bypass") or []
+        self._set_corporate(infer_corporate(cfg))
+        self._mode_label = "Корпоративный" if self._corporate else "VPN"
+        self.modeLabelChanged.emit()
         self._settings.insert("socksScope", str(cfg.get("socks_scope") or "full"))
         self._settings.insert("tunAuto", bool(tun.get("enabled")))
-        self._settings.insert("tunElevate", tun.get("elevate") is not False)
         self._settings.insert("httpBridgePort", str(cfg.get("http_bridge_port") or 1088))
+        self._settings.insert(
+            "useProxy",
+            bool(cfg.get("use_proxy")) or infer_corporate(cfg),
+        )
         self._settings.insert("corporateProxy", str(cfg.get("corporate_proxy") or ""))
         self._settings.insert("serverHost", str(server.get("host") or ""))
         self._settings.insert("serverPort", str(server.get("port") or 443))
@@ -347,7 +361,6 @@ class GuiBridge(QObject):
         self._settings.insert(
             "proxyBypassVia", str(cfg.get("proxy_bypass_via") or "direct")
         )
-        self._settings.insert("singBoxPath", str(tun.get("sing_box_path") or ""))
         self._settings.insert("trUuid", str(tr.get("uuid") or ""))
         self._settings.insert("trPublicKey", str(tr.get("public_key") or ""))
         self._settings.insert("trShortId", str(tr.get("short_id") or ""))
@@ -361,6 +374,47 @@ class GuiBridge(QObject):
         self._settings.insert("reverseSshVpsUser", str(rev.get("vps_user") or "root"))
         self._settings.insert("reverseSshVpsPort", str(rev.get("vps_port") or 22))
         self._sync_config_ready()
+
+    def _set_corporate(self, on: bool) -> None:
+        self._settings.insert("corporate", on)
+        if on != self._corporate:
+            self._corporate = on
+            self.corporateChanged.emit()
+
+    @Slot(bool)
+    def setAutostart(self, on: bool) -> None:
+        try:
+            if on:
+                autostart.enable()
+            else:
+                autostart.disable()
+            self._autostart = autostart.is_enabled()
+            self.autostartChanged.emit()
+            self.toast.emit(
+                "Автозапуск включён" if self._autostart else "Автозапуск выключен",
+                "info",
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.toast.emit(str(exc), "error")
+
+    @Slot(bool)
+    def applyCorporateMode(self, on: bool) -> None:
+        self._set_corporate(on)
+        if on:
+            self._settings.insert("socksScope", "github")
+            self._settings.insert("useProxy", True)
+            self._settings.insert("corporateProxy", CORPORATE_PROXY_PRESET)
+            self._settings.insert("proxyBypass", ", ".join(CORPORATE_BYPASS_PRESET))
+            self._settings.insert("proxyBypassVia", "direct")
+        else:
+            self._settings.insert("socksScope", "full")
+            self._settings.insert("useProxy", False)
+            self._settings.insert("corporateProxy", "")
+            self._settings.insert("proxyBypass", ", ".join(STANDARD_BYPASS_PRESET))
+            self._settings.insert("proxyBypassVia", "direct")
+            self._settings.insert("reverseSsh", False)
+        self._mode_label = "Корпоративный" if on else "VPN"
+        self.modeLabelChanged.emit()
 
     @Slot()
     def importConfigFile(self) -> None:
@@ -433,11 +487,26 @@ class GuiBridge(QObject):
             else:
                 cfg = default_config_template()
             s = self._settings
-            cfg["socks_scope"] = str(s.value("socksScope") or "full").strip() or "full"
+            corporate = bool(self._corporate)
+            cfg["corporate"] = corporate
             cfg["http_bridge_port"] = int(
                 str(s.value("httpBridgePort") or "1088").strip() or "1088"
             )
-            cfg["corporate_proxy"] = str(s.value("corporateProxy") or "").strip()
+            if corporate:
+                apply_corporate_profile(cfg)
+                cfg["socks_scope"] = (
+                    str(s.value("socksScope") or "github").strip() or "github"
+                )
+                cfg["use_proxy"] = True
+                cfg["corporate_proxy"] = str(s.value("corporateProxy") or "").strip()
+            else:
+                apply_standard_profile(cfg)
+                cfg["use_proxy"] = bool(s.value("useProxy"))
+                cfg["corporate_proxy"] = (
+                    str(s.value("corporateProxy") or "").strip()
+                    if cfg["use_proxy"]
+                    else ""
+                )
             cfg.pop("ssh", None)
             cfg["server"] = {
                 "host": str(s.value("serverHost") or "").strip(),
@@ -447,15 +516,16 @@ class GuiBridge(QObject):
                 ),
             }
             cfg.pop("worker_base_url", None)
-            raw_bypass = str(s.value("proxyBypass") or "").strip()
-            cfg["proxy_bypass"] = [x.strip() for x in raw_bypass.split(",") if x.strip()]
-            cfg["proxy_bypass_via"] = (
-                str(s.value("proxyBypassVia") or "direct").strip() or "direct"
-            )
+            if corporate:
+                raw_bypass = str(s.value("proxyBypass") or "").strip()
+                cfg["proxy_bypass"] = [
+                    x.strip() for x in raw_bypass.split(",") if x.strip()
+                ]
+                cfg["proxy_bypass_via"] = "direct"
             cfg.setdefault("tun", {})
             cfg["tun"]["enabled"] = bool(s.value("tunAuto"))
-            cfg["tun"]["elevate"] = bool(s.value("tunElevate"))
-            cfg["tun"]["sing_box_path"] = str(s.value("singBoxPath") or "").strip()
+            cfg["tun"]["elevate"] = True
+            cfg["tun"]["sing_box_path"] = ""
             cfg.setdefault("transport", {})
             cfg["transport"]["type"] = "vless-reality"
             cfg["transport"]["uuid"] = str(s.value("trUuid") or "").strip()
@@ -465,19 +535,22 @@ class GuiBridge(QObject):
                 str(s.value("trServerName") or "").strip() or "www.cloudflare.com"
             )
             cfg["transport"]["port"] = int(
-                str(s.value("trPort") or "443").strip() or "443"
+                str(s.value("serverPort") or s.value("trPort") or "443").strip() or "443"
             )
             cfg.setdefault("reverse_ssh", {})
-            cfg["reverse_ssh"]["enabled"] = bool(s.value("reverseSsh"))
-            cfg["reverse_ssh"]["listen_port"] = int(
-                str(s.value("reverseSshListen") or "2222").strip() or "2222"
-            )
-            cfg["reverse_ssh"]["vps_user"] = (
-                str(s.value("reverseSshVpsUser") or "").strip() or "root"
-            )
-            cfg["reverse_ssh"]["vps_port"] = int(
-                str(s.value("reverseSshVpsPort") or "22").strip() or "22"
-            )
+            if corporate:
+                cfg["reverse_ssh"]["enabled"] = bool(s.value("reverseSsh"))
+                cfg["reverse_ssh"]["listen_port"] = int(
+                    str(s.value("reverseSshListen") or "2222").strip() or "2222"
+                )
+                cfg["reverse_ssh"]["vps_user"] = (
+                    str(s.value("reverseSshVpsUser") or "").strip() or "root"
+                )
+                cfg["reverse_ssh"]["vps_port"] = int(
+                    str(s.value("reverseSshVpsPort") or "22").strip() or "22"
+                )
+            else:
+                cfg["reverse_ssh"]["enabled"] = False
             save_config(self.paths.config_path, cfg)
             apply_config(self.paths.config_path, force=True)
             self._enqueue_log("Настройки сохранены")
@@ -489,15 +562,6 @@ class GuiBridge(QObject):
             self._refresh_status(force=True)
         except Exception as exc:  # noqa: BLE001
             self.toast.emit(str(exc), "error")
-
-    @Slot()
-    def pickSingBox(self) -> None:
-        import sys
-
-        filt = "Executable (*.exe);;All files (*)" if sys.platform == "win32" else "All files (*)"
-        path, _ = QFileDialog.getOpenFileName(None, "Файл sing-box", "", filt)
-        if path:
-            self._settings.insert("singBoxPath", path)
 
     @Slot()
     def hideWindow(self) -> None:
@@ -516,13 +580,7 @@ class GuiBridge(QObject):
 
         def work() -> None:
             try:
-                st = self.client.status(include_git=False)
-                if (
-                    st.get("ssh_running")
-                    or st.get("bridge_running")
-                    or st.get("singbox_running")
-                    or st.get("tun_running")
-                ):
+                if self._active or self._tun or self._singbox_up:
                     self.client.disable()
             except Exception:  # noqa: BLE001
                 try:
@@ -625,7 +683,7 @@ class GuiBridge(QObject):
     def _apply_status(self, st: dict[str, Any], *, force: bool = False) -> None:
         singbox = bool(st.get("singbox_running"))
         tun = bool(st.get("tun_running"))
-        active = bool(st.get("active")) or singbox
+        active = bool(singbox or tun)
         scope = _scope_label(str(st.get("socks_scope") or ""))
         target = str(st.get("server_target") or st.get("ssh_target") or "—")
         sig = (
@@ -649,7 +707,7 @@ class GuiBridge(QObject):
         self._pac_port = int(st.get("pac_port") or 1089)
         self._server_target = target
         self._scope = scope
-        self._mode_label = "VLESS"
+        self._mode_label = "Корпоративный" if self._corporate else "VPN"
         self._tun_button_text = "TUN выкл" if tun else "TUN вкл"
 
         if self.paths.config_path.is_file():
@@ -668,9 +726,6 @@ class GuiBridge(QObject):
             power = "Отключить"
         elif tun:
             title, sub, color = "TUN", "Без VLESS", _C_WARN
-            power = "Отключить"
-        elif active:
-            title, sub, color = "Включено", "Активно", _C_OK
             power = "Отключить"
         else:
             title, sub, color = (
@@ -709,9 +764,10 @@ class GuiBridge(QObject):
 
 def _settings_defaults() -> dict[str, Any]:
     return {
+        "corporate": False,
+        "useProxy": False,
         "socksScope": "full",
         "tunAuto": False,
-        "tunElevate": True,
         "httpBridgePort": "1088",
         "corporateProxy": "",
         "serverHost": "",
@@ -719,7 +775,6 @@ def _settings_defaults() -> dict[str, Any]:
         "serverSocks": "1080",
         "proxyBypass": "",
         "proxyBypassVia": "direct",
-        "singBoxPath": "",
         "trUuid": "",
         "trPublicKey": "",
         "trShortId": "",
