@@ -418,13 +418,17 @@ class TunManager:
                 pid = int(self.pid_path.read_text(encoding="utf-8").strip())
             except ValueError:
                 pid = None
-            if pid and procutil.pid_alive(pid):
+            if pid and procutil.pid_alive(pid) and procutil.is_sing_box_pid(pid):
                 return pid
         now = time.monotonic()
         if now - self._pid_scan_at < 2.0 and self._pid_scan_result:
-            if procutil.pid_alive(self._pid_scan_result):
+            if procutil.pid_alive(self._pid_scan_result) and procutil.is_sing_box_pid(
+                self._pid_scan_result
+            ):
                 return self._pid_scan_result
         found = self._find_sing_box_pid()
+        if found and not procutil.is_sing_box_pid(found):
+            found = None
         self._pid_scan_at = now
         self._pid_scan_result = found
         if found:
@@ -524,7 +528,7 @@ class TunManager:
         if pid:
             procutil.kill_pid(pid)
             self.log(f"sing-box pid={pid} stopped")
-        for orphan in procutil.pids_cmdline_match("sing-box-tun.json", cache=False):
+        for orphan in procutil.pids_named("sing-box.exe", "sing-box"):
             if orphan != pid:
                 procutil.kill_pid(orphan)
         self._pid_scan_at = 0.0
@@ -565,8 +569,13 @@ class TunManager:
                 f"Не удалось запустить sing-box с UAC (код {rc}). "
                 "Запустите от администратора или TUN_ELEVATE=0 от admin-сессии."
             )
-        time.sleep(1.0)
-        return self._find_sing_box_pid()
+        deadline = time.monotonic() + 4.0
+        while time.monotonic() < deadline:
+            found = self._find_sing_box_pid()
+            if found:
+                return found
+            time.sleep(0.05)
+        return None
 
     def _start_elevated_linux(self, args: list[str]) -> int | None:
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -595,7 +604,7 @@ class TunManager:
         )
 
     def _find_sing_box_pid(self) -> int | None:
-        for pid in procutil.pids_cmdline_match("sing-box-tun.json"):
+        for pid in procutil.pids_named("sing-box.exe", "sing-box"):
             return pid
         return None
 

@@ -45,3 +45,5 @@ build/
 # Optional local binaries
 tools/*
 !tools/.gitkeep
+
+.venv/

@@ -10,7 +10,7 @@ Rectangle {
         anchors.fill: parent
         Repeater {
             model: [
-                { key: "home", label: "Домой" },
+                { key: "home", label: "Главная" },
                 { key: "settings", label: "Настройки" },
                 { key: "log", label: "Журнал" }
             ]

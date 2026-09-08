@@ -1,5 +1,7 @@
 {
-  "corporate_proxy": "192.0.2.10:3128",
+  "corporate": false,
+  "use_proxy": false,
+  "corporate_proxy": "",
   "socks_scope": "full",
   "http_bridge_port": 1088,
   "pac_listen_port": 1089,
@@ -40,7 +42,6 @@
     "authenticator.cursor.sh"
   ],
   "proxy_bypass": [
-    "*.intranet.example",
     "*.local",
     "*.lan"
   ],

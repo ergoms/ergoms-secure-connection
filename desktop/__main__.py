@@ -304,14 +304,21 @@ def _ensure_utf8_stdio() -> None:
 def main(argv: list[str] | None = None) -> int:
     _ensure_utf8_stdio()
     argv = list(sys.argv[1:] if argv is None else argv)
+    autostart = "--autostart" in argv
+    argv = [a for a in argv if a != "--autostart"]
 
     # No args: GUI when frozen (double-click exe); else help
     if not argv:
         frozen = bool(getattr(sys, "frozen", False))
-        if frozen or os.environ.get("OPS_CONTENT_GUI", "").strip() in (
-            "1",
-            "true",
-            "yes",
+        if (
+            frozen
+            or autostart
+            or os.environ.get("OPS_CONTENT_GUI", "").strip()
+            in (
+                "1",
+                "true",
+                "yes",
+            )
         ):
             return _run_gui()
         return _show_help()

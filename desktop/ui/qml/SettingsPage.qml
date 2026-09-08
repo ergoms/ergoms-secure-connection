@@ -29,9 +29,21 @@ Item {
                 spacing: 8
                 topPadding: 8
                 bottomPadding: 16
+                enabled: !bridge.active
+                opacity: bridge.active ? 0.55 : 1
 
                 Text {
-                    text: "КЛИЕНТ"
+                    visible: bridge.active
+                    width: parent.width
+                    text: "Отключите VPN, чтобы менять настройки"
+                    color: T.warn
+                    font.pixelSize: 12
+                    font.family: T.fontUi
+                    wrapMode: Text.WordWrap
+                }
+
+                Text {
+                    text: "VPN"
                     color: T.muted
                     font.pixelSize: 11
                     font.bold: true
@@ -39,24 +51,24 @@ Item {
                 }
                 Card {
                     width: parent.width
-                    implicitHeight: clientCol.implicitHeight + 24
+                    implicitHeight: vpnCol.implicitHeight + 24
                     Column {
-                        id: clientCol
+                        id: vpnCol
                         anchors.left: parent.left
                         anchors.right: parent.right
                         anchors.top: parent.top
                         anchors.margins: 14
                         spacing: 10
 
-                        Text { text: "Область трафика"; color: T.muted; font.pixelSize: 11; font.family: T.fontUi }
+                        Text { text: "Корпоративный VPN"; color: T.muted; font.pixelSize: 11; font.family: T.fontUi }
                         Segmented {
                             width: parent.width
-                            value: String(bridge.settings.socksScope)
+                            value: bridge.corporate ? "1" : "0"
                             model: [
-                                { label: "Всё", value: "full" },
-                                { label: "GitHub + Cursor", value: "github" }
+                                { label: "Выкл", value: "0" },
+                                { label: "Вкл", value: "1" }
                             ]
-                            onActivated: (v) => { bridge.settings.socksScope = v }
+                            onActivated: (v) => { bridge.applyCorporateMode(v === "1") }
                         }
                         Text { text: "TUN автоматически"; color: T.muted; font.pixelSize: 11; font.family: T.fontUi }
                         Segmented {
@@ -68,47 +80,37 @@ Item {
                             ]
                             onActivated: (v) => { bridge.settings.tunAuto = (v === "1") }
                         }
-                        Text { text: "Запрос прав админа"; color: T.muted; font.pixelSize: 11; font.family: T.fontUi }
+                        Text { text: "Автозапуск с компьютером"; color: T.muted; font.pixelSize: 11; font.family: T.fontUi }
                         Segmented {
                             width: parent.width
-                            value: bridge.settings.tunElevate ? "1" : "0"
-                            model: [
-                                { label: "Нет", value: "0" },
-                                { label: "Да", value: "1" }
-                            ]
-                            onActivated: (v) => { bridge.settings.tunElevate = (v === "1") }
-                        }
-                        SettingField {
-                            label: "Порт HTTP-моста"
-                            settingKey: "httpBridgePort"
-                        }
-                        Text { text: "SSH с VPS на этот ПК"; color: T.muted; font.pixelSize: 11; font.family: T.fontUi }
-                        Segmented {
-                            width: parent.width
-                            value: bridge.settings.reverseSsh ? "1" : "0"
+                            value: bridge.autostart ? "1" : "0"
                             model: [
                                 { label: "Выкл", value: "0" },
                                 { label: "Вкл", value: "1" }
                             ]
-                            onActivated: (v) => { bridge.settings.reverseSsh = (v === "1") }
+                            onActivated: (v) => { bridge.setAutostart(v === "1") }
+                        }
+                        Text { text: "Прокси"; color: T.muted; font.pixelSize: 11; font.family: T.fontUi }
+                        Segmented {
+                            width: parent.width
+                            value: bridge.settings.useProxy ? "1" : "0"
+                            model: [
+                                { label: "Выкл", value: "0" },
+                                { label: "Вкл", value: "1" }
+                            ]
+                            onActivated: (v) => { bridge.settings.useProxy = (v === "1") }
                         }
                         SettingField {
-                            label: "Порт на VPS (127.0.0.1)"
-                            settingKey: "reverseSshListen"
-                        }
-                        SettingField {
-                            label: "Пользователь SSH на VPS"
-                            settingKey: "reverseSshVpsUser"
-                        }
-                        SettingField {
-                            label: "Порт sshd на VPS"
-                            settingKey: "reverseSshVpsPort"
+                            visible: Boolean(bridge.settings.useProxy) || bridge.corporate
+                            height: visible ? implicitHeight : 0
+                            label: "Адрес прокси"
+                            settingKey: "corporateProxy"
                         }
                     }
                 }
 
                 Text {
-                    text: "СЕРВЕР VLESS"
+                    text: "СЕРВЕР"
                     color: T.muted
                     font.pixelSize: 11
                     font.bold: true
@@ -135,10 +137,6 @@ Item {
                             settingKey: "serverPort"
                         }
                         SettingField {
-                            label: "Локальный порт SOCKS"
-                            settingKey: "serverSocks"
-                        }
-                        SettingField {
                             label: "UUID"
                             password: true
                             settingKey: "trUuid"
@@ -156,15 +154,13 @@ Item {
                             label: "Server name (SNI)"
                             settingKey: "trServerName"
                         }
-                        SettingField {
-                            label: "Порт transport"
-                            settingKey: "trPort"
-                        }
                     }
                 }
 
                 Text {
-                    text: "ПРОКСИ И ИСКЛЮЧЕНИЯ"
+                    visible: bridge.corporate
+                    height: visible ? implicitHeight : 0
+                    text: "КОРПОРАТИВНАЯ СЕТЬ"
                     color: T.muted
                     font.pixelSize: 11
                     font.bold: true
@@ -172,59 +168,59 @@ Item {
                     topPadding: 8
                 }
                 Card {
+                    visible: bridge.corporate
+                    height: visible ? implicitHeight : 0
                     width: parent.width
-                    implicitHeight: proxyCol.implicitHeight + 24
+                    implicitHeight: corpCol.implicitHeight + 24
                     Column {
-                        id: proxyCol
+                        id: corpCol
                         anchors.left: parent.left
                         anchors.right: parent.right
                         anchors.top: parent.top
                         anchors.margins: 14
                         spacing: 10
 
-                        SettingField {
-                            label: "Корп. прокси"
-                            settingKey: "corporateProxy"
+                        Text { text: "Область трафика"; color: T.muted; font.pixelSize: 11; font.family: T.fontUi }
+                        Segmented {
+                            width: parent.width
+                            value: String(bridge.settings.socksScope)
+                            model: [
+                                { label: "Всё", value: "full" },
+                                { label: "GitHub + Cursor", value: "github" }
+                            ]
+                            onActivated: (v) => { bridge.settings.socksScope = v }
                         }
                         SettingField {
                             label: "Исключения (через запятую)"
                             settingKey: "proxyBypass"
                         }
-                        Text { text: "Исключения идут"; color: T.muted; font.pixelSize: 11; font.family: T.fontUi }
+                        Text { text: "SSH с VPS на этот ПК"; color: T.muted; font.pixelSize: 11; font.family: T.fontUi }
                         Segmented {
                             width: parent.width
-                            value: String(bridge.settings.proxyBypassVia)
+                            value: bridge.settings.reverseSsh ? "1" : "0"
                             model: [
-                                { label: "Напрямую", value: "direct" },
-                                { label: "Через Squid", value: "corporate" }
+                                { label: "Выкл", value: "0" },
+                                { label: "Вкл", value: "1" }
                             ]
-                            onActivated: (v) => { bridge.settings.proxyBypassVia = v }
+                            onActivated: (v) => { bridge.settings.reverseSsh = (v === "1") }
                         }
-                        Text { text: "Путь к sing-box"; color: T.muted; font.pixelSize: 11; font.family: T.fontUi }
-                        Row {
-                            width: parent.width
-                            spacing: 8
-                            TextField {
-                                id: sbPath
-                                width: parent.width - 52
-                                height: 40
-                                text: String(bridge.settings.singBoxPath ?? "")
-                                onTextEdited: bridge.settings.singBoxPath = text
-                                color: T.text
-                                font.pixelSize: 12
-                                font.family: T.fontUi
-                                leftPadding: 12
-                                background: Rectangle {
-                                    color: T.surface2
-                                    radius: 10
-                                }
-                            }
-                            PrimaryButton {
-                                width: 44
-                                height: 40
-                                text: "…"
-                                onClicked: bridge.pickSingBox()
-                            }
+                        SettingField {
+                            visible: Boolean(bridge.settings.reverseSsh)
+                            height: visible ? implicitHeight : 0
+                            label: "Порт на VPS (127.0.0.1)"
+                            settingKey: "reverseSshListen"
+                        }
+                        SettingField {
+                            visible: Boolean(bridge.settings.reverseSsh)
+                            height: visible ? implicitHeight : 0
+                            label: "Пользователь SSH на VPS"
+                            settingKey: "reverseSshVpsUser"
+                        }
+                        SettingField {
+                            visible: Boolean(bridge.settings.reverseSsh)
+                            height: visible ? implicitHeight : 0
+                            label: "Порт sshd на VPS"
+                            settingKey: "reverseSshVpsPort"
                         }
                     }
                 }
@@ -255,12 +251,14 @@ Item {
                 PrimaryButton {
                     Layout.fillWidth: true
                     text: "Из файла"
+                    enabled: !bridge.active
                     onClicked: bridge.importConfigFile()
                 }
                 PrimaryButton {
                     Layout.fillWidth: true
                     text: "Сохранить"
                     primary: true
+                    enabled: !bridge.active
                     onClicked: bridge.saveSettings()
                 }
             }

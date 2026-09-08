@@ -31,6 +31,7 @@ from desktop.config_io import (
     get_reverse_ssh_enabled,
     get_vps_proxy_ports,
     get_watchdog_enabled,
+    infer_corporate,
     invoke_init,
     load_config,
     resolve_corporate_proxy,
@@ -536,13 +537,15 @@ class OpsClient:
 
         transport = require_transport(cfg)
         port = int(transport.get("port") or server.get("port") or 443)
-        self.log(f"Probing CONNECT {host}:{port} via Squid...")
-        if self.probe(host, port) != 0:
-            raise RuntimeError(
-                f"CONNECT to {host}:{port} failed.\n"
-                "On the VPS: bash modes/vps/bootstrap_singbox_443.sh "
-                "(and disable sshd on :443)"
-            )
+        office_proxy = resolve_corporate_proxy(cfg)
+        if office_proxy:
+            self.log(f"Probing CONNECT {host}:{port} via proxy...")
+            if self.probe(host, port) != 0:
+                raise RuntimeError(
+                    f"CONNECT to {host}:{port} failed.\n"
+                    "On the VPS: bash modes/vps/bootstrap_singbox_443.sh "
+                    "(and disable sshd on :443)"
+                )
 
         # Avoid fighting leftover TUN processes
         try:
@@ -561,12 +564,15 @@ class OpsClient:
             self.log("sing-box missing — downloading…")
             self.download_sing_box()
 
-        bypass = [str(h) for h in cfg.get("proxy_bypass") or [] if h]
+        if infer_corporate(cfg):
+            bypass = [str(h) for h in cfg.get("proxy_bypass") or [] if h]
+        else:
+            bypass = ["*.local", "*.lan"]
         enable_tun = get_tun_enabled()
         self.singbox.start(
             server_host=host,
             transport=transport,
-            corporate_proxy=resolve_corporate_proxy(cfg),
+            corporate_proxy=office_proxy,
             socks_port=socks_port,
             http_port=http_port,
             enable_tun=enable_tun,
@@ -1030,16 +1036,9 @@ class OpsClient:
                 bpid = 0
             info["bridge_pid"] = bpid
             alive = bool(bpid and procutil.pid_alive(bpid))
-            listening = False
-            if not alive:
-                listening = _port_open("127.0.0.1", int(info["http_port"]))
-            if alive or listening:
+            if alive:
                 info["bridge_running"] = True
-                lines.append(
-                    f"http-bridge pid={bpid} "
-                    f"{'running' if alive else 'port-open'} "
-                    f"(port={info['http_port']})"
-                )
+                lines.append(f"http-bridge pid={bpid} running (port={info['http_port']})")
             else:
                 lines.append(f"bridge pid={bpid} dead")
 
@@ -1055,9 +1054,7 @@ class OpsClient:
                 )
 
         # TUN inbound inside sing-box
-        info["tun_running"] = self.tun.running() or (
-            info["singbox_running"] and self.singbox.tun_active()
-        )
+        info["tun_running"] = bool(info["singbox_running"] and get_tun_enabled())
         info["tun_pid"] = self.tun.pid() or (
             info["singbox_pid"] if info["tun_running"] and info["singbox_running"] else None
         )

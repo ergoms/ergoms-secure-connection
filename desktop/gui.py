@@ -37,8 +37,8 @@ def run_gui() -> None:
     QQuickWindow.setDefaultAlphaBuffer(True)
 
     app = QApplication(sys.argv)
-    app.setApplicationName("ops-content")
-    app.setOrganizationName("ops-content")
+    app.setApplicationName("ERGOMS VPN")
+    app.setOrganizationName("ERGOMS")
     app.setQuitOnLastWindowClosed(False)
 
     ico_path = _icon_path()
@@ -67,6 +67,8 @@ def run_gui() -> None:
 
     tray = _setup_tray(app, icon, bridge)
     bridge.quitRequested.connect(app.quit)
+    if getattr(bridge, "startHidden", False):
+        window.setProperty("visible", False)
 
     raise SystemExit(app.exec())
 
@@ -132,7 +134,7 @@ def _setup_tray(app: QApplication, icon: QIcon, bridge: object) -> QSystemTrayIc
     from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
     tray = QSystemTrayIcon(icon, app)
-    tray.setToolTip("ops-content")
+    tray.setToolTip("ERGOMS VPN")
     menu = QMenu()
 
     def add(label: str, slot: object) -> None:
