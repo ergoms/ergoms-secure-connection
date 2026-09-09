@@ -95,6 +95,7 @@ def default_config_template() -> dict[str, Any]:
         "watchdog": True,
         "watchdog_interval": 15,
         "watchdog_max_retries": 5,
+        "kill_switch": True,
         "server": {
             "host": "YOUR_VPS_IP_OR_HOSTNAME",
             "port": 443,
@@ -131,7 +132,7 @@ def default_config_template() -> dict[str, Any]:
         "proxy_bypass": list(STANDARD_BYPASS_PRESET),
         "proxy_bypass_via": "direct",
         "tun": {
-            "enabled": False,
+            "enabled": True,
             "elevate": True,
             "sing_box_path": "",
             "mtu": 1500,
@@ -178,8 +179,10 @@ def migrate_env_into_config(cfg: dict[str, Any], env: dict[str, str]) -> dict[st
         out["watchdog_interval"] = max(5, _as_int(env["WATCHDOG_INTERVAL"], 15))
     if "WATCHDOG_MAX_RETRIES" in env and env["WATCHDOG_MAX_RETRIES"].strip():
         out["watchdog_max_retries"] = max(1, _as_int(env["WATCHDOG_MAX_RETRIES"], 5))
+    if "KILL_SWITCH" in env:
+        out["kill_switch"] = _as_bool(env["KILL_SWITCH"], True)
     if "TUN" in env:
-        tun["enabled"] = _as_bool(env["TUN"], False)
+        tun["enabled"] = _as_bool(env["TUN"], True)
     if "TUN_ELEVATE" in env:
         tun["elevate"] = _as_bool(env["TUN_ELEVATE"], True)
     if "SING_BOX_PATH" in env and env["SING_BOX_PATH"].strip():
@@ -242,6 +245,7 @@ def ensure_config_defaults(cfg: dict[str, Any]) -> dict[str, Any]:
     out.setdefault("watchdog", tmpl["watchdog"])
     out.setdefault("watchdog_interval", tmpl["watchdog_interval"])
     out.setdefault("watchdog_max_retries", tmpl["watchdog_max_retries"])
+    out.setdefault("kill_switch", tmpl["kill_switch"])
 
     # Migrate legacy ssh{} → server{} (SSH tunnel mode removed)
     legacy = out.pop("ssh", None)
@@ -271,11 +275,11 @@ def ensure_config_defaults(cfg: dict[str, Any]) -> dict[str, Any]:
     # Legacy top-level TUN-like keys
     if "enabled" not in tun and "tun_enabled" in out:
         tun["enabled"] = out.pop("tun_enabled")
-    tun.setdefault("enabled", False)
+    tun.setdefault("enabled", True)
     tun.setdefault("elevate", True)
     tun.setdefault("sing_box_path", "")
     tun.setdefault("mtu", 1500)
-    tun["enabled"] = _as_bool(tun.get("enabled"), False)
+    tun["enabled"] = _as_bool(tun.get("enabled"), True)
     tun["elevate"] = _as_bool(tun.get("elevate"), True)
 
     transport = out.setdefault("transport", {})
@@ -322,6 +326,7 @@ def ensure_config_defaults(cfg: dict[str, Any]) -> dict[str, Any]:
     out["watchdog"] = _as_bool(out.get("watchdog"), True)
     out["watchdog_interval"] = max(5, _as_int(out.get("watchdog_interval"), 15))
     out["watchdog_max_retries"] = max(1, _as_int(out.get("watchdog_max_retries"), 5))
+    out["kill_switch"] = _as_bool(out.get("kill_switch"), True)
     mtu = tun.get("mtu")
     tun["mtu"] = max(1280, min(1500, _as_int(mtu, 1500)))
     return out
@@ -370,11 +375,12 @@ def _mirror_to_environ(cfg: dict[str, Any]) -> None:
     os.environ["SOCKS_SCOPE"] = str(cfg.get("socks_scope") or "full")
     os.environ["HTTP_BRIDGE_PORT"] = str(cfg.get("http_bridge_port") or 1088)
     os.environ["PAC_LISTEN_PORT"] = str(cfg.get("pac_listen_port") or 1089)
-    os.environ["TUN"] = "1" if _as_bool(tun.get("enabled"), False) else "0"
+    os.environ["TUN"] = "1" if _as_bool(tun.get("enabled"), True) else "0"
     os.environ["TUN_ELEVATE"] = "1" if _as_bool(tun.get("elevate"), True) else "0"
     os.environ["WATCHDOG"] = "1" if _as_bool(cfg.get("watchdog"), True) else "0"
     os.environ["WATCHDOG_INTERVAL"] = str(cfg.get("watchdog_interval") or 15)
     os.environ["WATCHDOG_MAX_RETRIES"] = str(cfg.get("watchdog_max_retries") or 5)
+    os.environ["KILL_SWITCH"] = "1" if _as_bool(cfg.get("kill_switch"), True) else "0"
     corp = resolve_corporate_proxy(cfg)
     if corp:
         os.environ["CORPORATE_PROXY"] = corp
@@ -438,6 +444,7 @@ def update_config_key(path: Path, key: str, value: Any) -> None:
         "WATCHDOG": ("watchdog", value),
         "WATCHDOG_INTERVAL": ("watchdog_interval", value),
         "WATCHDOG_MAX_RETRIES": ("watchdog_max_retries", value),
+        "KILL_SWITCH": ("kill_switch", value),
         "SING_BOX_PATH": ("tun.sing_box_path", value),
         "TUN_MTU": ("tun.mtu", value),
         "REVERSE_SSH": ("reverse_ssh.enabled", value),
@@ -445,7 +452,9 @@ def update_config_key(path: Path, key: str, value: Any) -> None:
     if key_u in mapping:
         target, raw = mapping[key_u]
         if target == "tun.enabled":
-            tun["enabled"] = _as_bool(raw, False)
+            tun["enabled"] = _as_bool(raw, True)
+        elif target == "kill_switch":
+            cfg["kill_switch"] = _as_bool(raw, True)
         elif target == "tun.elevate":
             tun["elevate"] = _as_bool(raw, True)
         elif target == "tun.sing_box_path":
@@ -482,7 +491,7 @@ def update_config_key(path: Path, key: str, value: Any) -> None:
     elif key_u.startswith("tun."):
         sub = key_u.split(".", 1)[1]
         if sub in ("enabled", "elevate"):
-            tun[sub] = _as_bool(value, sub == "elevate")
+            tun[sub] = _as_bool(value, True)
         elif sub == "mtu":
             tun["mtu"] = max(1280, min(1500, _as_int(value, 1500)))
         else:
@@ -562,7 +571,15 @@ def get_tun_enabled(cfg: dict[str, Any] | None = None) -> bool:
         return _truthy(raw)
     src = cfg if cfg is not None else _runtime()
     tun = src.get("tun") if isinstance(src.get("tun"), dict) else {}
-    return _as_bool(tun.get("enabled"), False)
+    return _as_bool(tun.get("enabled"), True)
+
+
+def get_kill_switch(cfg: dict[str, Any] | None = None) -> bool:
+    raw = os.environ.get("KILL_SWITCH")
+    if raw is not None and str(raw).strip() != "":
+        return _truthy(raw)
+    src = cfg if cfg is not None else _runtime()
+    return _as_bool((src or {}).get("kill_switch"), True)
 
 
 def get_tun_elevate(cfg: dict[str, Any] | None = None) -> bool:

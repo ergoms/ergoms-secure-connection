@@ -1,4 +1,4 @@
-"""ERGOMS VPN desktop client (VLESS+Reality)."""
+"""ERGOMS SECURE CONNECTION desktop client (VLESS+Reality)."""
 
 from desktop.branding import APP_NAME, APP_ID
 

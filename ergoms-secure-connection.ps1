@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  ERGOMS VPN — CLI wrapper to the Python client
+  ERGOMS SECURE CONNECTION — CLI wrapper to the Python client
 #>
 param(
     [Parameter(Position = 0)]

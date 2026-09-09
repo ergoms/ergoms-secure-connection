@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""One-file GUI/CLI build → dist/ErgomsVPN.exe (Windows) / dist/ErgomsVPN (Linux)."""
+"""One-file GUI/CLI build → dist/ErgomsSecureConnection.exe (Windows) / dist/ErgomsSecureConnection (Linux)."""
 
 import sys
 from pathlib import Path
@@ -81,7 +81,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="ErgomsVPN",
+    name="ErgomsSecureConnection",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

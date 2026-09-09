@@ -58,7 +58,7 @@ def decrypt_bytes(blob: bytes, password: str) -> bytes:
     if not password:
         raise ValueError("Password is required")
     if not blob.startswith(MAGIC):
-        raise ValueError("Not an ERGOMS VPN encrypted config (bad magic)")
+        raise ValueError("Not an ERGOMS SECURE CONNECTION encrypted config (bad magic)")
     body = blob[len(MAGIC) :]
     if len(body) < SALT_LEN + NONCE_LEN + MAC_LEN:
         raise ValueError("Encrypted file is truncated")

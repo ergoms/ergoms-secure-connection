@@ -56,6 +56,7 @@ Item {
             Chip { label: "HTTP :" + bridge.httpPort; lit: bridge.httpUp }
             Chip { label: "PAC"; lit: bridge.pacUp }
             Chip { label: "TUN"; lit: bridge.tun }
+            Chip { label: "Kill switch"; lit: bridge.killSwitchOn }
         }
 
         PrimaryButton {

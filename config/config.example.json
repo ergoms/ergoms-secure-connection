@@ -8,6 +8,7 @@
   "watchdog": true,
   "watchdog_interval": 15,
   "watchdog_max_retries": 5,
+  "kill_switch": true,
   "server": {
     "host": "YOUR_VPS_IP_OR_HOSTNAME",
     "port": 443,
@@ -47,7 +48,7 @@
   ],
   "proxy_bypass_via": "direct",
   "tun": {
-    "enabled": false,
+    "enabled": true,
     "elevate": true,
     "sing_box_path": "",
     "mtu": 1500

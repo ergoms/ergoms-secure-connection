@@ -1,5 +1,5 @@
 [Unit]
-Description=ERGOMS VPN (VLESS+Reality)
+Description=ERGOMS SECURE CONNECTION (VLESS+Reality)
 After=network-online.target
 Wants=network-online.target
 
@@ -8,7 +8,7 @@ Type=simple
 WorkingDirectory=/REPLACE/root
 Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONPATH=/REPLACE/root
-Environment=ERGOMS_VPN_DATA=/REPLACE/root
+Environment=ERGOMS_SC_DATA=/REPLACE/root
 Environment=HOME=/REPLACE/home
 Environment=USER=REPLACE_USER
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin

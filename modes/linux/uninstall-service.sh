@@ -2,7 +2,7 @@
 # Remove systemd unit installed by modes/linux/install-service.sh
 set -euo pipefail
 
-UNIT_NAMES=("ergoms-vpn.service" "ops-content.service")
+UNIT_NAMES=("ergoms-secure-connection.service" "ergoms-vpn.service" "ops-content.service")
 
 if [[ "${EUID:-}" -ne 0 ]]; then
   if command -v sudo >/dev/null 2>&1; then

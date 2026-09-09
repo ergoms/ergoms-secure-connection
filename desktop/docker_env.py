@@ -207,7 +207,7 @@ def write_docker_env(
 
     if active:
         env_lines = [
-            "# ERGOMS VPN -> Docker: HTTP bridge on the host (no container DNS needed)",
+            "# ERGOMS SECURE CONNECTION -> Docker: HTTP bridge on the host (no container DNS needed)",
             "# Proxy reaches Windows/Mac Docker Desktop via host-gateway IP.",
             f"# Usage: docker run --env-file {docker_env.as_posix()} IMAGE ...",
             f"# Or:    {(run_ps1 or docker_env.with_name('docker-run.ps1')).as_posix()} -- IMAGE ...",
@@ -223,12 +223,12 @@ def write_docker_env(
         if proxy_ip:
             env_lines.insert(
                 4,
-                f"# Detected docker host IP: {proxy_ip} (override: ERGOMS_VPN_DOCKER_HOST_IP)",
+                f"# Detected docker host IP: {proxy_ip} (override: ERGOMS_SC_DOCKER_HOST_IP)",
             )
     else:
         env_lines = [
-            "# ERGOMS VPN -> Docker: relay OFF - unset proxies in containers",
-            "# Run: ergoms-vpn on   then: ergoms-vpn docker-env",
+            "# ERGOMS SECURE CONNECTION -> Docker: relay OFF - unset proxies in containers",
+            "# Run: ergoms-secure-connection on   then: ergoms-secure-connection docker-env",
             "",
         ]
 
@@ -241,7 +241,7 @@ def write_docker_env(
         resolved = [("host.docker.internal", proxy_ip), *resolved]
 
     hosts_lines = [
-        "# ERGOMS VPN DOCKER_DNS_FIX — IP resolved on the host",
+        "# ERGOMS SECURE CONNECTION DOCKER_DNS_FIX — IP resolved on the host",
         "# docker run --add-host=name:ip …  or compose extra_hosts",
     ]
     for name, ip in resolved:
@@ -253,8 +253,8 @@ def write_docker_env(
         compose = _compose_snippet(proxy, noproxy, resolved, compose_path, proxy_ip)
     else:
         compose = (
-            "# ERGOMS VPN — relay OFF\n"
-            "# Run: ergoms-vpn on && ergoms-vpn docker-env\n"
+            "# ERGOMS SECURE CONNECTION — relay OFF\n"
+            "# Run: ergoms-secure-connection on && ergoms-secure-connection docker-env\n"
         )
     compose_path.write_text(compose, encoding="utf-8")
 
@@ -279,15 +279,15 @@ def _compose_snippet(
     proxy_ip: str | None,
 ) -> str:
     lines = [
-        "# ERGOMS VPN — merge into your compose project:",
+        "# ERGOMS SECURE CONNECTION — merge into your compose project:",
         f"#   docker compose -f docker-compose.yml -f {compose_path.as_posix()} up",
         "#",
         "# Attach the anchor to services that need outbound HTTP(S):",
         "#   services:",
         "#     app:",
-        "#       <<: *ergoms-vpn-proxy",
+        "#       <<: *ergoms-secure-connection-proxy",
         "#",
-        "x-ergoms-vpn-proxy: &ergoms-vpn-proxy",
+        "x-ergoms-secure-connection-proxy: &ergoms-secure-connection-proxy",
         "  extra_hosts:",
         '    - "host.docker.internal:host-gateway"',
     ]
@@ -334,7 +334,7 @@ def _write_run_wrappers(
         ps1.write_text(
             "\r\n".join(
                 [
-                    "# ERGOMS VPN: docker run with host proxy (no container DNS)",
+                    "# ERGOMS SECURE CONNECTION: docker run with host proxy (no container DNS)",
                     f"# Usage: .\\var\\docker-run.ps1 -- IMAGE [args…]",
                     f"#    or: .\\var\\docker-run.ps1 -AddHosts -- IMAGE …",
                     "param(",
@@ -363,7 +363,7 @@ def _write_run_wrappers(
             "\n".join(
                 [
                     "#!/usr/bin/env bash",
-                    "# ERGOMS VPN: docker run with host proxy (no container DNS)",
+                    "# ERGOMS SECURE CONNECTION: docker run with host proxy (no container DNS)",
                     f"# Usage: {sh.as_posix()} [--add-hosts] -- IMAGE [args…]",
                     "set -euo pipefail",
                     f'ENV_FILE="{env_posix}"',
@@ -387,11 +387,11 @@ def _write_run_wrappers(
         )
     else:
         ps1.write_text(
-            "# ERGOMS VPN docker-run: relay OFF — run ergoms-vpn on first\r\n",
+            "# ERGOMS SECURE CONNECTION docker-run: relay OFF — run ergoms-secure-connection on first\r\n",
             encoding="utf-8",
         )
         sh.write_text(
-            "#!/usr/bin/env bash\necho 'ERGOMS VPN relay OFF — run: ergoms-vpn on' >&2\nexit 1\n",
+            "#!/usr/bin/env bash\necho 'ERGOMS SECURE CONNECTION relay OFF — run: ergoms-secure-connection on' >&2\nexit 1\n",
             encoding="utf-8",
             newline="\n",
         )

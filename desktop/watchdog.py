@@ -14,6 +14,7 @@ from desktop.client import OpsClient, _port_open
 from desktop.config_io import (
     get_local_socks_port,
     get_reverse_ssh_enabled,
+    get_kill_switch,
     get_tun_enabled,
     get_watchdog_enabled,
     get_watchdog_interval,
@@ -202,7 +203,7 @@ class TunnelWatchdog:
             return
         self._stop.clear()
         self._thread = threading.Thread(
-            target=self._loop, name="ergoms-vpn-watchdog", daemon=True
+            target=self._loop, name="ergoms-secure-connection-watchdog", daemon=True
         )
         self._thread.start()
         self.log("watchdog: started")
@@ -246,12 +247,18 @@ class TunnelWatchdog:
                 f"watchdog: {problem} "
                 f"({self._probe_fails}/{_PROBE_FAILS_BEFORE_RECONNECT})"
             )
-            try:
-                if self.client.singbox.running():
-                    self.client.singbox.stop()
-                    self.log("watchdog: singbox stopped (failsafe while SOCKS zombie)")
-            except Exception as exc:  # noqa: BLE001
-                self.log(f"watchdog: singbox failsafe stop: {exc}")
+            if get_kill_switch():
+                try:
+                    self.client._ensure_kill_switch(self.client.config())  # noqa: SLF001
+                except Exception as exc:  # noqa: BLE001
+                    self.log(f"watchdog: kill switch: {exc}")
+            else:
+                try:
+                    if self.client.singbox.running():
+                        self.client.singbox.stop()
+                        self.log("watchdog: singbox stopped (failsafe while SOCKS zombie)")
+                except Exception as exc:  # noqa: BLE001
+                    self.log(f"watchdog: singbox failsafe stop: {exc}")
             if self._probe_fails < _PROBE_FAILS_BEFORE_RECONNECT:
                 return
         elif problem is None:

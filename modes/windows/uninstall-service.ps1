@@ -8,7 +8,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ServiceIds = @('ergoms-vpn', 'ops-content')
+$ServiceIds = @('ergoms-secure-connection', 'ergoms-vpn', 'ops-content')
 
 if (-not $Root) {
     $Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -38,10 +38,12 @@ if (-not (Test-Admin)) {
 
 Set-Location $Root
 $winswCandidates = @(
+    (Join-Path $Root 'tools\ergoms-secure-connection-service.exe')
     (Join-Path $Root 'tools\ergoms-vpn-service.exe')
     (Join-Path $Root 'tools\ops-content-service.exe')
 )
 $xmlCandidates = @(
+    (Join-Path $Root 'tools\ergoms-secure-connection-service.xml')
     (Join-Path $Root 'tools\ergoms-vpn-service.xml')
     (Join-Path $Root 'tools\ops-content-service.xml')
 )

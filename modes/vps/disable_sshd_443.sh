@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Remove ERGOMS VPN / ops-content sshd :443 drop-in so sing-box can bind :443.
+# Remove ERGOMS SECURE CONNECTION / ops-content sshd :443 drop-in so sing-box can bind :443.
 # Keeps sshd on :22 for provider console / out-of-band access.
 set -euo pipefail
 

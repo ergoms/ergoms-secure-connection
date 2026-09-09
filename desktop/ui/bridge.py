@@ -55,6 +55,7 @@ class GuiBridge(QObject):
 
     activeChanged = Signal()
     tunChanged = Signal()
+    killSwitchOnChanged = Signal()
     busyChanged = Signal()
     busyTextChanged = Signal()
     statusTitleChanged = Signal()
@@ -98,6 +99,7 @@ class GuiBridge(QObject):
 
         self._active = False
         self._tun = False
+        self._kill_switch_on = False
         self._busy = False
         self._busy_text = ""
         self._status_title = "Отключено"
@@ -143,9 +145,9 @@ class GuiBridge(QObject):
             except Exception as exc:  # noqa: BLE001
                 self._enqueue_log(f"инициализация: {exc}")
 
-        self._enqueue_log(f"ERGOMS VPN {__version__}")
+        self._enqueue_log(f"ERGOMS SECURE CONNECTION {__version__}")
         self._enqueue_log(f"данные: {self.paths.root}")
-        self._enqueue_log(f"журнал: {self.paths.logs_dir / 'ergoms-vpn.log'}")
+        self._enqueue_log(f"журнал: {self.paths.logs_dir / 'ergoms-secure-connection.log'}")
 
         self.loadSettings()
         self._sync_config_ready()
@@ -169,6 +171,10 @@ class GuiBridge(QObject):
     @Property(bool, notify=tunChanged)
     def tun(self) -> bool:
         return self._tun
+
+    @Property(bool, notify=killSwitchOnChanged)
+    def killSwitchOn(self) -> bool:
+        return self._kill_switch_on
 
     @Property(bool, notify=busyChanged)
     def busy(self) -> bool:
@@ -351,6 +357,7 @@ class GuiBridge(QObject):
         self.modeLabelChanged.emit()
         self._settings.insert("socksScope", str(cfg.get("socks_scope") or "full"))
         self._settings.insert("tunAuto", bool(tun.get("enabled")))
+        self._settings.insert("killSwitch", bool(cfg.get("kill_switch", True)))
         self._settings.insert("httpBridgePort", str(cfg.get("http_bridge_port") or 1088))
         self._settings.insert(
             "useProxy",
@@ -423,7 +430,7 @@ class GuiBridge(QObject):
     def importConfigFile(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             None,
-            "Конфиг ERGOMS VPN",
+            "Конфиг ERGOMS SECURE CONNECTION",
             "",
             "Config (*.json *.enc);;JSON (*.json);;Encrypted (*.enc);;All files (*)",
         )
@@ -440,7 +447,7 @@ class GuiBridge(QObject):
         if encrypted:
             password, ok = QInputDialog.getText(
                 None,
-                "ERGOMS VPN",
+                "ERGOMS SECURE CONNECTION",
                 "Пароль к файлу:",
                 QLineEdit.EchoMode.Password,
             )
@@ -525,8 +532,9 @@ class GuiBridge(QObject):
                     x.strip() for x in raw_bypass.split(",") if x.strip()
                 ]
                 cfg["proxy_bypass_via"] = "direct"
+            cfg["kill_switch"] = bool(s.value("killSwitch"))
             cfg.setdefault("tun", {})
-            cfg["tun"]["enabled"] = bool(s.value("tunAuto"))
+            cfg["tun"]["enabled"] = bool(s.value("tunAuto")) or cfg["kill_switch"]
             cfg["tun"]["elevate"] = True
             cfg["tun"]["sing_box_path"] = ""
             cfg.setdefault("transport", {})
@@ -703,10 +711,11 @@ class GuiBridge(QObject):
         active = bool(singbox or tun)
         scope = _scope_label(str(st.get("socks_scope") or ""))
         target = str(st.get("server_target") or st.get("ssh_target") or "—")
+        ks_on = bool(st.get("kill_switch_applied") or (active and st.get("kill_switch")))
         sig = (
             f"{singbox}|{tun}|{active}|{socks_up}|{http_up}|{pac_up}|{scope}|{target}"
             f"|{st.get('watchdog_running')}|{st.get('reverse_ssh_running')}"
-            f"|{st.get('reverse_ssh_listen')}"
+            f"|{st.get('reverse_ssh_listen')}|{ks_on}"
         )
         if not force and (sig == self._last_status_sig or self._busy):
             return
@@ -714,6 +723,7 @@ class GuiBridge(QObject):
 
         self._active = active
         self._tun = tun
+        self._kill_switch_on = ks_on
         self._singbox_up = singbox
         if active:
             self._overrides_cleared = False
@@ -767,6 +777,13 @@ class GuiBridge(QObject):
         elif tun:
             title, sub, color = "TUN", "Без VLESS", _C_WARN
             power = "Отключить"
+        elif ks_on:
+            title, sub, color = (
+                "Нет сети",
+                "Kill switch блокирует интернет — подключите или отключите VPN",
+                _C_WARN,
+            )
+            power = "Отключить"
         else:
             title, sub, color = (
                 ("Нет конфига", "Загрузите config.json или .enc", _C_MUTED)
@@ -782,6 +799,7 @@ class GuiBridge(QObject):
 
         self.activeChanged.emit()
         self.tunChanged.emit()
+        self.killSwitchOnChanged.emit()
         self.singboxUpChanged.emit()
         self.watchdogUpChanged.emit()
         self.reverseSshUpChanged.emit()
@@ -807,7 +825,8 @@ def _settings_defaults() -> dict[str, Any]:
         "corporate": False,
         "useProxy": False,
         "socksScope": "full",
-        "tunAuto": False,
+        "tunAuto": True,
+        "killSwitch": True,
         "httpBridgePort": "1088",
         "corporateProxy": "",
         "serverHost": "",

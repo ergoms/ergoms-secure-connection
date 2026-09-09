@@ -63,7 +63,7 @@ def clear_instead_of(log: LogFn = _noop) -> None:
     if r.returncode != 0 or not r.stdout:
         return
     for line in r.stdout.splitlines():
-        if re.search(r"ops-content|ergoms-vpn|ERGOMS|proxy-kill|/https/github", line):
+        if re.search(r"ops-content|ergoms-vpn|ergoms-secure-connection|ERGOMS|proxy-kill|/https/github", line):
             key = line.split(None, 1)[0]
             _git("config", "--global", "--unset-all", key)
 
@@ -84,7 +84,7 @@ def write_cli_env(http_port: int, cli_env: Path, cli_ps1: Path) -> None:
     cli_env.write_text(
         "\n".join(
             [
-                "# ERGOMS VPN CLI proxy (bash / Git Bash): source ./var/cli.env",
+                "# ERGOMS SECURE CONNECTION CLI proxy (bash / Git Bash): source ./var/cli.env",
                 f"export HTTP_PROXY={proxy}",
                 f"export HTTPS_PROXY={proxy}",
                 f"export http_proxy={proxy}",
@@ -100,7 +100,7 @@ def write_cli_env(http_port: int, cli_env: Path, cli_ps1: Path) -> None:
     cli_ps1.write_text(
         "\r\n".join(
             [
-                "# ERGOMS VPN CLI proxy (PowerShell): . .\\var\\cli.ps1",
+                "# ERGOMS SECURE CONNECTION CLI proxy (PowerShell): . .\\var\\cli.ps1",
                 f"$env:HTTP_PROXY = '{proxy}'",
                 f"$env:HTTPS_PROXY = '{proxy}'",
                 f"$env:http_proxy = '{proxy}'",
