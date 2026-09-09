@@ -70,7 +70,7 @@ def detect_bind_interface(dest: str) -> str | None:
         if i + 1 >= len(parts):
             return None
         dev = parts[i + 1].strip()
-        if not dev or dev.startswith("ops-content"):
+        if not dev or dev.startswith("ops-content") or dev.startswith("ergoms-vpn"):
             return None
         return dev
     return None
@@ -109,7 +109,7 @@ def _direct_python_paths() -> list[str]:
         siblings = [exe.with_name(n) for n in ("pythonw.exe", "python.exe", "python3.exe")]
         for sib in siblings:
             add(sib)
-        # Frozen OpsContent.exe: ProxyCommand falls back to PATH pythonw
+        # Frozen ErgomsVPN.exe: ProxyCommand falls back to PATH pythonw
         if not any(s.is_file() for s in siblings):
             for name in ("pythonw.exe", "python.exe", "python3.exe"):
                 w = shutil.which(name)
@@ -249,16 +249,26 @@ class TunManager:
 
     def stop(self) -> None:
         pid = self.pid()
+        targets: list[int] = []
         if pid:
-            procutil.kill_pid(pid)
-            self.log(f"sing-box pid={pid} stopped")
+            targets.append(pid)
         for orphan in procutil.pids_named("sing-box.exe", "sing-box"):
-            if orphan != pid:
-                procutil.kill_pid(orphan)
+            if orphan not in targets:
+                targets.append(orphan)
+        died = procutil.kill_pids(targets)
+        leftover = [p for p in targets if procutil.pid_alive(p)]
         self._pid_scan_at = 0.0
         self._pid_scan_result = None
         self.pid_path.unlink(missing_ok=True)
-        self.log("TUN выключен")
+        if leftover:
+            self.log(
+                f"legacy TUN: sing-box pid={','.join(str(p) for p in leftover)} "
+                "ещё жив (нужен UAC)"
+            )
+            return
+        if died:
+            self.log(f"legacy TUN: pid={','.join(str(p) for p in died)} остановлен")
+            self.log("TUN выключен")
 
     def _find_sing_box_pid(self) -> int | None:
         for pid in procutil.pids_named("sing-box.exe", "sing-box"):

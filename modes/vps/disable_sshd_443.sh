@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Remove ops-content sshd :443 drop-in so sing-box (or another TLS service) can bind :443.
+# Remove ERGOMS VPN / ops-content sshd :443 drop-in so sing-box can bind :443.
 # Keeps sshd on :22 for provider console / out-of-band access.
 set -euo pipefail
 
@@ -23,7 +23,7 @@ for DROPIN in "${DROPINS[@]}"; do
   fi
 done
 if [[ "$removed" -eq 0 ]]; then
-  echo "No ops-content :443 drop-in (nothing to remove)"
+  echo "No :443 drop-in (nothing to remove)"
 fi
 
 # If someone put Port 443 into the main config, warn (do not edit blindly).

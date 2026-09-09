@@ -6,6 +6,8 @@ import os
 import sys
 from pathlib import Path
 
+from desktop.branding import APP_NAME, ENV_DATA, env
+
 
 def _proxy_backup_name() -> str:
     return "winproxy.bak.json" if sys.platform == "win32" else "linuxproxy.bak.json"
@@ -48,17 +50,22 @@ def _under_program_files(path: Path) -> bool:
 
 def _appdata_root() -> Path:
     local = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
-    return Path(local) / "ops-content"
+    base = Path(local)
+    current = base / APP_NAME
+    legacy = base / "ops-content"
+    if current.is_dir() or not legacy.is_dir():
+        return current
+    return legacy
 
 
 def data_root() -> Path:
     """Writable project root.
 
     - Dev: repository root
-    - Frozen exe: %LOCALAPPDATA%\\ops-content (config imported via GUI)
-    - Override: OPS_CONTENT_DATA
+    - Frozen exe: %LOCALAPPDATA%\\ERGOMS VPN (legacy: ops-content)
+    - Override: ERGOMS_VPN_DATA (or OPS_CONTENT_DATA)
     """
-    override = (os.environ.get("OPS_CONTENT_DATA") or "").strip()
+    override = env(ENV_DATA)
     if override:
         return Path(override).expanduser()
 

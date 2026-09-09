@@ -47,7 +47,7 @@ def _has_display() -> bool:
 
 def _run_connect_socks(argv: list[str]) -> int:
     if len(argv) != 2:
-        print("usage: ops-content connect-socks <host> <port>", file=sys.stderr)
+        print("usage: ergoms-vpn connect-socks <host> <port>", file=sys.stderr)
         return 2
     import lib.connect_socks as connect_socks
 
@@ -57,7 +57,7 @@ def _run_connect_socks(argv: list[str]) -> int:
 
 def _show_help() -> int:
     print(
-        """ops-content — клиент VLESS+Reality (Windows / Linux)
+        """ERGOMS VPN — клиент VLESS+Reality (Windows / Linux)
 
 Конфиг: один файл config.json  (образец: config/config.example.json)
 
@@ -85,8 +85,8 @@ def _show_help() -> int:
 
 Запуск:
   python -m desktop <cmd> …
-  ./ops-content.sh <cmd> …          # Linux
-  .\\ops-content.ps1 <cmd> …        # Windows
+  ./ergoms-vpn.sh <cmd> …           # Linux
+  .\\ergoms-vpn.ps1 <cmd> …         # Windows
 """
     )
     return 0
@@ -128,7 +128,7 @@ def _run_service(cmd: str) -> int:
     if sys.platform == "win32":
         script = _ROOT / "modes" / "windows" / f"{cmd}.ps1"
         if not script.is_file():
-            print(f"[ops-content] ERROR: missing {script}", file=sys.stderr)
+            print(f"[ERGOMS VPN] ERROR: missing {script}", file=sys.stderr)
             return 1
         powershell = os.path.join(
             os.environ.get("SystemRoot", r"C:\Windows"),
@@ -148,7 +148,7 @@ def _run_service(cmd: str) -> int:
         )
     script = _ROOT / "modes" / "linux" / f"{cmd}.sh"
     if not script.is_file():
-        print(f"[ops-content] ERROR: missing {script}", file=sys.stderr)
+        print(f"[ERGOMS VPN] ERROR: missing {script}", file=sys.stderr)
         return 1
     return int(subprocess.call(["bash", str(script)]))
 
@@ -169,7 +169,7 @@ def _run_encrypt(rest: list[str]) -> int:
     password = password or _ask_password(confirm=True)
     apply_config(paths.config_path, force=True, env_path=paths.env_path)
     encrypt_file(paths.config_path, out, password)
-    print(f"[ops-content] encrypted → {out}")
+    print(f"[ERGOMS VPN] encrypted → {out}")
     return 0
 
 
@@ -185,13 +185,13 @@ def _run_decrypt(rest: list[str]) -> int:
     if not src.is_absolute():
         src = Path.cwd() / src
     if not src.is_file():
-        print(f"[ops-content] ERROR: file not found: {src}", file=sys.stderr)
+        print(f"[ERGOMS VPN] ERROR: file not found: {src}", file=sys.stderr)
         return 1
     password = password or _ask_password(confirm=False)
     cfg = decrypt_file(src, paths.config_path, password)
     save_config(paths.config_path, ensure_config_defaults(cfg))
     apply_config(paths.config_path, force=True)
-    print(f"[ops-content] decrypted → {paths.config_path}")
+    print(f"[ERGOMS VPN] decrypted → {paths.config_path}")
     return 0
 
 
@@ -206,7 +206,7 @@ def _run_cli(cmd: str, rest: list[str]) -> int:
     from desktop.client import OpsClient
 
     def log(msg: str) -> None:
-        print(f"[ops-content] {msg}", flush=True)
+        print(f"[ERGOMS VPN] {msg}", flush=True)
 
     client = OpsClient(log=log)
     try:
@@ -224,7 +224,7 @@ def _run_cli(cmd: str, rest: list[str]) -> int:
             host = rest[0] if rest else ""
             port = int(rest[1]) if len(rest) > 1 else 443
             if not host:
-                print("usage: ops-content probe HOST [PORT]", file=sys.stderr)
+                print("usage: ergoms-vpn probe HOST [PORT]", file=sys.stderr)
                 return 2
             return client.probe(host, port)
         elif cmd == "test":
@@ -246,9 +246,13 @@ def _run_cli(cmd: str, rest: list[str]) -> int:
         elif cmd == "watch":
             from desktop.watchdog import run_watch_forever
 
-            daemon = "--daemon" in rest or os.environ.get(
-                "OPS_CONTENT_WATCHDOG_CHILD", ""
-            ).strip() in ("1", "true", "yes")
+            from desktop.branding import ENV_WATCHDOG_CHILD, env
+
+            daemon = "--daemon" in rest or env(ENV_WATCHDOG_CHILD).lower() in (
+                "1",
+                "true",
+                "yes",
+            )
             return run_watch_forever(client, log=log, daemon=daemon)
         elif cmd in ("help", "-h", "--help"):
             return _show_help()
@@ -256,7 +260,7 @@ def _run_cli(cmd: str, rest: list[str]) -> int:
             print(f"unknown command: {cmd}", file=sys.stderr)
             return _show_help() or 2
     except Exception as exc:  # noqa: BLE001
-        print(f"[ops-content] ERROR: {exc}", file=sys.stderr)
+        print(f"[ERGOMS VPN] ERROR: {exc}", file=sys.stderr)
         return 1
     return 0
 
@@ -264,7 +268,7 @@ def _run_cli(cmd: str, rest: list[str]) -> int:
 def _run_gui() -> int:
     if not _has_display():
         print(
-            "[ops-content] GUI недоступен (нет DISPLAY). Используйте CLI, напр.: python -m desktop on",
+            "[ERGOMS VPN] GUI недоступен (нет DISPLAY). Используйте CLI, напр.: python -m desktop on",
             file=sys.stderr,
         )
         return _show_help() or 1
@@ -296,7 +300,7 @@ def main(argv: list[str] | None = None) -> int:
         if (
             frozen
             or autostart
-            or os.environ.get("OPS_CONTENT_GUI", "").strip()
+            or os.environ.get("ERGOMS_VPN_GUI", os.environ.get("OPS_CONTENT_GUI", "")).strip()
             in (
                 "1",
                 "true",

@@ -8,7 +8,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ServiceId = 'ops-content'
+$ServiceIds = @('ergoms-vpn', 'ops-content')
 
 if (-not $Root) {
     $Root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
@@ -37,24 +37,35 @@ if (-not (Test-Admin)) {
 }
 
 Set-Location $Root
-$winsw = Join-Path $Root 'tools\ops-content-service.exe'
-$xmlPath = Join-Path $Root 'tools\ops-content-service.xml'
+$winswCandidates = @(
+    (Join-Path $Root 'tools\ergoms-vpn-service.exe')
+    (Join-Path $Root 'tools\ops-content-service.exe')
+)
+$xmlCandidates = @(
+    (Join-Path $Root 'tools\ergoms-vpn-service.xml')
+    (Join-Path $Root 'tools\ops-content-service.xml')
+)
 
-if (Test-Path -LiteralPath $winsw) {
-    & $winsw stop 2>$null | Out-Null
-    Start-Sleep -Seconds 1
-    & $winsw uninstall 2>$null | Out-Null
-}
-
-$svc = Get-Service -Name $ServiceId -ErrorAction SilentlyContinue
-if ($svc) {
-    if ($svc.Status -ne 'Stopped') {
-        Stop-Service -Name $ServiceId -Force -ErrorAction SilentlyContinue
+foreach ($winsw in $winswCandidates) {
+    if (Test-Path -LiteralPath $winsw) {
+        & $winsw stop 2>$null | Out-Null
         Start-Sleep -Seconds 1
+        & $winsw uninstall 2>$null | Out-Null
     }
-    sc.exe delete $ServiceId | Out-Null
 }
 
-Remove-Item -LiteralPath $xmlPath -ErrorAction SilentlyContinue
+foreach ($id in $ServiceIds) {
+    $svc = Get-Service -Name $id -ErrorAction SilentlyContinue
+    if ($svc) {
+        if ($svc.Status -ne 'Stopped') {
+            Stop-Service -Name $id -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 1
+        }
+        sc.exe delete $id | Out-Null
+        Write-Host "Removed $id"
+    }
+}
 
-Write-Host "Removed $ServiceId"
+foreach ($xmlPath in $xmlCandidates) {
+    Remove-Item -LiteralPath $xmlPath -ErrorAction SilentlyContinue
+}

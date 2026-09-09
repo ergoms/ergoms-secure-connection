@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
@@ -142,8 +143,9 @@ class GuiBridge(QObject):
             except Exception as exc:  # noqa: BLE001
                 self._enqueue_log(f"инициализация: {exc}")
 
-        self._enqueue_log(f"ops-content {__version__}")
+        self._enqueue_log(f"ERGOMS VPN {__version__}")
         self._enqueue_log(f"данные: {self.paths.root}")
+        self._enqueue_log(f"журнал: {self.paths.logs_dir / 'ergoms-vpn.log'}")
 
         self.loadSettings()
         self._sync_config_ready()
@@ -421,7 +423,7 @@ class GuiBridge(QObject):
     def importConfigFile(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             None,
-            "Конфиг ops-content",
+            "Конфиг ERGOMS VPN",
             "",
             "Config (*.json *.enc);;JSON (*.json);;Encrypted (*.enc);;All files (*)",
         )
@@ -438,7 +440,7 @@ class GuiBridge(QObject):
         if encrypted:
             password, ok = QInputDialog.getText(
                 None,
-                "ops-content",
+                "ERGOMS VPN",
                 "Пароль к файлу:",
                 QLineEdit.EchoMode.Password,
             )
@@ -604,10 +606,12 @@ class GuiBridge(QObject):
     # ── internals ───────────────────────────────────────────────────────
 
     def _enqueue_log(self, msg: str) -> None:
-        self._log_lines.append(str(msg))
+        stamp = datetime.now().strftime("%H:%M:%S")
+        line = f"{stamp}  {msg}"
+        self._log_lines.append(line)
         if len(self._log_lines) > 2000:
             self._log_lines = self._log_lines[-1500:]
-        self.logAppended.emit(str(msg))
+        self.logAppended.emit(line)
         self.logTextChanged.emit()
 
     def _set_busy(self, busy: bool, waiting: str = "Подождите…") -> None:
@@ -693,12 +697,16 @@ class GuiBridge(QObject):
     def _apply_status(self, st: dict[str, Any], *, force: bool = False) -> None:
         singbox = bool(st.get("singbox_running"))
         tun = bool(st.get("tun_running"))
+        socks_up = bool(st.get("socks_up")) if "socks_up" in st else singbox
+        http_up = bool(st.get("http_up")) if "http_up" in st else singbox
+        pac_up = bool(st.get("pac_up")) if "pac_up" in st else singbox
         active = bool(singbox or tun)
         scope = _scope_label(str(st.get("socks_scope") or ""))
         target = str(st.get("server_target") or st.get("ssh_target") or "—")
         sig = (
-            f"{singbox}|{tun}|{active}|{scope}|{target}|{st.get('watchdog_running')}"
-            f"|{st.get('reverse_ssh_running')}|{st.get('reverse_ssh_listen')}"
+            f"{singbox}|{tun}|{active}|{socks_up}|{http_up}|{pac_up}|{scope}|{target}"
+            f"|{st.get('watchdog_running')}|{st.get('reverse_ssh_running')}"
+            f"|{st.get('reverse_ssh_listen')}"
         )
         if not force and (sig == self._last_status_sig or self._busy):
             return
@@ -718,9 +726,10 @@ class GuiBridge(QObject):
         self._watchdog_up = bool(st.get("watchdog_running"))
         self._reverse_ssh_up = bool(st.get("reverse_ssh_running"))
         self._reverse_ssh_port = int(st.get("reverse_ssh_listen") or 2222)
-        self._socks_up = singbox
-        self._http_up = singbox
-        self._pac_up = singbox
+        self._socks_up = socks_up
+        self._http_up = http_up
+        self._pac_up = pac_up
+        self._socks_port = int(st.get("socks_port") or self._socks_port or 1080)
         self._http_port = int(st.get("http_port") or 1088)
         self._pac_port = int(st.get("pac_port") or 1089)
         self._server_target = target
@@ -736,11 +745,24 @@ class GuiBridge(QObject):
             except Exception:  # noqa: BLE001
                 pass
 
-        if singbox and tun:
-            title, sub, color = "Защищено", "VLESS и TUN активны", _C_ACCENT
+        socks_s = f"SOCKS :{self._socks_port}"
+        http_s = f"HTTP :{self._http_port}"
+        if singbox and tun and socks_up:
+            title, sub, color = (
+                "Защищено",
+                f"{target} · {socks_s} · TUN",
+                _C_ACCENT,
+            )
+            power = "Отключить"
+        elif singbox and not socks_up:
+            title, sub, color = (
+                "Сбой",
+                f"процесс есть, {socks_s} молчит — смотрите журнал",
+                _C_DANGER,
+            )
             power = "Отключить"
         elif singbox:
-            title, sub, color = "Подключено", "VLESS+Reality", _C_OK
+            title, sub, color = "Подключено", f"{target} · {socks_s} · {http_s}", _C_OK
             power = "Отключить"
         elif tun:
             title, sub, color = "TUN", "Без VLESS", _C_WARN

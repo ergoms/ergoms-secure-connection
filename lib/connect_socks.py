@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""SSH ProxyCommand via local SOCKS5 (ops-content :1080).
+"""SSH ProxyCommand via local SOCKS5 (ERGOMS VPN :1080).
 
 Usage:
   ssh -o ProxyCommand="python connect_socks.py %h %p" ...
 
 Env:
-  OPS_CONTENT_SOCKS   default: 127.0.0.1:1080
+  ERGOMS_VPN_SOCKS   default: 127.0.0.1:1080
 """
 
 from __future__ import annotations
@@ -29,7 +29,8 @@ def parse_socks(value: str) -> tuple[str, int]:
 
 def open_socks(target_host: str, target_port: int) -> socket.socket:
     socks_host, socks_port = parse_socks(
-        os.environ.get("OPS_CONTENT_SOCKS", "127.0.0.1:1080")
+        os.environ.get("ERGOMS_VPN_SOCKS")
+        or os.environ.get("OPS_CONTENT_SOCKS", "127.0.0.1:1080")
     )
     sock = socket.create_connection((socks_host, socks_port), timeout=20)
     try:

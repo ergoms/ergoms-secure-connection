@@ -2,7 +2,7 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "ops-content: setup",
+      "label": "ERGOMS VPN: setup",
       "detail": "Poetry + .venv + библиотеки (gui) и скачать sing-box в tools/",
       "type": "process",
       "command": "bash",
@@ -31,8 +31,8 @@
       "problemMatcher": []
     },
     {
-      "label": "ops-content: build",
-      "detail": "Собрать desktop exe: dist/OpsContent.exe",
+      "label": "ERGOMS VPN: build",
+      "detail": "Собрать desktop exe: dist/ErgomsVPN.exe",
       "type": "process",
       "command": "bash",
       "args": ["${workspaceFolder}/.vscode/setup.sh", "build"],

@@ -9,6 +9,6 @@ echo 'On VPS (console):'
 echo '  bash modes/vps/disable_sshd_443.sh'
 echo '  bash modes/vps/bootstrap_singbox_443.sh'
 echo 'On PC: paste transport into config.json (server.host = VPS IP)'
-echo '  ./ops-content.sh probe HOST 443'
-echo '  ./ops-content.sh on'
+echo '  ./ergoms-vpn.sh probe HOST 443'
+echo '  ./ergoms-vpn.sh on'
 exit 0

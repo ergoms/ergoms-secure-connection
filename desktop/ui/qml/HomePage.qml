@@ -36,6 +36,28 @@ Item {
             font.family: T.fontUi
         }
 
+        Text {
+            Layout.fillWidth: true
+            horizontalAlignment: Text.AlignHCenter
+            text: bridge.statusSub
+            color: T.muted
+            font.pixelSize: 12
+            font.family: T.fontUi
+            wrapMode: Text.WordWrap
+        }
+
+        Flow {
+            Layout.fillWidth: true
+            Layout.preferredHeight: 28
+            Layout.alignment: Qt.AlignHCenter
+            spacing: 6
+
+            Chip { label: "SOCKS :" + bridge.socksPort; lit: bridge.socksUp }
+            Chip { label: "HTTP :" + bridge.httpPort; lit: bridge.httpUp }
+            Chip { label: "PAC"; lit: bridge.pacUp }
+            Chip { label: "TUN"; lit: bridge.tun }
+        }
+
         PrimaryButton {
             Layout.fillWidth: true
             Layout.preferredHeight: 50

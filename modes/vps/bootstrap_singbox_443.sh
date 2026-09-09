@@ -30,7 +30,7 @@ case "$arch" in
     ;;
 esac
 
-echo "==> Freeing :443 from sshd (if ops-content drop-in present)"
+echo "==> Freeing :443 from sshd (if ERGOMS VPN drop-in present)"
 if [[ -x "$ROOT/modes/vps/disable_sshd_443.sh" ]]; then
   bash "$ROOT/modes/vps/disable_sshd_443.sh" || true
 else
@@ -161,7 +161,7 @@ echo "==> Validating config"
 echo "==> systemd unit"
 cat >"$UNIT" <<EOF
 [Unit]
-Description=sing-box (ops-content VLESS Reality)
+Description=sing-box (ERGOMS VPN VLESS Reality)
 After=network-online.target
 Wants=network-online.target
 
@@ -227,18 +227,18 @@ On the office PC — merge server + transport into config.json, then:
   # config.json
   "tun": { "enabled": true, "elevate": true, ... }
 
-  ./ops-content.sh on
-  # or: .\\ops-content.ps1 on
+  ./ergoms-vpn.sh on
+  # or: .\\ergoms-vpn.ps1 on
   # or: python -m desktop on
 
   # optional: encrypt config for transfer to another PC
-  # ./ops-content.sh encrypt
-  # ./ops-content.sh decrypt config.json.enc
+  # ./ergoms-vpn.sh encrypt
+  # ./ergoms-vpn.sh decrypt config.json.enc
 
 Probe from office:
 
-  ./ops-content.sh probe $PUBLIC_IP 443
-  # or: .\\ops-content.ps1 probe $PUBLIC_IP 443
+  ./ergoms-vpn.sh probe $PUBLIC_IP 443
+  # or: .\\ergoms-vpn.ps1 probe $PUBLIC_IP 443
 
 Credentials saved on VPS: $CREDS
 ========================================================================
