@@ -85,6 +85,13 @@ def self_command() -> list[str]:
     return [sys.executable, "-m", "desktop"]
 
 
+def gui_command(*flags: str) -> list[str]:
+    """Argv to open the GUI (frozen exe or python -m desktop gui)."""
+    if is_frozen():
+        return [str(Path(sys.executable).resolve()), *flags]
+    return [sys.executable, "-m", "desktop", "gui", *flags]
+
+
 def resolve_ssh_identity(creds_dir: Path | None = None) -> str:
     """Auto-pick a private key from creds/ (no config setting)."""
     root = creds_dir or (data_root() / "creds")

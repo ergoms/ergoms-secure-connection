@@ -32,6 +32,36 @@ def is_admin() -> bool:
     return bool(hasattr(os, "geteuid") and os.geteuid() == 0)
 
 
+def win_quote(arg: str) -> str:
+    if not arg or any(ch in arg for ch in ' \t"'):
+        return '"' + arg.replace('"', '\\"') + '"'
+    return arg
+
+
+def relaunch_as_admin(
+    args: Sequence[str],
+    *,
+    cwd: str | None = None,
+    show: int = 1,
+) -> bool:
+    """Start *args* with a single UAC prompt. Caller should exit on True."""
+    if not args:
+        return False
+    if sys.platform != "win32":
+        return False
+    import ctypes
+
+    file = str(args[0])
+    params = " ".join(win_quote(str(a)) for a in args[1:])
+    directory = cwd or os.getcwd()
+    rc = int(
+        ctypes.windll.shell32.ShellExecuteW(  # type: ignore[attr-defined]
+            None, "runas", file, params, directory, int(show)
+        )
+    )
+    return rc > 32
+
+
 def invalidate_proc_cache() -> None:
     """Drop cached PID lookups (call before kill/stop)."""
     _proc_cache.clear()

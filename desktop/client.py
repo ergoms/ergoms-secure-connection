@@ -788,6 +788,23 @@ class OpsClient:
             self.log("kill switch: маршруты поставлю вместе с UAC для TUN")
         return cmds
 
+    def needs_elevation(self, *, action: str = "on") -> bool:
+        """True if this action would otherwise pop multiple UAC/cmd prompts."""
+        if procutil.is_admin():
+            return False
+        self.reload_env()
+        tun = get_tun_enabled() or get_kill_switch()
+        elevate = get_tun_elevate()
+        if action in ("on", "tun-on"):
+            return bool((tun and elevate) or get_kill_switch())
+        if kill_switch_is_applied():
+            return True
+        if (tun and elevate) and (
+            self.singbox.running() or self.tun.running()
+        ):
+            return True
+        return False
+
     def enable(self, *, spawn_watchdog: bool = True) -> None:
         self.reload_env()
         tun = get_tun_enabled() or get_kill_switch()
@@ -798,6 +815,8 @@ class OpsClient:
         )
         self.start_singbox_mode()
         if spawn_watchdog:
+            if procutil.is_admin():
+                self.stop_watchdog_daemon()
             self.ensure_watchdog_daemon()
 
     def disable(self) -> None:
