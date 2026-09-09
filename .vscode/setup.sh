@@ -91,21 +91,21 @@ run_pyinstaller() {
   fi
 }
 
-case "${1:-all}" in
+case "${1:-setup}" in
   libraries) install_libraries ;;
   sing-box) install_singbox ;;
   pyinstaller) run_pyinstaller ;;
-  exe)
+  setup|all)
+    install_libraries
+    install_singbox
+    ;;
+  build|exe)
     install_libraries
     install_singbox
     run_pyinstaller
     ;;
-  all)
-    install_libraries
-    install_singbox
-    ;;
   *)
-    echo "usage: setup.sh [all|libraries|sing-box|pyinstaller|exe]" >&2
+    echo "usage: setup.sh [setup|build]" >&2
     exit 2
     ;;
 esac

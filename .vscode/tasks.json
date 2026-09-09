@@ -3,24 +3,10 @@
   "tasks": [
     {
       "label": "ops-content: setup",
-      "detail": "Poetry + .venv + PySide6 и скачать sing-box в tools/",
-      "dependsOn": [
-        "ops-content: install libraries",
-        "ops-content: download sing-box"
-      ],
-      "dependsOrder": "sequence",
-      "group": {
-        "kind": "build",
-        "isDefault": false
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "ops-content: install libraries",
-      "detail": "Poetry (если нет), .venv, пакеты + extra gui",
+      "detail": "Poetry + .venv + библиотеки (gui) и скачать sing-box в tools/",
       "type": "process",
       "command": "bash",
-      "args": ["${workspaceFolder}/.vscode/setup.sh", "libraries"],
+      "args": ["${workspaceFolder}/.vscode/setup.sh", "setup"],
       "windows": {
         "command": "powershell.exe",
         "args": [
@@ -30,7 +16,7 @@
           "-File",
           "${workspaceFolder}/.vscode/setup.ps1",
           "-Target",
-          "libraries"
+          "setup"
         ]
       },
       "options": {
@@ -45,11 +31,11 @@
       "problemMatcher": []
     },
     {
-      "label": "ops-content: download sing-box",
-      "detail": "Скачать бинарник sing-box в tools/",
+      "label": "ops-content: build",
+      "detail": "Собрать desktop exe: dist/OpsContent.exe",
       "type": "process",
       "command": "bash",
-      "args": ["${workspaceFolder}/.vscode/setup.sh", "sing-box"],
+      "args": ["${workspaceFolder}/.vscode/setup.sh", "build"],
       "windows": {
         "command": "powershell.exe",
         "args": [
@@ -59,51 +45,7 @@
           "-File",
           "${workspaceFolder}/.vscode/setup.ps1",
           "-Target",
-          "sing-box"
-        ]
-      },
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "presentation": {
-        "reveal": "always",
-        "panel": "shared",
-        "focus": false,
-        "showReuseMessage": false
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "ops-content: build exe",
-      "detail": "Poetry extras + sing-box + PyInstaller → dist/OpsContent.exe",
-      "dependsOn": [
-        "ops-content: install libraries",
-        "ops-content: download sing-box",
-        "ops-content: pyinstaller"
-      ],
-      "dependsOrder": "sequence",
-      "group": {
-        "kind": "build",
-        "isDefault": true
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "ops-content: pyinstaller",
-      "detail": "Собрать onefile exe из OpsContent.spec",
-      "type": "process",
-      "command": "bash",
-      "args": ["${workspaceFolder}/.vscode/setup.sh", "pyinstaller"],
-      "windows": {
-        "command": "powershell.exe",
-        "args": [
-          "-NoProfile",
-          "-ExecutionPolicy",
-          "Bypass",
-          "-File",
-          "${workspaceFolder}/.vscode/setup.ps1",
-          "-Target",
-          "pyinstaller"
+          "build"
         ]
       },
       "options": {
@@ -114,6 +56,10 @@
         "panel": "shared",
         "focus": true,
         "showReuseMessage": false
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
       },
       "problemMatcher": []
     }
