@@ -113,7 +113,8 @@ def _find_pythonw() -> str | None:
 class OpsClient:
     def __init__(self, paths: Paths | None = None, log: LogFn = _noop) -> None:
         self.paths = paths or Paths()
-        self.log = log
+        self._user_log = log
+        self.log = self._log
         self.paths.ensure_dirs()
         if self.paths.config_path.is_file():
             apply_config(self.paths.config_path, env_path=self.paths.env_path)
@@ -137,6 +138,25 @@ class OpsClient:
                 self.teardown_overrides()
         except Exception:  # noqa: BLE001
             pass
+
+    def _log(self, msg: str) -> None:
+        self._user_log(msg)
+        try:
+            self.paths.logs_dir.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            with (self.paths.logs_dir / "ergoms-vpn.log").open("a", encoding="utf-8") as fh:
+                fh.write(f"{stamp} {msg}\n")
+        except OSError:
+            pass
+
+    def _log_singbox_tail(self, reason: str) -> None:
+        lines = self.singbox.tail_log(24)
+        if not lines:
+            self.log(f"журнал sing-box пуст ({self.singbox.log_path})")
+            return
+        self.log(f"журнал sing-box ({reason}):")
+        for ln in lines:
+            self.log(f"  {ln}")
 
     def reload_env(self) -> None:
         if self.paths.config_path.is_file():
@@ -488,19 +508,18 @@ class OpsClient:
         }
         self.paths.state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
         self.log(
-            f"singbox ready scope={get_socks_scope()} tun={int(enable_tun)} "
-            f"socks=:{socks_port} http=:{http_port}"
+            f"sing-box готов: scope={get_socks_scope()} tun={int(enable_tun)} "
+            f"socks=127.0.0.1:{socks_port} http=127.0.0.1:{http_port}"
         )
+        self._log_singbox_tail("после запуска")
+        self._probe_exit(socks_port)
 
     def stop_singbox_mode(self) -> None:
         try:
             self.reverse_ssh.stop()
         except Exception as exc:  # noqa: BLE001
             self.log(f"reverse-ssh stop: {exc}")
-        try:
-            self.singbox.stop()
-        except Exception as exc:  # noqa: BLE001
-            self.log(f"singbox stop: {exc}")
+        self.singbox.stop()
         self.stop_pac_server()
         self.teardown_overrides()
         self.paths.state_path.unlink(missing_ok=True)
@@ -549,7 +568,7 @@ class OpsClient:
         if not active:
             self.log(
                 f"HTTP bridge :{http_port} не слушает — пишу заглушку. "
-                "Сначала: ops-content on"
+                "Сначала: ergoms-vpn on"
             )
         self.write_docker_helpers(http_port=http_port, active=active)
         if active:
@@ -557,7 +576,7 @@ class OpsClient:
             self.log(f"wrapper:   {self.paths.docker_run_ps1} -- IMAGE")
             self.log(
                 f"compose:   -f {self.paths.docker_compose_proxy} "
-                f"(<<: *ops-content-proxy)"
+                f"(<<: *ergoms-vpn-proxy)"
             )
 
     def docker_test(self) -> int:
@@ -565,7 +584,7 @@ class OpsClient:
         self.reload_env()
         http_port = get_http_bridge_port()
         if not _port_open("127.0.0.1", http_port):
-            self.log(f"HTTP bridge :{http_port} down — сначала: ops-content on")
+            self.log(f"HTTP bridge :{http_port} down — сначала: ergoms-vpn on")
             return 2
         # Refresh helpers so docker.env has the current host IP
         self.write_docker_helpers(http_port=http_port, active=True)
@@ -639,7 +658,13 @@ class OpsClient:
         targets.extend(procutil.pids_cmdline_match("-m desktop watch", cache=False))
         killed = procutil.kill_pids(targets, exclude=os.getpid())
         for pid in killed:
-            self.log(f"watchdog pid={pid} stopped")
+            self.log(f"watchdog pid={pid} остановлен")
+        leftover = [p for p in targets if p != os.getpid() and procutil.pid_alive(p)]
+        if leftover:
+            self.log(
+                f"watchdog всё ещё жив pid={','.join(str(p) for p in leftover)} "
+                "— он может снова поднять sing-box"
+            )
 
     def ensure_watchdog_daemon(self) -> None:
         """Spawn background `watch --daemon` so CLI `on` keeps monitoring after exit."""
@@ -665,7 +690,7 @@ class OpsClient:
         root = str(self.paths.root)
         prev = env.get("PYTHONPATH", "")
         env["PYTHONPATH"] = root if not prev else f"{root}{os.pathsep}{prev}"
-        env["OPS_CONTENT_WATCHDOG_CHILD"] = "1"
+        env["ERGOMS_VPN_WATCHDOG_CHILD"] = "1"
 
         proc = procutil.popen(args, env=env, cwd=root, detached=True)
         self.paths.watchdog_pid.write_text(str(proc.pid), encoding="utf-8")
@@ -701,7 +726,7 @@ class OpsClient:
         if not self.singbox.running() and not _port_open(
             "127.0.0.1", get_local_socks_port(cfg)
         ):
-            raise RuntimeError("Сначала включите туннель: ops-content on")
+            raise RuntimeError("Сначала включите туннель: ergoms-vpn on")
         self.reverse_ssh.start(cfg)
 
     def disable_reverse_ssh(self, *, persist: bool = True) -> None:
@@ -711,27 +736,55 @@ class OpsClient:
             self.log("reverse_ssh.enabled=false в config.json")
         self.reverse_ssh.stop()
 
+    def _probe_exit(self, socks_port: int) -> None:
+        """Best-effort SOCKS5 CONNECT so the log shows if VLESS actually works."""
+        try:
+            from desktop.watchdog import socks_probe
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"проверка выхода: не удалось импортировать probe ({exc})")
+            return
+        self.log(f"проверка выхода через SOCKS :{socks_port} → 1.1.1.1:443…")
+        err = socks_probe(socks_port, timeout=8.0)
+        if err:
+            self.log(f"проверка выхода: НЕ ОК — {err}")
+            self._log_singbox_tail("после неудачной проверки")
+        else:
+            self.log("проверка выхода: OK (SOCKS CONNECT прошёл)")
+
     def enable(self, *, spawn_watchdog: bool = True) -> None:
         self.reload_env()
-        self.log(f"VLESS+Reality TUN={1 if get_tun_enabled() else 0}")
+        tun = get_tun_enabled()
+        self.log(f"подключение: VLESS+Reality, TUN={'вкл' if tun else 'выкл'}")
         self.start_singbox_mode()
         if spawn_watchdog:
             self.ensure_watchdog_daemon()
 
     def disable(self) -> None:
         self.reload_env()
-        self.log("off")
+        self.log("отключение VPN…")
         self.stop_watchdog_daemon()
+        stop_err: Exception | None = None
         try:
             self.stop_singbox_mode()
         except Exception as exc:  # noqa: BLE001
-            self.log(f"singbox stop: {exc}")
+            stop_err = exc
+            self.log(f"sing-box не остановился: {exc}")
         try:
             self.tun.stop()
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"legacy TUN: {exc}")
         self.stop_http_bridge()
         self.teardown_overrides()
+        procutil.invalidate_proc_cache()
+        leftover = self.singbox.pid()
+        if leftover:
+            raise RuntimeError(
+                f"sing-box pid={leftover} всё ещё работает. "
+                "При TUN нужен UAC, чтобы его остановить."
+            )
+        if stop_err:
+            raise stop_err
+        self.log("VPN отключён: sing-box остановлен, PAC/git/Docker сброшены")
 
     def status(self, *, include_git: bool = True) -> dict[str, Any]:
         """Snapshot of tunnel state.
@@ -768,11 +821,25 @@ class OpsClient:
 
         info["singbox_running"] = self.singbox.running()
         info["singbox_pid"] = self.singbox.pid()
+        try:
+            socks_port = get_local_socks_port()
+        except Exception:  # noqa: BLE001
+            socks_port = 1080
+        info["socks_port"] = socks_port
+        info["socks_up"] = _port_open("127.0.0.1", socks_port)
+        info["http_up"] = _port_open("127.0.0.1", int(info["http_port"]))
+        info["pac_up"] = _port_open("127.0.0.1", int(info["pac_port"]))
         if info["singbox_running"]:
             lines.append(f"singbox mode pid={info['singbox_pid']} running")
-            if _port_open("127.0.0.1", int(info["http_port"])):
+            if info["socks_up"]:
+                lines.append(f"singbox SOCKS    = 127.0.0.1:{socks_port}")
+            else:
+                lines.append(f"WARN: процесс есть, SOCKS :{socks_port} не слушает")
+            if info["http_up"]:
                 lines.append(f"singbox HTTP     = 127.0.0.1:{info['http_port']}")
-            if _port_open("127.0.0.1", int(info["pac_port"])):
+            else:
+                lines.append(f"WARN: HTTP :{info['http_port']} не слушает")
+            if info["pac_up"]:
                 lines.append(
                     f"PAC             = http://127.0.0.1:{info['pac_port']}/proxy.pac"
                 )
@@ -789,7 +856,7 @@ class OpsClient:
             if info["tun_env"]:
                 lines.append(
                     "WARN: TUN=1 but sing-box off — DNS в Docker Desktop сломан "
-                    "(tun-on или ops-content on)"
+                    "(tun-on или ergoms-vpn on)"
                 )
 
         if self.paths.state_path.is_file():

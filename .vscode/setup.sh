@@ -79,14 +79,14 @@ run_pyinstaller() {
   else
     install_singbox
   fi
-  echo "PyInstaller: OpsContent.spec -> dist/OpsContent"
-  "$poetry" run pyinstaller --noconfirm --clean OpsContent.spec
-  if [[ -f "${ROOT}/dist/OpsContent.exe" ]]; then
-    echo "OK: ${ROOT}/dist/OpsContent.exe"
-  elif [[ -f "${ROOT}/dist/OpsContent" ]]; then
-    echo "OK: ${ROOT}/dist/OpsContent"
+  echo "PyInstaller: ErgomsVPN.spec -> dist/ErgomsVPN"
+  "$poetry" run pyinstaller --noconfirm --clean ErgomsVPN.spec
+  if [[ -f "${ROOT}/dist/ErgomsVPN.exe" ]]; then
+    echo "OK: ${ROOT}/dist/ErgomsVPN.exe"
+  elif [[ -f "${ROOT}/dist/ErgomsVPN" ]]; then
+    echo "OK: ${ROOT}/dist/ErgomsVPN"
   else
-    echo "pyinstaller finished but dist/OpsContent is missing" >&2
+    echo "pyinstaller finished but dist/ErgomsVPN is missing" >&2
     exit 1
   fi
 }

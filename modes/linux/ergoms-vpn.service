@@ -1,14 +1,14 @@
 [Unit]
-Description=ops-content VLESS+Reality VPN
+Description=ERGOMS VPN (VLESS+Reality)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/REPLACE/ops-content
+WorkingDirectory=/REPLACE/root
 Environment=PYTHONUNBUFFERED=1
-Environment=PYTHONPATH=/REPLACE/ops-content
-Environment=OPS_CONTENT_DATA=/REPLACE/ops-content
+Environment=PYTHONPATH=/REPLACE/root
+Environment=ERGOMS_VPN_DATA=/REPLACE/root
 Environment=HOME=/REPLACE/home
 Environment=USER=REPLACE_USER
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin

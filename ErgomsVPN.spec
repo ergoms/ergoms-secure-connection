@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""One-file GUI/CLI build → dist/OpsContent.exe (Windows) / dist/OpsContent (Linux)."""
+"""One-file GUI/CLI build → dist/ErgomsVPN.exe (Windows) / dist/ErgomsVPN (Linux)."""
 
 import sys
 from pathlib import Path
@@ -27,6 +27,7 @@ a = Analysis(
     datas=datas,
     hiddenimports=[
         "desktop",
+        "desktop.branding",
         "desktop.gui",
         "desktop.ui",
         "desktop.ui.bridge",
@@ -80,7 +81,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="OpsContent",
+    name="ErgomsVPN",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

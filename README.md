@@ -1,4 +1,4 @@
-# ops-content
+# ERGOMS VPN
 
 Клиент и серверные скрипты для выхода в интернет через корпоративный Squid (`192.0.2.10:3128`) на **свой VPS** по **VLESS+Reality** (sing-box на порту 443).
 
@@ -28,26 +28,26 @@ bash modes/vps/bootstrap_singbox_443.sh
 ## Клиент (Windows / Linux)
 
 ```powershell
-.\ops-content.ps1 init
+.\ergoms-vpn.ps1 init
 # в config.json: server.host + transport из bootstrap
-.\ops-content.ps1 probe АДРЕС_СЕРВЕРА 443
-.\ops-content.ps1 on
-.\ops-content.ps1 status
-.\ops-content.ps1 off
+.\ergoms-vpn.ps1 probe АДРЕС_СЕРВЕРА 443
+.\ergoms-vpn.ps1 on
+.\ergoms-vpn.ps1 status
+.\ergoms-vpn.ps1 off
 ```
 
-То же: `python -m desktop …` или `./ops-content.sh …`.
+То же: `python -m desktop …` или `./ergoms-vpn.sh …`.
 
 Автозапуск (служба, одна команда — спросит админа/sudo):
 
 ```powershell
-.\ops-content.ps1 install-service     # Windows (WinSW, LocalSystem, TUN без UAC)
-# снять: .\ops-content.ps1 uninstall-service
+.\ergoms-vpn.ps1 install-service     # Windows (WinSW, LocalSystem, TUN без UAC)
+# снять: .\ergoms-vpn.ps1 uninstall-service
 ```
 
 ```bash
-./ops-content.sh install-service      # Linux (systemd)
-# снять: ./ops-content.sh uninstall-service
+./ergoms-vpn.sh install-service      # Linux (systemd)
+# снять: ./ergoms-vpn.sh uninstall-service
 ```
 
 В `config.json`: `"tun": { "enabled": true }` поднимает TUN вместе с `on`. Для окна: `poetry install --extras gui`, затем `python -m desktop gui` (или `poetry run python -m desktop gui`).
@@ -75,10 +75,10 @@ bash modes/vps/bootstrap_singbox_443.sh
 ### Передача конфига (шифрование)
 
 ```powershell
-.\ops-content.ps1 encrypt                  # → config.json.enc (спросит пароль)
-.\ops-content.ps1 encrypt share.enc -p '…' # свой путь / пароль в аргументе
+.\ergoms-vpn.ps1 encrypt                  # → config.json.enc (спросит пароль)
+.\ergoms-vpn.ps1 encrypt share.enc -p '…' # свой путь / пароль в аргументе
 # на другом ПК:
-.\ops-content.ps1 decrypt share.enc
+.\ergoms-vpn.ps1 decrypt share.enc
 ```
 
 Формат: пароль + PBKDF2-HMAC-SHA256 + HMAC-CTR + HMAC-SHA256 (без внешних зависимостей).
@@ -113,9 +113,9 @@ bash modes/vps/bootstrap_singbox_443.sh
 На клиенте (OpenSSH Server + ключ в `creds/`, тот же что в `authorized_keys` на VPS):
 
 ```powershell
-.\ops-content.ps1 on
-.\ops-content.ps1 reverse-on
-.\ops-content.ps1 status
+.\ergoms-vpn.ps1 on
+.\ergoms-vpn.ps1 reverse-on
+.\ergoms-vpn.ps1 status
 ```
 
 Или в `config.json`: `"reverse_ssh": { "enabled": true }` — тогда `on` поднимает проброс сам.
@@ -138,19 +138,19 @@ bash modes/vps/ssh-to-client.sh 2222 ПОЛЬЗОВАТЕЛЬ_КЛИЕНТА
 ```powershell
 poetry install              # CLI
 poetry install --extras gui # + окно (PySide6)
-.\ops-content.ps1 status
+.\ergoms-vpn.ps1 status
 ```
 
-То же: `poetry run python -m desktop …`. Обёртки `ops-content.ps1` / `ops-content.sh` берут Python из `.venv`, если оно есть.
+То же: `poetry run python -m desktop …`. Обёртки `ergoms-vpn.ps1` / `ergoms-vpn.sh` берут Python из `.venv`, если оно есть.
 
 ---
 
 ## Структура
 
 ```
-ops-content/
+ERGOMS VPN/
 ├── desktop/           CLI/GUI-клиент (VLESS+Reality)
-├── ops-content.ps1/.sh
+├── ergoms-vpn.ps1/.sh
 ├── deploy.ps1/.sh
 ├── config/            образцы
 ├── lib/               connect_socks, http_via_socks (PAC)

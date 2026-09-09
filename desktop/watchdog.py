@@ -202,7 +202,7 @@ class TunnelWatchdog:
             return
         self._stop.clear()
         self._thread = threading.Thread(
-            target=self._loop, name="ops-content-watchdog", daemon=True
+            target=self._loop, name="ergoms-vpn-watchdog", daemon=True
         )
         self._thread.start()
         self.log("watchdog: started")

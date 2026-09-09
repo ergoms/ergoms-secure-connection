@@ -1,4 +1,4 @@
-"""Qt Quick VPN GUI + system tray for ops-content."""
+"""Qt Quick VPN GUI + system tray for ERGOMS VPN."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import os
 import sys
 from pathlib import Path
 
+from desktop.branding import APP_NAME, ORG_NAME
 from desktop.paths import bundle_dir
 
 
@@ -37,8 +38,8 @@ def run_gui() -> None:
     QQuickWindow.setDefaultAlphaBuffer(True)
 
     app = QApplication(sys.argv)
-    app.setApplicationName("ERGOMS VPN")
-    app.setOrganizationName("ERGOMS")
+    app.setApplicationName(APP_NAME)
+    app.setOrganizationName(ORG_NAME)
     app.setQuitOnLastWindowClosed(False)
 
     ico_path = _icon_path()
@@ -135,7 +136,7 @@ def _setup_tray(app: QApplication, icon: QIcon, bridge: object) -> QSystemTrayIc
     from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
     tray = QSystemTrayIcon(icon, app)
-    tray.setToolTip("ERGOMS VPN")
+    tray.setToolTip(APP_NAME)
     menu = QMenu()
 
     def add(label: str, slot: object) -> None:

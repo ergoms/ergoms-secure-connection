@@ -8,7 +8,7 @@ USER="${2:-}"
 
 if ! ss -lnt 2>/dev/null | grep -qE "127\\.0\\.0\\.1:${PORT}\\s"; then
   echo "На VPS никто не слушает 127.0.0.1:${PORT}."
-  echo "На клиенте: ops-content on  и  reverse-on  (нужен ключ в creds/)."
+  echo "На клиенте: ergoms-vpn on  и  reverse-on  (нужен ключ в creds/)."
   exit 1
 fi
 

@@ -5,7 +5,7 @@ Usage:
   ssh -o ProxyCommand="python connect_proxy.py %h %p" ...
 
 Env:
-  OPS_CONTENT_HTTP_PROXY   default: 192.0.2.10:3128
+  ERGOMS_VPN_HTTP_PROXY   default: 192.0.2.10:3128
 """
 
 from __future__ import annotations
@@ -25,7 +25,8 @@ def parse_proxy(value: str) -> tuple[str, int]:
 
 def open_connect(target_host: str, target_port: int) -> socket.socket:
     proxy_host, proxy_port = parse_proxy(
-        os.environ.get("OPS_CONTENT_HTTP_PROXY", "192.0.2.10:3128")
+        os.environ.get("ERGOMS_VPN_HTTP_PROXY")
+        or os.environ.get("OPS_CONTENT_HTTP_PROXY", "192.0.2.10:3128")
     )
     sock = socket.create_connection((proxy_host, proxy_port), timeout=30)
     try:
@@ -161,8 +162,12 @@ def pump_posix(sock: socket.socket) -> int:
 
 
 def _allowed_target(host: str, port: int) -> bool:
-    """Optional allowlist: OPS_CONTENT_CONNECT_ALLOW=host:port[,host2:port2]."""
-    raw = (os.environ.get("OPS_CONTENT_CONNECT_ALLOW") or "").strip()
+    """Optional allowlist: ERGOMS_VPN_CONNECT_ALLOW=host:port[,host2:port2]."""
+    raw = (
+        os.environ.get("ERGOMS_VPN_CONNECT_ALLOW")
+        or os.environ.get("OPS_CONTENT_CONNECT_ALLOW")
+        or ""
+    ).strip()
     if not raw:
         return True
     want = f"{host.lower()}:{port}"
@@ -188,7 +193,7 @@ def main() -> int:
 
     if not _allowed_target(target_host, target_port):
         print(
-            f"CONNECT denied: {target_host}:{target_port} not in OPS_CONTENT_CONNECT_ALLOW",
+            f"CONNECT denied: {target_host}:{target_port} not in ERGOMS_VPN_CONNECT_ALLOW",
             file=sys.stderr,
         )
         return 1

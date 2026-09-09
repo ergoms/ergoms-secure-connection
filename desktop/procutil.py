@@ -228,17 +228,84 @@ def pid_alive(pid: int, *, names: Sequence[str] | None = None) -> bool:
     return process_basename(pid) in {n.lower() for n in names}
 
 
-def kill_pid(pid: int) -> None:
+def _wait_pid_dead(pid: int, timeout: float = 2.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not pid_alive(pid):
+            return True
+        time.sleep(0.08)
+    return not pid_alive(pid)
+
+
+def kill_pid(pid: int) -> bool:
+    """Best-effort kill. Returns True if the process is gone."""
     if pid <= 0:
-        return
+        return True
     invalidate_proc_cache()
     if sys.platform == "win32":
         run(["taskkill", "/PID", str(pid), "/T", "/F"])
-        return
+        return _wait_pid_dead(pid)
     try:
         os.kill(pid, 15)
     except OSError:
         pass
+    if _wait_pid_dead(pid, timeout=1.2):
+        return True
+    try:
+        os.kill(pid, 9)
+    except OSError:
+        pass
+    return _wait_pid_dead(pid, timeout=1.0)
+
+
+def elevate_kill_pids(pids: Sequence[int]) -> bool:
+    """Ask for admin/root once and kill leftover PIDs (TUN sing-box)."""
+    targets = [int(p) for p in pids if p and p > 0 and pid_alive(p)]
+    if not targets:
+        return True
+    if is_admin():
+        return all(kill_pid(p) for p in targets)
+    invalidate_proc_cache()
+    if sys.platform == "win32":
+        return _elevate_taskkill_win(targets)
+    return _elevate_kill_linux(targets)
+
+
+def _elevate_taskkill_win(pids: Sequence[int]) -> bool:
+    import ctypes
+
+    params = "/T /F " + " ".join(f"/PID {int(p)}" for p in pids)
+    rc = int(
+        ctypes.windll.shell32.ShellExecuteW(  # type: ignore[attr-defined]
+            None, "runas", "taskkill.exe", params, None, 0
+        )
+    )
+    if rc <= 32:
+        return False
+    deadline = time.monotonic() + 45.0
+    while time.monotonic() < deadline:
+        if not any(pid_alive(p) for p in pids):
+            return True
+        time.sleep(0.2)
+    return not any(pid_alive(p) for p in pids)
+
+
+def _elevate_kill_linux(pids: Sequence[int]) -> bool:
+    ids = [str(int(p)) for p in pids]
+    for wrapper in (
+        ["pkexec", "kill", "-9", *ids],
+        ["sudo", "-n", "kill", "-9", *ids],
+        ["sudo", "kill", "-9", *ids],
+    ):
+        try:
+            r = run(wrapper, timeout=60)
+        except FileNotFoundError:
+            continue
+        except Exception:  # noqa: BLE001
+            continue
+        if r.returncode == 0 or not any(pid_alive(int(p)) for p in ids):
+            return not any(pid_alive(int(p)) for p in ids)
+    return not any(pid_alive(int(p)) for p in ids)
 
 
 def _pids_listening_on_netstat(port: int, host: str) -> list[int]:
@@ -347,19 +414,24 @@ def pids_cmdline_match(substr: str, *, cache: bool = True) -> list[int]:
     return found
 
 
-def kill_pids(pids: Sequence[int], *, exclude: int = 0) -> list[int]:
-    """Kill unique PIDs; return those that were targeted."""
+def kill_pids(
+    pids: Sequence[int], *, exclude: int = 0, elevate_if_needed: bool = False
+) -> list[int]:
+    """Kill unique PIDs; return those that actually died."""
     invalidate_proc_cache()
-    killed: list[int] = []
+    targeted: list[int] = []
     seen: set[int] = set()
     for pid in pids:
         if pid <= 0 or pid == exclude or pid in seen:
             continue
         seen.add(pid)
         if pid_alive(pid):
+            targeted.append(pid)
             kill_pid(pid)
-            killed.append(pid)
-    return killed
+    leftover = [p for p in targeted if pid_alive(p)]
+    if leftover and elevate_if_needed:
+        elevate_kill_pids(leftover)
+    return [p for p in targeted if not pid_alive(p)]
 
 
 def wait_port_open(

@@ -1,14 +1,19 @@
 #!/usr/bin/env bash
-# Install systemd system unit for the VLESS+Reality client (autostart).
+# Install systemd system unit for ERGOMS VPN (autostart).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-UNIT_SRC="$ROOT/modes/linux/ops-content.service"
-UNIT_NAME="ops-content.service"
+UNIT_SRC="$ROOT/modes/linux/ergoms-vpn.service"
+UNIT_NAME="ergoms-vpn.service"
 UNIT_DST="/etc/systemd/system/$UNIT_NAME"
+LEGACY_UNIT="ops-content.service"
 
 find_python() {
   local c
+  if [[ -n "${ERGOMS_VPN_PYTHON:-}" && -x "${ERGOMS_VPN_PYTHON}" ]]; then
+    echo "$ERGOMS_VPN_PYTHON"
+    return 0
+  fi
   if [[ -n "${OPS_CONTENT_PYTHON:-}" && -x "${OPS_CONTENT_PYTHON}" ]]; then
     echo "$OPS_CONTENT_PYTHON"
     return 0
@@ -44,11 +49,11 @@ if [[ "${EUID:-}" -ne 0 ]]; then
     echo "Нужен root: sudo $0" >&2
     exit 1
   fi
-  exec sudo --preserve-env=PATH env OPS_CONTENT_PYTHON="$PY" "$0" "$@"
+  exec sudo --preserve-env=PATH env ERGOMS_VPN_PYTHON="$PY" "$0" "$@"
 fi
 
 if [[ ! -f "$ROOT/config.json" ]]; then
-  echo "Нет $ROOT/config.json — сначала: ./ops-content.sh init" >&2
+  echo "Нет $ROOT/config.json — сначала: ./ergoms-vpn.sh init" >&2
   exit 1
 fi
 
@@ -75,8 +80,16 @@ remove_legacy_user_unit() {
 
 remove_legacy_user_unit "$REAL_USER"
 
+if systemctl list-unit-files "$LEGACY_UNIT" >/dev/null 2>&1; then
+  systemctl disable --now "$LEGACY_UNIT" 2>/dev/null || true
+  rm -f "/etc/systemd/system/$LEGACY_UNIT"
+fi
+
 # Avoid two clients fighting for :1080 / TUN
-if [[ -x "$ROOT/ops-content.sh" ]]; then
+if [[ -x "$ROOT/ergoms-vpn.sh" ]]; then
+  sudo -u "$REAL_USER" env HOME="$REAL_HOME" "$ROOT/ergoms-vpn.sh" off >/dev/null 2>&1 || true
+  "$ROOT/ergoms-vpn.sh" off >/dev/null 2>&1 || true
+elif [[ -x "$ROOT/ops-content.sh" ]]; then
   sudo -u "$REAL_USER" env HOME="$REAL_HOME" "$ROOT/ops-content.sh" off >/dev/null 2>&1 || true
   "$ROOT/ops-content.sh" off >/dev/null 2>&1 || true
 fi
@@ -84,7 +97,7 @@ fi
 esc() { printf '%s' "$1" | sed 's/[\/&]/\\&/g'; }
 
 sed \
-  -e "s|/REPLACE/ops-content|$(esc "$ROOT")|g" \
+  -e "s|/REPLACE/root|$(esc "$ROOT")|g" \
   -e "s|/REPLACE/python|$(esc "$PY")|g" \
   -e "s|/REPLACE/home|$(esc "$REAL_HOME")|g" \
   -e "s|REPLACE_USER|$(esc "$REAL_USER")|g" \
@@ -95,9 +108,9 @@ systemctl daemon-reload
 systemctl enable --now "$UNIT_NAME"
 
 echo "Installed: $UNIT_DST"
-echo "Start:     systemctl enable --now ops-content"
-echo "Status:    systemctl status ops-content"
-echo "Logs:      journalctl -u ops-content -f"
-echo "Remove:    ./ops-content.sh uninstall-service"
+echo "Start:     systemctl enable --now ergoms-vpn"
+echo "Status:    systemctl status ergoms-vpn"
+echo "Logs:      journalctl -u ergoms-vpn -f"
+echo "Remove:    ./ergoms-vpn.sh uninstall-service"
 echo
-systemctl --no-pager --full status ops-content.service || true
+systemctl --no-pager --full status ergoms-vpn.service || true

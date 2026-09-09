@@ -93,7 +93,9 @@ def detect_docker_host_ip(
 
     Container DNS is often broken, so proxy URL must be an IP, not a hostname.
     """
-    override = (os.environ.get("OPS_CONTENT_DOCKER_HOST_IP") or "").strip()
+    from desktop.branding import ENV_DOCKER_HOST_IP, env
+
+    override = env(ENV_DOCKER_HOST_IP)
     if override and _is_usable_host_ip(override):
         return override
 
@@ -205,7 +207,7 @@ def write_docker_env(
 
     if active:
         env_lines = [
-            "# ops-content -> Docker: HTTP bridge on the host (no container DNS needed)",
+            "# ERGOMS VPN -> Docker: HTTP bridge on the host (no container DNS needed)",
             "# Proxy reaches Windows/Mac Docker Desktop via host-gateway IP.",
             f"# Usage: docker run --env-file {docker_env.as_posix()} IMAGE ...",
             f"# Or:    {(run_ps1 or docker_env.with_name('docker-run.ps1')).as_posix()} -- IMAGE ...",
@@ -221,12 +223,12 @@ def write_docker_env(
         if proxy_ip:
             env_lines.insert(
                 4,
-                f"# Detected docker host IP: {proxy_ip} (override: OPS_CONTENT_DOCKER_HOST_IP)",
+                f"# Detected docker host IP: {proxy_ip} (override: ERGOMS_VPN_DOCKER_HOST_IP)",
             )
     else:
         env_lines = [
-            "# ops-content -> Docker: relay OFF - unset proxies in containers",
-            "# Run: ops-content on   then: ops-content docker-env",
+            "# ERGOMS VPN -> Docker: relay OFF - unset proxies in containers",
+            "# Run: ergoms-vpn on   then: ergoms-vpn docker-env",
             "",
         ]
 
@@ -239,7 +241,7 @@ def write_docker_env(
         resolved = [("host.docker.internal", proxy_ip), *resolved]
 
     hosts_lines = [
-        "# ops-content DOCKER_DNS_FIX — IP resolved on the host",
+        "# ERGOMS VPN DOCKER_DNS_FIX — IP resolved on the host",
         "# docker run --add-host=name:ip …  or compose extra_hosts",
     ]
     for name, ip in resolved:
@@ -251,8 +253,8 @@ def write_docker_env(
         compose = _compose_snippet(proxy, noproxy, resolved, compose_path, proxy_ip)
     else:
         compose = (
-            "# ops-content — relay OFF\n"
-            "# Run: ops-content on && ops-content docker-env\n"
+            "# ERGOMS VPN — relay OFF\n"
+            "# Run: ergoms-vpn on && ergoms-vpn docker-env\n"
         )
     compose_path.write_text(compose, encoding="utf-8")
 
@@ -277,15 +279,15 @@ def _compose_snippet(
     proxy_ip: str | None,
 ) -> str:
     lines = [
-        "# ops-content — merge into your compose project:",
+        "# ERGOMS VPN — merge into your compose project:",
         f"#   docker compose -f docker-compose.yml -f {compose_path.as_posix()} up",
         "#",
         "# Attach the anchor to services that need outbound HTTP(S):",
         "#   services:",
         "#     app:",
-        "#       <<: *ops-content-proxy",
+        "#       <<: *ergoms-vpn-proxy",
         "#",
-        "x-ops-content-proxy: &ops-content-proxy",
+        "x-ergoms-vpn-proxy: &ergoms-vpn-proxy",
         "  extra_hosts:",
         '    - "host.docker.internal:host-gateway"',
     ]
@@ -332,7 +334,7 @@ def _write_run_wrappers(
         ps1.write_text(
             "\r\n".join(
                 [
-                    "# ops-content: docker run with host proxy (no container DNS)",
+                    "# ERGOMS VPN: docker run with host proxy (no container DNS)",
                     f"# Usage: .\\var\\docker-run.ps1 -- IMAGE [args…]",
                     f"#    or: .\\var\\docker-run.ps1 -AddHosts -- IMAGE …",
                     "param(",
@@ -361,7 +363,7 @@ def _write_run_wrappers(
             "\n".join(
                 [
                     "#!/usr/bin/env bash",
-                    "# ops-content: docker run with host proxy (no container DNS)",
+                    "# ERGOMS VPN: docker run with host proxy (no container DNS)",
                     f"# Usage: {sh.as_posix()} [--add-hosts] -- IMAGE [args…]",
                     "set -euo pipefail",
                     f'ENV_FILE="{env_posix}"',
@@ -385,11 +387,11 @@ def _write_run_wrappers(
         )
     else:
         ps1.write_text(
-            "# ops-content docker-run: relay OFF — run ops-content on first\r\n",
+            "# ERGOMS VPN docker-run: relay OFF — run ergoms-vpn on first\r\n",
             encoding="utf-8",
         )
         sh.write_text(
-            "#!/usr/bin/env bash\necho 'ops-content relay OFF — run: ops-content on' >&2\nexit 1\n",
+            "#!/usr/bin/env bash\necho 'ERGOMS VPN relay OFF — run: ergoms-vpn on' >&2\nexit 1\n",
             encoding="utf-8",
             newline="\n",
         )

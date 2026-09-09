@@ -17,7 +17,8 @@ from desktop import procutil
 
 LogFn = Callable[[str], None]
 
-_LINUX_PROFILE_D = Path("/etc/profile.d/Z50-ops-content-proxy.sh")
+_LINUX_PROFILE_D = Path("/etc/profile.d/Z50-ergoms-vpn-proxy.sh")
+_LINUX_PROFILE_D_LEGACY = Path("/etc/profile.d/Z50-ops-content-proxy.sh")
 _LINUX_ENVIRONMENT = Path("/etc/environment")
 _ENV_PROXY_KEYS = (
     "http_proxy",
@@ -83,7 +84,7 @@ def enable_linux_env_proxy(
     noproxy = "localhost,127.0.0.1,::1"
     profile_body = "\n".join(
         [
-            "# Managed by ops-content — do not edit by hand",
+            "# Managed by ERGOMS VPN — do not edit by hand",
             f'export http_proxy="{proxy}"',
             f'export https_proxy="{proxy}"',
             f'export HTTP_PROXY="{proxy}"',
@@ -173,10 +174,11 @@ def disable_linux_env_proxy(backup_path: Path, log: LogFn = _noop) -> None:
     if sys.platform == "win32":
         return
 
-    try:
-        _LINUX_PROFILE_D.unlink(missing_ok=True)
-    except OSError as exc:
-        log(f"Не удалось удалить {_LINUX_PROFILE_D}: {exc}")
+    for path in (_LINUX_PROFILE_D, _LINUX_PROFILE_D_LEGACY):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            log(f"Не удалось удалить {path}: {exc}")
 
     if not backup_path.is_file():
         log("Системный proxy: backup не найден — /etc/environment не трогали")

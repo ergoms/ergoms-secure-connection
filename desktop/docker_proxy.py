@@ -60,7 +60,9 @@ def _noproxy() -> str:
 
 def _container_proxy_url(http_port: int) -> str:
     """Host-gateway IP as seen from Linux containers (loopback forwarding)."""
-    host = (os.environ.get("OPS_CONTENT_DOCKER_HOST_IP") or "").strip()
+    from desktop.branding import ENV_DOCKER_HOST_IP, env
+
+    host = env(ENV_DOCKER_HOST_IP)
     if host.startswith(("10.", "100.")):
         host = ""
     if not host:

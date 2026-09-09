@@ -13,6 +13,6 @@ Write-Host 'On VPS (console):'
 Write-Host '  bash modes/vps/disable_sshd_443.sh'
 Write-Host '  bash modes/vps/bootstrap_singbox_443.sh'
 Write-Host 'On PC: paste transport into config.json (server.host = VPS IP)'
-Write-Host '  .\ops-content.ps1 probe HOST 443'
-Write-Host '  .\ops-content.ps1 on'
+Write-Host '  .\ergoms-vpn.ps1 probe HOST 443'
+Write-Host '  .\ergoms-vpn.ps1 on'
 exit 0

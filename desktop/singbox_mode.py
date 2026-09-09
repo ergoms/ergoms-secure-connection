@@ -130,6 +130,7 @@ class SingboxModeManager:
         proc_names = [
             "sing-box",
             "sing-box.exe",
+            "ErgomsVPN.exe",
             "OpsContent.exe",
         ]
         docker_wsl_procs = [
@@ -225,7 +226,7 @@ class SingboxModeManager:
                 {
                     "type": "tun",
                     "tag": "tun-in",
-                    "interface_name": "ops-content-tun",
+                    "interface_name": "ergoms-vpn-tun",
                     "address": ["172.19.0.1/30"],
                     "mtu": mtu_val,
                     "auto_route": True,
@@ -385,7 +386,7 @@ class SingboxModeManager:
         exe = self.find_sing_box(sing_box_path)
         if not exe:
             raise RuntimeError(
-                "sing-box не найден. Выполните: ops-content download-sing-box"
+                "sing-box не найден. Выполните: ergoms-vpn download-sing-box"
             )
 
         cfg = self.build_config(
@@ -423,35 +424,87 @@ class SingboxModeManager:
             f"; socks=:{socks_port} http=:{http_port} tun={int(enable_tun)}"
         )
         if need_admin:
-            self.log("Нужны права администратора для TUN")
+            self.log("TUN: подтвердите UAC — sing-box должен работать от администратора")
 
         pid = self._launch(exe, elevate=need_admin)
         if pid:
             self.pid_path.write_text(str(pid), encoding="utf-8")
+            self.log(f"sing-box pid={pid}")
+        else:
+            self.log("ожидаю появления процесса sing-box…")
 
         deadline = time.monotonic() + 6.0
         interval = 0.05
         while time.monotonic() < deadline:
             if _port_open("127.0.0.1", socks_port):
                 kind = "mixed + TUN → VLESS" if enable_tun else "mixed → VLESS"
-                self.log(f"MODE=singbox активен ({kind})")
+                self.log(f"sing-box слушает SOCKS :{socks_port} и HTTP :{http_port} ({kind})")
                 return
             time.sleep(interval)
             interval = min(interval * 1.3, 0.2)
 
+        self._log_tail("не поднялся SOCKS")
         raise RuntimeError(
-            "sing-box mode не поднял SOCKS/HTTP. "
+            f"sing-box не открыл SOCKS :{socks_port}. "
             f"См. {self.log_path}. Нужен download-sing-box и верные transport.*"
         )
 
+    def tail_log(self, n: int = 20) -> list[str]:
+        if not self.log_path.is_file():
+            return []
+        try:
+            lines = self.log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            return []
+        return [ln.rstrip() for ln in lines[-n:] if ln.strip()]
+
+    def _log_tail(self, reason: str, n: int = 20) -> None:
+        lines = self.tail_log(n)
+        if not lines:
+            self.log(f"журнал sing-box пуст ({self.log_path.name})")
+            return
+        self.log(f"журнал sing-box — {reason}:")
+        for ln in lines:
+            self.log(f"  {ln}")
+
     def stop(self) -> None:
+        procutil.invalidate_proc_cache()
+        self._pid_scan_at = 0.0
+        self._pid_scan_result = None
+        targets: list[int] = []
         pid = self.pid()
         if pid:
-            procutil.kill_pid(pid)
-            self.log(f"sing-box mode pid={pid} stopped")
+            targets.append(pid)
         for orphan in procutil.pids_named("sing-box.exe", "sing-box"):
-            if orphan != pid:
-                procutil.kill_pid(orphan)
+            if orphan not in targets:
+                targets.append(orphan)
+        if not targets:
+            self.log("sing-box уже не запущен")
+            self.pid_path.unlink(missing_ok=True)
+            return
+
+        self.log(f"остановка sing-box pid={','.join(str(p) for p in targets)}")
+        died = procutil.kill_pids(targets)
+        leftover = [p for p in targets if procutil.pid_alive(p)]
+        if leftover:
+            self.log(
+                f"обычный taskkill не сработал (pid={','.join(str(p) for p in leftover)}) "
+                "— процесс от администратора, запрашиваю UAC"
+            )
+            if not procutil.elevate_kill_pids(leftover):
+                leftover = [p for p in leftover if procutil.pid_alive(p)]
+                self.pid_path.unlink(missing_ok=True)
+                raise RuntimeError(
+                    f"Не удалось остановить sing-box pid={','.join(str(p) for p in leftover)}. "
+                    "Подтвердите UAC или завершите sing-box.exe в диспетчере задач."
+                )
+            leftover = [p for p in leftover if procutil.pid_alive(p)]
+            if leftover:
+                self.pid_path.unlink(missing_ok=True)
+                raise RuntimeError(
+                    f"sing-box pid={','.join(str(p) for p in leftover)} всё ещё работает"
+                )
+        self.log(f"sing-box остановлен (pid={','.join(str(p) for p in died or targets)})")
         self._pid_scan_at = 0.0
         self._pid_scan_result = None
         self.pid_path.unlink(missing_ok=True)
