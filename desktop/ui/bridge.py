@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from PySide6.QtCore import Property, QObject, QTimer, Signal, Slot
+from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlPropertyMap
 from PySide6.QtWidgets import QFileDialog, QInputDialog, QLineEdit
 
@@ -139,6 +140,8 @@ class GuiBridge(QObject):
         self._closing = False
         self._overrides_cleared = False
         self._await_status = False
+        self._status_pending = False
+        self._status_pending_force = False
 
         self._settings = QQmlPropertyMap(self)
         for key, value in _settings_defaults().items():
@@ -639,6 +642,16 @@ class GuiBridge(QObject):
             self.toast.emit(str(exc), "error")
 
     @Slot()
+    def copyLog(self) -> None:
+        text = "\n".join(self._log_lines)
+        clipboard = QGuiApplication.clipboard()
+        if clipboard is None:
+            self.toast.emit("Буфер обмена недоступен", "error")
+            return
+        clipboard.setText(text)
+        self.toast.emit("Журнал скопирован", "info")
+
+    @Slot()
     def hideWindow(self) -> None:
         self.hideRequested.emit()
 
@@ -709,10 +722,58 @@ class GuiBridge(QObject):
 
     @Slot(str)
     def _on_bg_finished(self, err: str) -> None:
-        self._await_status = True
+        waiting = self._busy_text
+        self._set_busy(False)
         if err:
             self.toast.emit(err, "error")
+        else:
+            self._apply_optimistic(waiting)
         self._refresh_status(force=True)
+
+    def _apply_optimistic(self, waiting: str) -> None:
+        wait = (waiting or "").lower()
+        if "отключ" in wait:
+            self._apply_status(
+                {
+                    "singbox_running": False,
+                    "tun_running": False,
+                    "socks_up": False,
+                    "http_up": False,
+                    "pac_up": False,
+                    "kill_switch": False,
+                    "kill_switch_applied": False,
+                    "socks_scope": "full" if self._scope == "Всё" else "github",
+                    "server_target": self._server_target,
+                    "watchdog_running": False,
+                    "reverse_ssh_running": self._reverse_ssh_up,
+                    "reverse_ssh_listen": self._reverse_ssh_port,
+                    "socks_port": self._socks_port,
+                    "http_port": self._http_port,
+                    "pac_port": self._pac_port,
+                },
+                force=True,
+            )
+        elif "подключ" in wait:
+            self._apply_status(
+                {
+                    "singbox_running": True,
+                    "tun_running": self._tun,
+                    "socks_up": True,
+                    "http_up": True,
+                    "pac_up": True,
+                    "kill_switch": self._kill_switch_on,
+                    "kill_switch_applied": self._kill_switch_on,
+                    "socks_scope": "full" if self._scope == "Всё" else "github",
+                    "server_target": self._server_target,
+                    "watchdog_running": True,
+                    "reverse_ssh_running": self._reverse_ssh_up,
+                    "reverse_ssh_listen": self._reverse_ssh_port,
+                    "socks_port": self._socks_port,
+                    "http_port": self._http_port,
+                    "pac_port": self._pac_port,
+                },
+                force=True,
+            )
 
     def _finish_await_status(self) -> None:
         if not self._await_status:
@@ -728,31 +789,43 @@ class GuiBridge(QObject):
         if self._closing:
             return
         if self._status_busy:
-            self._status_timer.start(1000)
+            self._status_pending = True
+            if force:
+                self._status_pending_force = True
             return
 
         def work() -> None:
             self._status_busy = True
             try:
-                st = self.client.status(include_git=False)
-                err = ""
-                if (
-                    isinstance(st, dict)
-                    and not self._overrides_cleared
-                    and not (st.get("singbox_running") or st.get("tun_running"))
-                ):
-                    self.client.teardown_overrides_if_dirty()
-                    self._overrides_cleared = True
-            except Exception as exc:  # noqa: BLE001
-                st = None
-                err = str(exc)
-            self._status_busy = False
-            if self._closing:
-                return
-            if err:
-                self._statusFailed.emit(err)
-            elif st is not None:
-                self._statusReady.emit(st, force)
+                want_force = force
+                while True:
+                    force_now = want_force or self._status_pending_force
+                    self._status_pending = False
+                    self._status_pending_force = False
+                    try:
+                        st = self.client.status(include_git=False)
+                        err = ""
+                        if (
+                            isinstance(st, dict)
+                            and not self._overrides_cleared
+                            and not (st.get("singbox_running") or st.get("tun_running"))
+                        ):
+                            self.client.teardown_overrides_if_dirty()
+                            self._overrides_cleared = True
+                    except Exception as exc:  # noqa: BLE001
+                        st = None
+                        err = str(exc)
+                    if self._closing:
+                        return
+                    if err:
+                        self._statusFailed.emit(err)
+                    elif st is not None:
+                        self._statusReady.emit(st, force_now)
+                    if not self._status_pending:
+                        break
+                    want_force = True
+            finally:
+                self._status_busy = False
             delay = 5000 if self._page == "home" and not self._busy else 10000
             if not self._closing:
                 self._schedulePoll.emit(delay)

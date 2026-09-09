@@ -14,10 +14,50 @@ Item {
         border.width: 1
         clip: true
 
+        Rectangle {
+            id: toolbar
+            anchors.top: parent.top
+            anchors.left: parent.left
+            anchors.right: parent.right
+            height: 40
+            color: "transparent"
+
+            Rectangle {
+                id: copyBtn
+                anchors.right: parent.right
+                anchors.rightMargin: 10
+                anchors.verticalCenter: parent.verticalCenter
+                width: copyLabel.implicitWidth + 20
+                height: 28
+                radius: 8
+                color: copyMouse.containsMouse ? T.btnHover : T.btn
+                Text {
+                    id: copyLabel
+                    anchors.centerIn: parent
+                    text: "Копировать всё"
+                    color: T.text
+                    font.pixelSize: 12
+                    font.family: T.fontUi
+                }
+                MouseArea {
+                    id: copyMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: bridge.copyLog()
+                }
+            }
+        }
+
         Flickable {
             id: flick
-            anchors.fill: parent
-            anchors.margins: 12
+            anchors.top: toolbar.bottom
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            anchors.leftMargin: 12
+            anchors.rightMargin: 12
+            anchors.bottomMargin: 12
             clip: true
             contentWidth: width
             contentHeight: logText.implicitHeight

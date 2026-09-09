@@ -291,10 +291,11 @@ def kill_pid(pid: int) -> bool:
         return True
     invalidate_proc_cache()
     if sys.platform == "win32":
-        if _terminate_win(pid) and _wait_pid_dead(pid, timeout=1.2):
+        _terminate_win(pid)
+        if _wait_pid_dead(pid, timeout=3.0):
             return True
         run(["taskkill", "/PID", str(pid), "/T", "/F"])
-        return _wait_pid_dead(pid)
+        return _wait_pid_dead(pid, timeout=1.0)
     try:
         os.kill(pid, 15)
     except OSError:
@@ -686,14 +687,11 @@ def kill_pids(
     if sys.platform == "win32":
         for pid in targeted:
             _terminate_win(pid)
-        deadline = time.monotonic() + 1.2
+        deadline = time.monotonic() + 3.0
         while time.monotonic() < deadline:
             if not any(pid_alive(p) for p in targeted):
                 break
             time.sleep(0.05)
-        leftover_now = [p for p in targeted if pid_alive(p)]
-        for pid in leftover_now:
-            kill_pid(pid)
     else:
         for pid in targeted:
             kill_pid(pid)

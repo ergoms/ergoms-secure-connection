@@ -433,6 +433,7 @@ class SingboxModeManager:
             self.log("TUN: нужен один запрос прав — дальше без окон Windows")
         self._ensure_win_firewall(exe)
 
+        self._rotate_log()
         pid = self._launch(exe, elevate=need_admin, prelude_cmds=prelude_cmds or [])
         if pid:
             self.pid_path.write_text(str(pid), encoding="utf-8")
@@ -440,15 +441,20 @@ class SingboxModeManager:
         else:
             self.log("ожидаю появления процесса sing-box…")
 
-        deadline = time.monotonic() + 6.0
-        interval = 0.05
-        while time.monotonic() < deadline:
-            if _port_open("127.0.0.1", socks_port):
-                kind = "mixed + TUN → VLESS" if enable_tun else "mixed → VLESS"
-                self.log(f"sing-box слушает SOCKS :{socks_port} и HTTP :{http_port} ({kind})")
+        if self._wait_socks(socks_port, http_port, enable_tun=enable_tun, pid=pid):
+            return
+        if enable_tun and self._tun_adapter_busy():
+            self.log("TUN-адаптер ещё занят — жду и пробую ещё раз")
+            time.sleep(1.5)
+            leftover = self.pid() or pid
+            if leftover and procutil.pid_alive(leftover):
+                procutil.kill_pids([leftover])
+            pid = self._launch(exe, elevate=need_admin, prelude_cmds=prelude_cmds or [])
+            if pid:
+                self.pid_path.write_text(str(pid), encoding="utf-8")
+                self.log(f"sing-box pid={pid} (повтор)")
+            if self._wait_socks(socks_port, http_port, enable_tun=enable_tun, pid=pid):
                 return
-            time.sleep(interval)
-            interval = min(interval * 1.3, 0.2)
 
         self._log_tail("не поднялся SOCKS")
         raise RuntimeError(
@@ -460,10 +466,55 @@ class SingboxModeManager:
         if not self.log_path.is_file():
             return []
         try:
-            lines = self.log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+            size = self.log_path.stat().st_size
+            with self.log_path.open("rb") as fh:
+                if size > 65536:
+                    fh.seek(size - 65536)
+                raw = fh.read().decode("utf-8", errors="replace")
         except OSError:
             return []
+        lines = raw.splitlines()
         return [ln.rstrip() for ln in lines[-n:] if ln.strip()]
+
+    def _rotate_log(self) -> None:
+        path = self.log_path
+        try:
+            if not path.is_file() or path.stat().st_size <= 5 * 1024 * 1024:
+                return
+            backup = path.with_name(path.name + ".1")
+            backup.unlink(missing_ok=True)
+            path.replace(backup)
+        except OSError:
+            pass
+
+    def _tun_adapter_busy(self) -> bool:
+        text = "\n".join(self.tail_log(40)).lower()
+        return "configure tun interface" in text or "wintun" in text
+
+    def _wait_socks(
+        self,
+        socks_port: int,
+        http_port: int,
+        *,
+        enable_tun: bool,
+        pid: int | None,
+        timeout: float = 6.0,
+    ) -> bool:
+        deadline = time.monotonic() + timeout
+        interval = 0.05
+        while time.monotonic() < deadline:
+            if _port_open("127.0.0.1", socks_port):
+                kind = "mixed + TUN → VLESS" if enable_tun else "mixed → VLESS"
+                self.log(
+                    f"sing-box слушает SOCKS :{socks_port} и HTTP :{http_port} ({kind})"
+                )
+                return True
+            check = pid or self.pid()
+            if check and not procutil.pid_alive(check) and not self.pid():
+                return False
+            time.sleep(interval)
+            interval = min(interval * 1.3, 0.2)
+        return False
 
     def _log_tail(self, reason: str, n: int = 20) -> None:
         lines = self.tail_log(n)
