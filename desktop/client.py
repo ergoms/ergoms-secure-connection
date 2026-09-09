@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import shutil
@@ -129,6 +130,13 @@ class OpsClient:
             log=self.log,
         )
         self.reverse_ssh = ReverseSshManager(self.paths, log=self.log)
+        self._atexit_done = False
+        atexit.register(self._atexit_teardown)
+        try:
+            if not self._vpn_process_up():
+                self.teardown_overrides()
+        except Exception:  # noqa: BLE001
+            pass
 
     def reload_env(self) -> None:
         if self.paths.config_path.is_file():
@@ -333,10 +341,72 @@ class OpsClient:
         self.log(f"PAC {url} → PROXY 127.0.0.1:{proxy_port}")
         return url
 
+    def _vpn_process_up(self) -> bool:
+        try:
+            if self.singbox.running():
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if self.tun.running():
+                return True
+        except Exception:  # noqa: BLE001
+            pass
+        return False
+
+    def teardown_overrides(self) -> None:
+        """Undo git / PAC / Docker / env changes. Safe if nothing was enabled."""
+        try:
+            disable_browser_proxy(self.paths.proxy_backup, log=self.log)
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"PAC off: {exc}")
+        try:
+            disable_linux_env_proxy(self.paths.env_proxy_backup, log=self.log)
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"env proxy off: {exc}")
+        try:
+            clear_git_proxy(
+                self.paths.cli_env,
+                self.paths.cli_ps1,
+                log=self.log,
+                backup_path=self.paths.git_proxy_backup,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"git proxy off: {exc}")
+        try:
+            self.write_docker_helpers(http_port=get_http_bridge_port(), active=False)
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"docker proxy off: {exc}")
+        try:
+            clear_instead_of(self.log)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _atexit_teardown(self) -> None:
+        if self._atexit_done:
+            return
+        self._atexit_done = True
+        try:
+            self.teardown_overrides()
+        except Exception:  # noqa: BLE001
+            pass
+
     def set_git_singbox(self, cfg: dict[str, Any], http_port: int) -> None:
-        """Point git/CLI/docker/browser at sing-box HTTP inbound + PAC server."""
-        proxy = f"http://127.0.0.1:{http_port}"
-        set_git_http_proxy(proxy, log=self.log)
+        """Point CLI/docker/browser at sing-box HTTP inbound + PAC server."""
+        if get_tun_enabled():
+            # TUN already routes git. Global http.proxy only survives a crash.
+            clear_git_proxy(
+                self.paths.cli_env,
+                self.paths.cli_ps1,
+                log=self.log,
+                backup_path=self.paths.git_proxy_backup,
+            )
+        else:
+            set_git_http_proxy(
+                f"http://127.0.0.1:{http_port}",
+                log=self.log,
+                backup_path=self.paths.git_proxy_backup,
+            )
         write_cli_env(http_port, self.paths.cli_env, self.paths.cli_ps1)
         self.write_docker_helpers(cfg, http_port=http_port, active=True)
         pac_url = self.start_pac_server(cfg, proxy_port=http_port)
@@ -346,7 +416,7 @@ class OpsClient:
             self.paths.env_proxy_backup,
             log=self.log,
         )
-        self.log(f"git via sing-box HTTP :{http_port}, scope={get_socks_scope()}")
+        self.log(f"git via {'TUN' if get_tun_enabled() else f'sing-box HTTP :{http_port}'}")
 
     def start_singbox_mode(self) -> None:
         """VLESS+Reality through Squid (sing-box)."""
@@ -432,11 +502,7 @@ class OpsClient:
         except Exception as exc:  # noqa: BLE001
             self.log(f"singbox stop: {exc}")
         self.stop_pac_server()
-        disable_browser_proxy(self.paths.proxy_backup, log=self.log)
-        disable_linux_env_proxy(self.paths.env_proxy_backup, log=self.log)
-        clear_git_proxy(self.paths.cli_env, self.paths.cli_ps1, log=self.log)
-        self.write_docker_helpers(http_port=get_http_bridge_port(), active=False)
-        clear_instead_of(self.log)
+        self.teardown_overrides()
         self.paths.state_path.unlink(missing_ok=True)
 
     def write_docker_helpers(
@@ -656,12 +722,16 @@ class OpsClient:
         self.reload_env()
         self.log("off")
         self.stop_watchdog_daemon()
-        self.stop_singbox_mode()
+        try:
+            self.stop_singbox_mode()
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"singbox stop: {exc}")
         try:
             self.tun.stop()
         except Exception:  # noqa: BLE001
             pass
         self.stop_http_bridge()
+        self.teardown_overrides()
 
     def status(self, *, include_git: bool = True) -> dict[str, Any]:
         """Snapshot of tunnel state.

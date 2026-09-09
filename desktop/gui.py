@@ -67,6 +67,7 @@ def run_gui() -> None:
 
     tray = _setup_tray(app, icon, bridge)
     bridge.quitRequested.connect(app.quit)
+    app.aboutToQuit.connect(bridge.teardownNow)
     if getattr(bridge, "startHidden", False):
         window.setProperty("visible", False)
 
