@@ -198,6 +198,14 @@ class OpsClient:
         if not lines:
             self.log(f"журнал sing-box пуст ({self.singbox.log_path})")
             return
+        if reason != "после запуска" and any(
+            "dial tcp" in ln and ":443: i/o timeout" in ln for ln in lines
+        ):
+            self.log(
+                "VPS :443 не отвечает — проверьте доступность сервера/DPI "
+                f"({reason})"
+            )
+            return
         self.log(f"журнал sing-box ({reason}):")
         for ln in lines:
             self.log(f"  {ln}")
@@ -783,12 +791,12 @@ class OpsClient:
 
     def _reap_helpers(self) -> None:
         """Stop leftover helper children. Skip cmdline scan unless pid files remain."""
-        http_port = get_http_bridge_port()
-        pac_port = get_pac_listen_port()
-        ports = [http_port]
+        ports: list[int] = []
         if self._pac_server is None:
-            ports.append(pac_port)
-        by_port = procutil.pids_listening_on_many(ports, cache=False)
+            ports.append(get_pac_listen_port())
+        by_port = (
+            procutil.pids_listening_on_many(ports, cache=False) if ports else {}
+        )
         targets: list[int] = []
         had_pid = False
         for path in (
@@ -1067,11 +1075,9 @@ class OpsClient:
         self.reload_env()
         self.log("отключение VPN…")
         self._stop_watchdog_inprocess()
-        self.stop_pac_server()
-        self._reap_helpers()
         stop_err: Exception | None = None
         try:
-            self.stop_singbox_mode(teardown=False)
+            self.singbox.stop()
         except Exception as exc:  # noqa: BLE001
             stop_err = exc
             self.log(f"sing-box не остановился: {exc}")
@@ -1079,7 +1085,31 @@ class OpsClient:
             self.tun.stop()
         except Exception as exc:  # noqa: BLE001
             self.log(f"legacy TUN: {exc}")
+
+        ks_thread: threading.Thread | None = None
+        if kill_switch_state_path(self.paths.var_dir).is_file():
+            def _clear_ks() -> None:
+                try:
+                    clear_kill_switch(var_dir=self.paths.var_dir, log=self.log)
+                except Exception as exc:  # noqa: BLE001
+                    self.log(f"kill switch off: {exc}")
+
+            ks_thread = threading.Thread(
+                target=_clear_ks, name="ergoms-kill-switch-clear", daemon=True
+            )
+            ks_thread.start()
+
+        try:
+            self.reverse_ssh.stop(scan_cmdline=False)
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"reverse-ssh stop: {exc}")
+        self.stop_pac_server()
         self.teardown_overrides_if_dirty()
+        self.paths.state_path.unlink(missing_ok=True)
+        self._reap_helpers()
+        if ks_thread is not None:
+            ks_thread.join(timeout=8.0)
+
         procutil.invalidate_proc_cache()
         leftover = self.singbox.pid()
         if leftover:
@@ -1089,12 +1119,6 @@ class OpsClient:
             )
         if stop_err:
             raise stop_err
-        ks_state = kill_switch_state_path(self.paths.var_dir)
-        if ks_state.is_file():
-            try:
-                clear_kill_switch(var_dir=self.paths.var_dir, log=self.log)
-            except Exception as exc:  # noqa: BLE001
-                self.log(f"kill switch off: {exc}")
         self._atexit_done = True
         self.log("VPN отключён: sing-box остановлен, PAC/git/Docker сброшены")
 

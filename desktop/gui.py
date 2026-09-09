@@ -152,12 +152,38 @@ def _setup_tray(app: QApplication, icon: QIcon, bridge: object) -> QSystemTrayIc
 
     add("Открыть", bridge.showWindow)  # type: ignore[attr-defined]
     menu.addSeparator()
-    add("Подключить", bridge.enableConnection)  # type: ignore[attr-defined]
-    add("Отключить", bridge.disableConnection)  # type: ignore[attr-defined]
-    add("TUN вкл", bridge.enableTun)  # type: ignore[attr-defined]
-    add("TUN выкл", bridge.disableTun)  # type: ignore[attr-defined]
+    toggle = QAction(str(getattr(bridge, "powerText", "Подключить")), menu)
+    toggle.triggered.connect(bridge.toggleConnection)  # type: ignore[attr-defined]
+    menu.addAction(toggle)
     menu.addSeparator()
     add("Выход", bridge.quitApp)  # type: ignore[attr-defined]
+
+    def _sync_toggle() -> None:
+        busy = bool(getattr(bridge, "busy", False))
+        busy_text = str(getattr(bridge, "busyText", "") or "")
+        power = str(getattr(bridge, "powerText", "Подключить") or "Подключить")
+        toggle.setEnabled(not busy)
+        toggle.setText(busy_text if busy and busy_text else power)
+
+    def _sync_tip() -> None:
+        title = str(getattr(bridge, "statusTitle", "") or "")
+        tray.setToolTip(f"{APP_NAME} — {title}" if title else APP_NAME)
+
+    for sig in (
+        "powerTextChanged",
+        "busyChanged",
+        "busyTextChanged",
+        "statusTitleChanged",
+    ):
+        signal = getattr(bridge, sig, None)
+        if signal is None:
+            continue
+        if sig == "statusTitleChanged":
+            signal.connect(_sync_tip)
+        else:
+            signal.connect(_sync_toggle)
+    _sync_toggle()
+    _sync_tip()
 
     tray.setContextMenu(menu)
 

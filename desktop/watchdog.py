@@ -216,11 +216,13 @@ class TunnelWatchdog:
         self._stop.set()
         t = self._thread
         if t and t.is_alive():
-            t.join(timeout=2.0)
+            t.join(timeout=0.3)
         self._thread = None
 
     def tick(self) -> None:
         """One health check (also used by CLI watch loop)."""
+        if self._stop.is_set():
+            return
         if self.should_skip and self.should_skip():
             return
         if self._reconnecting:
@@ -233,13 +235,15 @@ class TunnelWatchdog:
             self._lock.release()
 
     def _tick_body(self) -> None:
+        if self._stop.is_set() or not self._desired:
+            return
         self.client.reload_env()
         if not get_watchdog_enabled():
             return
-        if not self._desired:
-            return
         now = time.monotonic()
         if now < self._next_ok_at:
+            return
+        if self._stop.is_set():
             return
 
         # Always probe SOCKS CONNECT when the port is up — port-open alone

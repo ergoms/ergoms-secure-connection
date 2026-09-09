@@ -28,7 +28,13 @@ BLACKHOLE_GW = "127.0.0.1"
 BLACKHOLE_METRIC = 512
 _SKIP_GW = frozenset({"on-link", "0.0.0.0", "127.0.0.1", "::", "::1"})
 _APPLIED_TTL = 10.0
+_ROUTE_PRINT_TTL = 0.8
 _applied_cache: tuple[float, bool] | None = None
+_route_print_cache: tuple[float, str] | None = None
+_WIN_BLACKHOLE = re.compile(
+    r"0\.0\.0\.0\s+128\.0\.0\.0\s+(On-link|127\.0\.0\.1)\s+127\.0\.0\.1",
+    re.IGNORECASE,
+)
 
 
 def _noop(_msg: str) -> None:
@@ -99,13 +105,30 @@ def _gateway_linux(dest: str) -> str | None:
     return None
 
 
-def _gateway_win(dest: str) -> str | None:
-    del dest
+def _route_print_win(*, force: bool = False) -> str:
+    global _route_print_cache
+    now = time.monotonic()
+    if (
+        not force
+        and _route_print_cache
+        and now - _route_print_cache[0] < _ROUTE_PRINT_TTL
+    ):
+        return _route_print_cache[1]
     try:
         r = procutil.run(["route", "print", "-4"], timeout=8)
     except (OSError, FileNotFoundError):
+        text = ""
+    else:
+        text = r.stdout or ""
+    _route_print_cache = (now, text)
+    return text
+
+
+def _gateway_win(dest: str) -> str | None:
+    del dest
+    text = _route_print_win()
+    if not text:
         return None
-    text = r.stdout or ""
     best: tuple[int, str] | None = None
     for raw in text.splitlines():
         m = re.search(
@@ -200,8 +223,9 @@ def _cmds_linux_remove(allow: list[str], gw: str | None) -> list[str]:
 
 
 def invalidate_applied_cache() -> None:
-    global _applied_cache
+    global _applied_cache, _route_print_cache
     _applied_cache = None
+    _route_print_cache = None
 
 
 def is_applied(*, force: bool = False) -> bool:
@@ -220,14 +244,8 @@ def is_applied(*, force: bool = False) -> bool:
 
 def _is_applied_uncached() -> bool:
     if sys.platform == "win32":
-        try:
-            r = procutil.run(["route", "print", "-4"], timeout=8)
-        except (OSError, FileNotFoundError):
-            return False
-        text = r.stdout or ""
-        return bool(
-            re.search(r"0\.0\.0\.0\s+128\.0\.0\.0\s+127\.0\.0\.1", text)
-        )
+        text = _route_print_win(force=True)
+        return bool(_WIN_BLACKHOLE.search(text))
     try:
         r = procutil.run(["ip", "-4", "route", "show", "0.0.0.0/1"], timeout=3)
     except (OSError, FileNotFoundError):
@@ -243,19 +261,24 @@ def remember_plan(var_dir: Path, allow: list[str], *, gw: str | None = None) -> 
 def apply(allow: list[str], *, var_dir: Path, log: LogFn = _noop) -> bool:
     """Install routes. Returns True if blackhole is present afterwards."""
     unique = list(dict.fromkeys(allow))
+    if is_applied():
+        hop = underlay_gateway(unique[0]) if unique else underlay_gateway("")
+        _save_state(var_dir, {"allow": unique, "gw": hop or "", "applied": True})
+        log("kill switch: маршруты уже стоят")
+        return True
     gw = underlay_gateway(unique[0]) if unique else underlay_gateway("")
     if not gw:
         log("kill switch: нет default gateway — OS-маршруты не ставлю (останется strict_route)")
         _save_state(var_dir, {"allow": unique, "gw": "", "applied": False})
         return False
     cmds = install_commands(unique, gw=gw)
-    ok = _run_privileged_lines(cmds, log=log, expect_applied=True)
+    _run_privileged_lines(cmds, log=log, expect_applied=True)
     invalidate_applied_cache()
-    present = is_applied()
+    present = is_applied(force=True)
     _save_state(var_dir, {"allow": unique, "gw": gw, "applied": present})
     if present:
         log(f"kill switch: чёрные маршруты 0.0.0.0/1 + 128.0.0.0/1 (исключения {', '.join(unique) or 'нет'})")
-    elif ok:
+    elif procutil.is_admin():
         log("kill switch: команды выполнены, но маршруты не видны")
     else:
         log("kill switch: не удалось поставить OS-маршруты (нужны права)")
@@ -273,7 +296,8 @@ def clear(*, var_dir: Path, log: LogFn = _noop) -> None:
         state_path(var_dir).unlink(missing_ok=True)
     except OSError:
         pass
-    if is_applied():
+    still = is_applied(force=True)
+    if still:
         log("kill switch: чёрные маршруты всё ещё на месте — повторите off от администратора")
     else:
         log("kill switch: OS-маршруты сняты")
@@ -300,12 +324,6 @@ def _run_lines_now(lines: list[str], *, ignore_fail: bool) -> bool:
     cleaned = [ln.strip() for ln in lines if ln and ln.strip()]
     if not cleaned:
         return True
-    if sys.platform == "win32" and len(cleaned) > 1:
-        try:
-            r = procutil.run(["cmd", "/d", "/c", " & ".join(cleaned)], timeout=20)
-        except (OSError, FileNotFoundError):
-            return ignore_fail
-        return r.returncode == 0 or ignore_fail
     ok = True
     for line in cleaned:
         args = _split_cmd(line)
@@ -318,15 +336,16 @@ def _run_lines_now(lines: list[str], *, ignore_fail: bool) -> bool:
             if not ignore_fail:
                 break
             continue
-        if r.returncode != 0 and not ignore_fail and not _benign_route_error(r.stderr or ""):
-            # add after delete-miss is fine; real add failure is not
-            if args[:2] == ["route", "delete"] or args[:3] == ["ip", "route", "del"]:
-                continue
-            if "netsh" in args[0] and "delete" in args:
-                continue
-            if "netsh" in args[0] and "add" in args:
-                continue
-            ok = False
+        if r.returncode == 0 or ignore_fail:
+            continue
+        err = (r.stderr or "") + (r.stdout or "")
+        if _benign_route_error(err):
+            continue
+        if args[:2] == ["route", "delete"] or args[:3] == ["ip", "route", "del"]:
+            continue
+        if "netsh" in args[0] and ("delete" in args or "add" in args):
+            continue
+        ok = False
     return ok
 
 
