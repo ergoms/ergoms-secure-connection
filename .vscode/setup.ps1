@@ -1,6 +1,6 @@
 #Requires -Version 5.1
 param(
-    [ValidateSet('all', 'libraries', 'sing-box')]
+    [ValidateSet('all', 'libraries', 'sing-box', 'pyinstaller', 'exe')]
     [string]$Target = 'all'
 )
 
@@ -73,8 +73,27 @@ function Install-SingBox {
     if ($LASTEXITCODE -ne 0) { throw "download-sing-box failed: $LASTEXITCODE" }
 }
 
+function Invoke-PyInstaller {
+    $poetry = Get-PoetryExe
+    if (-not $poetry) { $poetry = Install-Poetry }
+    & $poetry install --extras gui --extras build
+    if ($LASTEXITCODE -ne 0) { throw "poetry install failed: $LASTEXITCODE" }
+    $sb = Join-Path $Root 'tools\sing-box.exe'
+    if (-not (Test-Path -LiteralPath $sb)) {
+        Install-SingBox
+    }
+    Write-Host 'PyInstaller: OpsContent.spec -> dist/OpsContent.exe'
+    & $poetry run pyinstaller --noconfirm --clean OpsContent.spec
+    if ($LASTEXITCODE -ne 0) { throw "pyinstaller failed: $LASTEXITCODE" }
+    $exe = Join-Path $Root 'dist\OpsContent.exe'
+    if (-not (Test-Path -LiteralPath $exe)) { throw "missing $exe" }
+    Write-Host "OK: $exe"
+}
+
 switch ($Target) {
     'libraries' { Install-Libraries }
     'sing-box' { Install-SingBox }
+    'pyinstaller' { Invoke-PyInstaller }
+    'exe' { Install-Libraries; Install-SingBox; Invoke-PyInstaller }
     'all' { Install-Libraries; Install-SingBox }
 }

@@ -65,15 +65,47 @@ install_singbox() {
   "$py" -m desktop download-sing-box
 }
 
+run_pyinstaller() {
+  local poetry sb
+  poetry="$(find_poetry || true)"
+  if [[ -z "${poetry:-}" ]]; then
+    poetry="$(install_poetry)"
+  fi
+  "$poetry" install --extras gui --extras build
+  if [[ -x "${ROOT}/tools/sing-box" ]]; then
+    sb="${ROOT}/tools/sing-box"
+  elif [[ -x "${ROOT}/tools/sing-box.exe" ]]; then
+    sb="${ROOT}/tools/sing-box.exe"
+  else
+    install_singbox
+  fi
+  echo "PyInstaller: OpsContent.spec -> dist/OpsContent"
+  "$poetry" run pyinstaller --noconfirm --clean OpsContent.spec
+  if [[ -f "${ROOT}/dist/OpsContent.exe" ]]; then
+    echo "OK: ${ROOT}/dist/OpsContent.exe"
+  elif [[ -f "${ROOT}/dist/OpsContent" ]]; then
+    echo "OK: ${ROOT}/dist/OpsContent"
+  else
+    echo "pyinstaller finished but dist/OpsContent is missing" >&2
+    exit 1
+  fi
+}
+
 case "${1:-all}" in
   libraries) install_libraries ;;
   sing-box) install_singbox ;;
+  pyinstaller) run_pyinstaller ;;
+  exe)
+    install_libraries
+    install_singbox
+    run_pyinstaller
+    ;;
   all)
     install_libraries
     install_singbox
     ;;
   *)
-    echo "usage: setup.sh [all|libraries|sing-box]" >&2
+    echo "usage: setup.sh [all|libraries|sing-box|pyinstaller|exe]" >&2
     exit 2
     ;;
 esac
