@@ -128,6 +128,48 @@ Item {
                 }
 
                 Text {
+                    text: "ИНТЕГРАЦИИ"
+                    color: T.muted
+                    font.pixelSize: 11
+                    font.bold: true
+                    font.family: T.fontUi
+                    topPadding: 8
+                }
+                Card {
+                    width: parent.width
+                    implicitHeight: integCol.implicitHeight + 24
+                    Column {
+                        id: integCol
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.margins: 14
+                        spacing: 10
+
+                        Text { text: "Git через VPN"; color: T.muted; font.pixelSize: 11; font.family: T.fontUi }
+                        Segmented {
+                            width: parent.width
+                            value: bridge.settings.gitProxy ? "1" : "0"
+                            model: [
+                                { label: "Выкл", value: "0" },
+                                { label: "Вкл", value: "1" }
+                            ]
+                            onActivated: (v) => { bridge.settings.gitProxy = (v === "1") }
+                        }
+                        Text { text: "Docker через VPN"; color: T.muted; font.pixelSize: 11; font.family: T.fontUi }
+                        Segmented {
+                            width: parent.width
+                            value: bridge.settings.dockerProxy ? "1" : "0"
+                            model: [
+                                { label: "Выкл", value: "0" },
+                                { label: "Вкл", value: "1" }
+                            ]
+                            onActivated: (v) => { bridge.settings.dockerProxy = (v === "1") }
+                        }
+                    }
+                }
+
+                Text {
                     text: "СЕРВЕР"
                     color: T.muted
                     font.pixelSize: 11

@@ -267,12 +267,32 @@ def _wait_pid_dead(pid: int, timeout: float = 2.0) -> bool:
     return not pid_alive(pid)
 
 
+def _terminate_win(pid: int) -> bool:
+    """TerminateProcess; True if the call was issued (process may still be dying)."""
+    try:
+        import ctypes
+
+        PROCESS_TERMINATE = 0x0001
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        handle = kernel32.OpenProcess(PROCESS_TERMINATE, 0, int(pid))
+        if not handle:
+            return False
+        try:
+            return bool(kernel32.TerminateProcess(handle, 1))
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def kill_pid(pid: int) -> bool:
     """Best-effort kill. Returns True if the process is gone."""
     if pid <= 0:
         return True
     invalidate_proc_cache()
     if sys.platform == "win32":
+        if _terminate_win(pid) and _wait_pid_dead(pid, timeout=1.2):
+            return True
         run(["taskkill", "/PID", str(pid), "/T", "/F"])
         return _wait_pid_dead(pid)
     try:
@@ -498,7 +518,94 @@ def _scan_cmdline_many(needles: Sequence[str]) -> dict[str, list[int]]:
     return found
 
 
-def _scan_cmdline_many_win(needles: Sequence[str], me: int) -> dict[str, list[int]]:
+def _read_cmdline_win(pid: int) -> str | None:
+    """Read process command line via PEB (x64). None if inaccessible."""
+    if sys.platform != "win32" or pid <= 0:
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        PROCESS_VM_READ = 0x0010
+        ProcessBasicInformation = 0
+
+        class PROCESS_BASIC_INFORMATION(ctypes.Structure):
+            _fields_ = [
+                ("Reserved1", ctypes.c_void_p),
+                ("PebBaseAddress", ctypes.c_void_p),
+                ("Reserved2_0", ctypes.c_void_p),
+                ("Reserved2_1", ctypes.c_void_p),
+                ("UniqueProcessId", ctypes.c_void_p),
+                ("InheritedFromUniqueProcessId", ctypes.c_void_p),
+            ]
+
+        class UNICODE_STRING(ctypes.Structure):
+            _fields_ = [
+                ("Length", wintypes.USHORT),
+                ("MaximumLength", wintypes.USHORT),
+                ("Buffer", ctypes.c_void_p),
+            ]
+
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        ntdll = ctypes.windll.ntdll  # type: ignore[attr-defined]
+        handle = kernel32.OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ, 0, int(pid)
+        )
+        if not handle:
+            return None
+        try:
+            pbi = PROCESS_BASIC_INFORMATION()
+            status = ntdll.NtQueryInformationProcess(
+                handle,
+                ProcessBasicInformation,
+                ctypes.byref(pbi),
+                ctypes.sizeof(pbi),
+                None,
+            )
+            if status != 0 or not pbi.PebBaseAddress:
+                return None
+            peb = int(pbi.PebBaseAddress)
+            params_ptr = ctypes.c_void_p()
+            nread = ctypes.c_size_t()
+            if not kernel32.ReadProcessMemory(
+                handle,
+                ctypes.c_void_p(peb + 0x20),
+                ctypes.byref(params_ptr),
+                ctypes.sizeof(params_ptr),
+                ctypes.byref(nread),
+            ):
+                return None
+            if not params_ptr.value:
+                return None
+            us = UNICODE_STRING()
+            if not kernel32.ReadProcessMemory(
+                handle,
+                ctypes.c_void_p(int(params_ptr.value) + 0x70),
+                ctypes.byref(us),
+                ctypes.sizeof(us),
+                ctypes.byref(nread),
+            ):
+                return None
+            if not us.Buffer or us.Length == 0:
+                return ""
+            buf = ctypes.create_unicode_buffer(us.Length // 2 + 1)
+            if not kernel32.ReadProcessMemory(
+                handle,
+                ctypes.c_void_p(int(us.Buffer)),
+                buf,
+                us.Length,
+                ctypes.byref(nread),
+            ):
+                return None
+            return buf.value
+        finally:
+            kernel32.CloseHandle(handle)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _scan_cmdline_many_win_ps(needles: Sequence[str], me: int) -> dict[str, list[int]]:
     import json
 
     token = base64.b64encode(
@@ -535,6 +642,34 @@ def _scan_cmdline_many_win(needles: Sequence[str], me: int) -> dict[str, list[in
     return found
 
 
+def _scan_cmdline_many_win(needles: Sequence[str], me: int) -> dict[str, list[int]]:
+    names = {
+        "python.exe",
+        "pythonw.exe",
+        "py.exe",
+        "ergomssecureconnection.exe",
+        "ssh.exe",
+    }
+    pids = _pids_named_win(names)
+    found: dict[str, list[int]] = {s: [] for s in needles}
+    lower_needles = [(s, s.lower()) for s in needles]
+    any_read = False
+    for pid in pids:
+        if pid == me:
+            continue
+        cl = _read_cmdline_win(pid)
+        if cl is None:
+            continue
+        any_read = True
+        cl_l = cl.lower()
+        for orig, low in lower_needles:
+            if low in cl_l and pid not in found[orig]:
+                found[orig].append(pid)
+    if not any_read and pids:
+        return _scan_cmdline_many_win_ps(needles, me)
+    return found
+
+
 def kill_pids(
     pids: Sequence[int], *, exclude: int = 0, elevate_if_needed: bool = False
 ) -> list[int]:
@@ -548,6 +683,19 @@ def kill_pids(
         seen.add(pid)
         if pid_alive(pid):
             targeted.append(pid)
+    if sys.platform == "win32":
+        for pid in targeted:
+            _terminate_win(pid)
+        deadline = time.monotonic() + 1.2
+        while time.monotonic() < deadline:
+            if not any(pid_alive(p) for p in targeted):
+                break
+            time.sleep(0.05)
+        leftover_now = [p for p in targeted if pid_alive(p)]
+        for pid in leftover_now:
+            kill_pid(pid)
+    else:
+        for pid in targeted:
             kill_pid(pid)
     leftover = [p for p in targeted if pid_alive(p)]
     if leftover and elevate_if_needed:

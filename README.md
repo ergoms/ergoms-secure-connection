@@ -67,6 +67,8 @@ bash modes/vps/bootstrap_singbox_443.sh
 | `socks_scope` | `full` или `github` (область PAC) |
 | `tun.enabled` / `tun.elevate` | TUN вместе с `on` (по умолчанию вкл.), запрос прав |
 | `kill_switch` | при обрыве резать интернет (по умолчанию вкл.; нужен TUN) |
+| `git_proxy` | проксировать git через VPN (в корпоративном пресете вкл., иначе выкл.) |
+| `docker_proxy` | проксировать Docker Desktop / CLI через VPN (в корпоративном пресете вкл., иначе выкл.) |
 | `corporate_proxy` | корпоративный Squid |
 | `tun.sing_box_path` | пусто = авто `tools/sing-box` |
 | `reverse_ssh.enabled` | проброс sshd клиента на `127.0.0.1:listen_port` VPS |

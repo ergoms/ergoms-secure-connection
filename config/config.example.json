@@ -9,6 +9,8 @@
   "watchdog_interval": 15,
   "watchdog_max_retries": 5,
   "kill_switch": true,
+  "git_proxy": false,
+  "docker_proxy": false,
   "server": {
     "host": "YOUR_VPS_IP_OR_HOSTNAME",
     "port": 443,

@@ -16,7 +16,7 @@ ApplicationWindow {
     maximumHeight: 680
     visible: true
     color: "transparent"
-    flags: Qt.Window | Qt.FramelessWindowHint
+    flags: Qt.Window | Qt.FramelessWindowHint | Qt.WindowSystemMenuHint | Qt.WindowMinimizeButtonHint
     font.family: Qt.platform.os === "windows" ? T.fontUi : "sans-serif"
     Material.theme: Material.Dark
     Material.accent: T.accent

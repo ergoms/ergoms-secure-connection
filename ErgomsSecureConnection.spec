@@ -34,6 +34,8 @@ a = Analysis(
         "desktop.client",
         "desktop.reverse_ssh",
         "desktop.autostart",
+        "desktop.elevate",
+        "desktop.pac_serve",
         "desktop.__main__",
         "lib.connect_socks",
         "lib.connect_proxy",
