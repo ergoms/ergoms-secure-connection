@@ -1,8 +1,7 @@
-"""TUN-over-SOCKS via sing-box (Windows / Linux)."""
+"""sing-box binary: find, download, stop leftover processes."""
 
 from __future__ import annotations
 
-import json
 import os
 import platform
 import shutil
@@ -14,11 +13,10 @@ import time
 import urllib.request
 import zipfile
 from pathlib import Path
-from typing import Any, Callable
+from typing import Callable
 
 from desktop import procutil
 from desktop.paths import bundle_dir, is_frozen
-from lib.http_via_socks import bypass_to_singbox
 
 LogFn = Callable[[str], None]
 
@@ -88,9 +86,9 @@ def _arch_tag() -> str:
 
 
 def _direct_python_paths() -> list[str]:
-    """Only interpreters used by ProxyCommand / HTTP bridge (avoid TUN loops).
+    """Interpreters used by reverse-ssh / PAC (avoid TUN loops).
 
-    Other Python installs (pip, poetry, venv) stay on the default socks-out path.
+    Other Python installs (pip, poetry, venv) stay on the default proxy path.
     """
     found: list[str] = []
     seen: set[str] = set()
@@ -126,49 +124,11 @@ def _direct_python_paths() -> list[str]:
     return found
 
 
-def _remote_desktop_process_names() -> list[str]:
-    """Kept for optional TUN bypass; ID/relay on the VPN VPS must use VLESS (office RST on :21116)."""
-    return ["rustdesk.exe", "RustDesk.exe"]
-
-
 RUSTDESK_PORTS = [21114, 21115, 21116, 21117, 21118, 21119]
 
 
-def _remote_desktop_process_paths() -> list[str]:
-    found: list[str] = []
-    seen: set[str] = set()
-
-    def add(p: Path) -> None:
-        if not p.is_file():
-            return
-        resolved = p.resolve()
-        key = str(resolved).lower()
-        if key in seen:
-            return
-        seen.add(key)
-        found.append(str(resolved).replace("\\", "/"))
-
-    if sys.platform == "win32":
-        local = os.environ.get("LOCALAPPDATA") or ""
-        roots = [
-            Path(r"C:\Program Files\RustDesk"),
-            Path(r"C:\Program Files (x86)\RustDesk"),
-        ]
-        if local:
-            roots.extend([Path(local) / "rustdesk", Path(local) / "RustDesk"])
-        for root in roots:
-            add(root / "rustdesk.exe")
-            add(root / "RustDesk.exe")
-    else:
-        for name in ("rustdesk",):
-            w = shutil.which(name)
-            if w:
-                add(Path(w))
-    return found
-
-
 class TunManager:
-    """Start/stop sing-box TUN that forwards into an existing local SOCKS5."""
+    """Locate/download sing-box and stop leftover TUN processes."""
 
     def __init__(self, var_dir: Path, tools_dir: Path, logs_dir: Path, log: LogFn = _noop) -> None:
         self.var_dir = var_dir
@@ -260,155 +220,6 @@ class TunManager:
         except OSError:
             return src
 
-    def build_config(
-        self,
-        *,
-        socks_host: str,
-        socks_port: int,
-        exclude_ips: list[str],
-        bypass_hosts: list[str] | None = None,
-        mtu: int = 1500,
-    ) -> dict[str, Any]:
-        route_exclude = [
-            "10.0.0.0/8",
-            "172.16.0.0/12",
-            "192.168.0.0/16",
-            "127.0.0.0/8",
-            "169.254.0.0/16",
-            "224.0.0.0/4",
-        ]
-        # ssh / sing-box / GUI — by name. Python — only ops-content's interpreter
-        # (process_path), so pip/poetry in other installs go through TUN.
-        proc_names = [
-            "sing-box",
-            "sing-box.exe",
-            "ssh",
-            "ssh.exe",
-            "OpsContent.exe",
-        ]
-        # Docker Desktop / WSL / Hyper-V: do not half-capture VM traffic.
-        # Containers should use HTTP_PROXY → host bridge (var/docker.env).
-        docker_wsl_procs = [
-            "vmmem",
-            "vmmemWSL",
-            "wsl.exe",
-            "wslhost.exe",
-            "wslrelay.exe",
-            "wslservice.exe",
-            "WSLService.exe",
-            "vmcompute.exe",
-            "vmwp.exe",
-            "com.docker.backend.exe",
-            "com.docker.build.exe",
-            "com.docker.proxy.exe",
-            "com.docker.admin.exe",
-            "com.docker.dev-envs.exe",
-            "Docker Desktop.exe",
-            "docker.exe",
-            "dockerd.exe",
-            "vpnkit.exe",
-            "vpnkit-bridge.exe",
-        ]
-        # Order matters:
-        # 1) hijack DNS before ip_is_private (TUN DNS 172.19.0.2:53 is private).
-        # 2) Docker/WSL after hijack so UDP/53 is answered by sing-box DNS module
-        #    (dns-local), then remaining VM traffic stays direct.
-        # SSH DynamicForward is TCP-only — plain UDP DNS via socks-out fails (EOF).
-        rules: list[dict[str, Any]] = []
-        ips = [ip for ip in exclude_ips if ip]
-        if ips:
-            rules.append({"ip_cidr": [f"{ip}/32" for ip in ips], "port": 443, "outbound": "direct"})
-            rules.append({"ip_cidr": [f"{ip}/32" for ip in ips], "port": RUSTDESK_PORTS, "outbound": "socks-out"})
-            rules.append({"ip_cidr": [f"{ip}/32" for ip in ips], "outbound": "direct"})
-        bypass_suffixes, bypass_domains = bypass_to_singbox(bypass_hosts or [])
-        if bypass_suffixes:
-            rules.append({"domain_suffix": bypass_suffixes, "outbound": "direct"})
-        if bypass_domains:
-            rules.append({"domain": bypass_domains, "outbound": "direct"})
-        rules.append({"port": 53, "action": "hijack-dns"})
-        rules.append({"process_name": docker_wsl_procs, "outbound": "direct"})
-        rules.append({"process_name": proc_names, "outbound": "direct"})
-        py_paths = _direct_python_paths()
-        if py_paths:
-            rules.append({"process_path": py_paths, "outbound": "direct"})
-        rules.append({"ip_is_private": True, "outbound": "direct"})
-
-        self.log_path.parent.mkdir(parents=True, exist_ok=True)
-        mtu_val = max(1280, min(1500, int(mtu)))
-        return {
-            "log": {
-                "level": "info",
-                "timestamp": True,
-                "output": str(self.log_path).replace("\\", "/"),
-            },
-            "dns": {
-                "servers": [
-                    # DoH over SOCKS — OpenSSH DynamicForward has no UDP ASSOCIATE,
-                    # so plain UDP 8.8.8.8 via socks-out fails with EOF.
-                    {
-                        "tag": "dns-proxy",
-                        "address": "https://1.1.1.1/dns-query",
-                        "detour": "socks-out",
-                    },
-                    {"tag": "dns-local", "address": "local", "detour": "direct"},
-                ],
-                "rules": [
-                    {
-                        # Docker ExtServers (8.8.8.8/1.1.1.1) are often unreachable
-                        # from the VM; answer with the host resolver instead.
-                        "process_name": docker_wsl_procs,
-                        "server": "dns-local",
-                    },
-                    *(
-                        [{"domain_suffix": bypass_suffixes, "server": "dns-local"}]
-                        if bypass_suffixes
-                        else []
-                    ),
-                    *(
-                        [{"domain": bypass_domains, "server": "dns-local"}]
-                        if bypass_domains
-                        else []
-                    ),
-                    {
-                        "domain_suffix": [".local", ".lan", ".internal", ".localhost"],
-                        "server": "dns-local",
-                    },
-                ],
-                "final": "dns-proxy",
-                "strategy": "prefer_ipv4",
-            },
-            "inbounds": [
-                {
-                    "type": "tun",
-                    "tag": "tun-in",
-                    "interface_name": "ops-content-tun",
-                    "address": ["172.19.0.1/30"],
-                    "mtu": mtu_val,
-                    "auto_route": True,
-                    "strict_route": False,
-                    "stack": "system",
-                    "sniff": True,
-                    "route_exclude_address": route_exclude,
-                }
-            ],
-            "outbounds": [
-                {
-                    "type": "socks",
-                    "tag": "socks-out",
-                    "server": socks_host,
-                    "server_port": int(socks_port),
-                    "version": "5",
-                },
-                {"type": "direct", "tag": "direct"},
-                {"type": "block", "tag": "block"},
-            ],
-            "route": {
-                "auto_detect_interface": True,
-                "final": "socks-out",
-                "rules": rules,
-            },
-        }
-
     def running(self) -> bool:
         return self.pid() is not None
 
@@ -436,93 +247,6 @@ class TunManager:
             return found
         return None
 
-    def start(
-        self,
-        *,
-        socks_port: int,
-        corporate_proxy: str,
-        ssh_host: str,
-        sing_box_path: str = "",
-        elevate: bool = True,
-        bypass_hosts: list[str] | None = None,
-        mtu: int = 1500,
-        force_restart: bool = False,
-    ) -> None:
-        exe = self.find_sing_box(sing_box_path)
-        if not exe:
-            raise RuntimeError(
-                "sing-box не найден. Положите бинарник в tools/ "
-                "или выполните: ops-content download-sing-box"
-            )
-
-        try:
-            with socket.create_connection(("127.0.0.1", int(socks_port)), timeout=1.0):
-                pass
-        except OSError as exc:
-            raise RuntimeError(
-                f"SOCKS 127.0.0.1:{socks_port} недоступен — сначала включите туннель"
-            ) from exc
-
-        exclude: list[str] = []
-        corp = (corporate_proxy or "").replace("http://", "").replace("https://", "").split(":")[0]
-        for h in (corp, ssh_host):
-            ip = _resolve_host(h)
-            if ip:
-                exclude.append(ip)
-
-        cfg = self.build_config(
-            socks_host="127.0.0.1",
-            socks_port=int(socks_port),
-            exclude_ips=exclude,
-            bypass_hosts=bypass_hosts,
-            mtu=mtu,
-        )
-        config_text = json.dumps(cfg, indent=2)
-        if self.running():
-            if not force_restart:
-                old_text = ""
-                if self.config_path.is_file():
-                    old_text = self.config_path.read_text(encoding="utf-8")
-                if old_text == config_text:
-                    self.log(f"TUN already running (pid={self.pid()})")
-                    return
-            self.log("TUN config changed — перезапуск sing-box")
-            self.stop()
-
-        self.var_dir.mkdir(parents=True, exist_ok=True)
-        self.config_path.write_text(config_text, encoding="utf-8")
-
-        self.log(f"Starting TUN (sing-box, mtu={max(1280, min(1500, int(mtu)))}) → socks5://127.0.0.1:{socks_port}")
-        if elevate:
-            self.log("Нужны права администратора для виртуального адаптера")
-
-        pid = self._launch(exe, elevate=elevate)
-        if pid:
-            self.pid_path.write_text(str(pid), encoding="utf-8")
-
-        deadline = time.monotonic() + 10.0
-        interval = 0.05
-        attempt = 0
-        while time.monotonic() < deadline:
-            if self.running():
-                self.log("TUN активен (система → SOCKS → VPS)")
-                return
-            if attempt % 4 == 0 and self._tun_iface_present():
-                found = self._find_sing_box_pid()
-                if found:
-                    self.pid_path.write_text(str(found), encoding="utf-8")
-                    self._pid_scan_at = time.monotonic()
-                    self._pid_scan_result = found
-                self.log("TUN активен (система → SOCKS → VPS)")
-                return
-            time.sleep(interval)
-            interval = min(interval * 1.3, 0.25)
-            attempt += 1
-        raise RuntimeError(
-            "sing-box не поднял TUN. Нужен admin/sudo (или TUN_ELEVATE=1). "
-            f"См. logs/sing-box.log. exe={exe}"
-        )
-
     def stop(self) -> None:
         pid = self.pid()
         if pid:
@@ -536,95 +260,10 @@ class TunManager:
         self.pid_path.unlink(missing_ok=True)
         self.log("TUN выключен")
 
-    def _launch(self, exe: Path, *, elevate: bool) -> int | None:
-        args = [str(exe), "run", "-c", str(self.config_path)]
-        if sys.platform == "win32" and elevate and not procutil.is_admin():
-            return self._start_elevated_win(exe, self.config_path)
-
-        if sys.platform != "win32" and elevate and hasattr(os, "geteuid") and os.geteuid() != 0:
-            return self._start_elevated_linux(args)
-
-        self.log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_f = open(self.log_path, "a", encoding="utf-8")  # noqa: SIM115
-        proc = subprocess.Popen(
-            args,
-            stdin=subprocess.DEVNULL,
-            stdout=log_f,
-            stderr=subprocess.STDOUT,
-            creationflags=procutil.creationflags(),
-        )
-        return proc.pid
-
-    def _start_elevated_win(self, exe: Path, config: Path) -> int | None:
-        import ctypes
-
-        params = f'run -c "{config}"'
-        rc = int(
-            ctypes.windll.shell32.ShellExecuteW(  # type: ignore[attr-defined]
-                None, "runas", str(exe), params, str(exe.parent), 0
-            )
-        )
-        if rc <= 32:
-            raise RuntimeError(
-                f"Не удалось запустить sing-box с UAC (код {rc}). "
-                "Запустите от администратора или TUN_ELEVATE=0 от admin-сессии."
-            )
-        deadline = time.monotonic() + 4.0
-        while time.monotonic() < deadline:
-            found = self._find_sing_box_pid()
-            if found:
-                return found
-            time.sleep(0.05)
-        return None
-
-    def _start_elevated_linux(self, args: list[str]) -> int | None:
-        self.log_path.parent.mkdir(parents=True, exist_ok=True)
-        log_f = open(self.log_path, "a", encoding="utf-8")  # noqa: SIM115
-        for wrapper in (
-            ["pkexec", *args],
-            ["sudo", "-n", *args],
-            ["sudo", *args],
-        ):
-            try:
-                proc = subprocess.Popen(
-                    wrapper,
-                    stdin=subprocess.DEVNULL,
-                    stdout=log_f,
-                    stderr=subprocess.STDOUT,
-                )
-                time.sleep(0.5)
-                if proc.poll() is None or self._find_sing_box_pid():
-                    self.log(f"TUN via {wrapper[0]}")
-                    return proc.pid if proc.poll() is None else self._find_sing_box_pid()
-            except FileNotFoundError:
-                continue
-        raise RuntimeError(
-            "Не удалось запустить sing-box с правами root (pkexec/sudo). "
-            "Установите polkit или выполните: sudo ops-content tun-on"
-        )
-
     def _find_sing_box_pid(self) -> int | None:
         for pid in procutil.pids_named("sing-box.exe", "sing-box"):
             return pid
         return None
-
-    def _tun_iface_present(self) -> bool:
-        if sys.platform == "win32":
-            r = procutil.run(
-                [
-                    "powershell",
-                    "-NoProfile",
-                    "-Command",
-                    "(Get-NetAdapter -ErrorAction SilentlyContinue | "
-                    "Where-Object { $_.Name -like '*ops-content*' -or $_.InterfaceDescription -like '*Wintun*' }).Count",
-                ]
-            )
-            try:
-                return int((r.stdout or "0").strip() or "0") > 0
-            except ValueError:
-                return False
-        r = procutil.run(["ip", "link", "show", "ops-content-tun"])
-        return r.returncode == 0
 
     def ensure_downloaded(self, proxy_url: str | None = None) -> Path:
         """Download sing-box for current OS/arch into tools/."""

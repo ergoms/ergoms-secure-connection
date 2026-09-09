@@ -13,12 +13,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 from desktop import procutil
-from desktop.bridge import HttpBridge
 from desktop.config_io import (
     apply_config,
     get_http_bridge_port,
     get_local_socks_port,
-    get_mode,
     get_pac_listen_port,
     get_server,
     get_server_host,
@@ -46,7 +44,7 @@ from desktop.git_proxy import (
     clear_git_proxy,
     clear_instead_of,
 )
-from desktop.paths import Paths, bundle_dir, is_frozen, resolve_ssh_identity, self_command
+from desktop.paths import Paths, is_frozen, self_command
 from desktop.reverse_ssh import ReverseSshManager
 from desktop.singbox_mode import SingboxModeManager, require_transport
 from desktop.tun import TunManager
@@ -81,7 +79,7 @@ def _which(name: str) -> str | None:
 
 
 def _find_pythonw() -> str | None:
-    """Prefer pythonw.exe so ProxyCommand never flashes a console."""
+    """Prefer pythonw.exe so child processes never flash a console."""
     if sys.platform != "win32":
         return _which("python3") or _which("python")
     candidates: list[Path] = []
@@ -111,24 +109,10 @@ def _find_pythonw() -> str | None:
     return None
 
 
-def _ensure_connect_script(paths: Paths) -> Path:
-    """Writable connect_proxy.py next to data (copy from bundle if needed)."""
-    dst = paths.connect_py
-    if dst.is_file():
-        return dst
-    src = bundle_dir() / "lib" / "connect_proxy.py"
-    if not src.is_file():
-        raise RuntimeError(f"connect_proxy.py not found: {src}")
-    dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(src, dst)
-    return dst
-
-
 class OpsClient:
     def __init__(self, paths: Paths | None = None, log: LogFn = _noop) -> None:
         self.paths = paths or Paths()
         self.log = log
-        self.bridge = HttpBridge()
         self.paths.ensure_dirs()
         if self.paths.config_path.is_file():
             apply_config(self.paths.config_path, env_path=self.paths.env_path)
@@ -159,93 +143,6 @@ class OpsClient:
 
     def config(self) -> dict[str, Any]:
         return load_config(self.paths.config_path)
-
-    def proxy_command(self, cfg: dict[str, Any]) -> str:
-        """SSH ProxyCommand via pythonw + connect_proxy.py (no GUI exe flash)."""
-        allow_port = int(cfg.get("ssh", {}).get("port") or 443)
-        host = cfg["ssh"]["host"]
-        os.environ["OPS_CONTENT_HTTP_PROXY"] = resolve_corporate_proxy(cfg)
-        os.environ["OPS_CONTENT_CONNECT_ALLOW"] = f"{host}:{allow_port}"
-
-        py = _find_pythonw()
-        connect_py = _ensure_connect_script(self.paths)
-
-        # Prefer pythonw + .py (no console). Avoid OpsContent.exe here — onefile
-        # extract flashes a window on every SSH ProxyCommand.
-        if py and connect_py.is_file():
-            cmd_path = self.paths.proxy_cmd
-            cmd_path.write_text(
-                "\r\n".join(
-                    [
-                        "@echo off",
-                        f"set OPS_CONTENT_HTTP_PROXY={resolve_corporate_proxy(cfg)}",
-                        f"set OPS_CONTENT_CONNECT_ALLOW={host}:{allow_port}",
-                        f'"{py}" "{connect_py}" %1 %2',
-                    ]
-                )
-                + "\r\n",
-                encoding="ascii",
-            )
-            return f'"{py}" "{connect_py}" %h %p'
-
-        if is_frozen():
-            exe = str(Path(sys.executable).resolve())
-            return f'"{exe}" connect %h %p'
-
-        raise RuntimeError("Python not found for SSH ProxyCommand (need pythonw/python)")
-
-    def ssh_args(self, cfg: dict[str, Any]) -> list[str]:
-        ssh = cfg.get("ssh") or {}
-        port = str(ssh.get("port") or 443)
-        socks = int(ssh.get("local_socks_port") or 1080)
-        host = ssh["host"]
-        user = ssh.get("user") or "root"
-        os.environ["OPS_CONTENT_CONNECT_ALLOW"] = f"{host}:{port}"
-        kh = str(self.paths.known_hosts).replace("\\", "/")
-        gkh = "NUL" if sys.platform == "win32" else "/dev/null"
-        proxy = self.proxy_command(cfg)
-        args = [
-            "-N",
-            "-D",
-            f"127.0.0.1:{socks}",
-            "-p",
-            port,
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            "ConnectTimeout=20",
-            "-o",
-            "ServerAliveInterval=15",
-            "-o",
-            "ServerAliveCountMax=3",
-            "-o",
-            "ExitOnForwardFailure=yes",
-            "-o",
-            "StrictHostKeyChecking=accept-new",
-            "-o",
-            f"UserKnownHostsFile={kh}",
-            "-o",
-            f"GlobalKnownHostsFile={gkh}",
-            "-o",
-            "UpdateHostKeys=yes",
-            "-o",
-            "Compression=no",
-            "-o",
-            "IPQoS=throughput",
-            "-o",
-            "TCPKeepAlive=yes",
-            "-o",
-            "Ciphers=chacha20-poly1305@openssh.com,aes128-gcm@openssh.com,aes256-gcm@openssh.com,aes128-ctr",
-            "-o",
-            "HostKeyAlgorithms=ssh-ed25519,rsa-sha2-512,rsa-sha2-256",
-            "-o",
-            f"ProxyCommand={proxy}",
-        ]
-        ident = resolve_ssh_identity(self.paths.creds_dir)
-        if ident:
-            args += ["-o", "IdentitiesOnly=yes", "-i", ident]
-        args.append(f"{user}@{host}")
-        return args
 
     def probe(self, host: str, port: int = 443) -> int:
         """CONNECT probe via corporate Squid. Returns 0 on success."""
@@ -278,8 +175,6 @@ class OpsClient:
             self.log("OK: Squid allows CONNECT to this host:port")
             return 0
         self.log("FAIL: Squid denied/failed CONNECT")
-        if port == 22:
-            self.log("Tip: try port 443 (sshd on 443).")
         return 1
 
     def _bridge_hosts(self, cfg: dict[str, Any], mode: str) -> tuple[list[str], list[str]]:
@@ -323,82 +218,9 @@ class OpsClient:
                 pac.append(str(h))
         return pac, bypass
 
-    def start_http_bridge(self, cfg: dict[str, Any]) -> int:
-        """Spawn HTTP→SOCKS bridge as a child process (survives CLI exit)."""
-        scope = get_socks_scope()
-        mode = "full" if scope == "full" else "github"
-        socks_port = int((cfg.get("ssh") or {}).get("local_socks_port") or 1080)
-        http_port = get_http_bridge_port()
-        bypass_via = str(cfg.get("proxy_bypass_via") or "direct").strip().lower()
-        if bypass_via not in ("direct", "corporate"):
-            bypass_via = "direct"
-        pac, bypass = self._bridge_hosts(cfg, mode)
-        self.stop_http_bridge()
-
-        args = [
-            *self_command(),
-            "bridge",
-            "--listen",
-            f"127.0.0.1:{http_port}",
-            "--socks",
-            f"127.0.0.1:{socks_port}",
-            "--mode",
-            mode,
-            "--bypass-via",
-            bypass_via,
-        ]
-        corp = resolve_corporate_proxy(cfg)
-        if corp:
-            args.extend(["--fallback-proxy", corp])
-        for h in pac:
-            args.extend(["--pac-host", str(h)])
-        for h in bypass:
-            args.extend(["--bypass-host", str(h)])
-
-        # Prefer pythonw so the bridge child never flashes a console.
-        if not is_frozen():
-            pyw = _find_pythonw()
-            if pyw and Path(args[0]).name.lower().startswith("python"):
-                args[0] = pyw
-
-        env = os.environ.copy()
-        root = str(self.paths.root)
-        prev = env.get("PYTHONPATH", "")
-        env["PYTHONPATH"] = root if not prev else f"{root}{os.pathsep}{prev}"
-
-        proc = procutil.popen(args, env=env, cwd=root, detached=True)
-        self.paths.bridge_pid.write_text(str(proc.pid), encoding="utf-8")
-        for _ in range(5):
-            if proc.poll() is not None:
-                self.paths.bridge_pid.unlink(missing_ok=True)
-                raise RuntimeError(
-                    f"HTTP bridge exited immediately (code={proc.returncode})"
-                )
-            if _port_open("127.0.0.1", http_port):
-                self.log(
-                    f"HTTP bridge 127.0.0.1:{http_port} mode={mode} "
-                    f"socks=127.0.0.1:{socks_port} bypass={len(bypass)}"
-                )
-                return http_port
-            time.sleep(0.05)
-        if _wait_port("127.0.0.1", http_port, timeout=4.0):
-            self.log(
-                f"HTTP bridge 127.0.0.1:{http_port} mode={mode} "
-                f"socks=127.0.0.1:{socks_port} bypass={len(bypass)}"
-            )
-            return http_port
-        if proc.poll() is not None:
-            self.paths.bridge_pid.unlink(missing_ok=True)
-            raise RuntimeError(
-                f"HTTP bridge exited (code={proc.returncode})"
-            )
-        procutil.kill_pid(proc.pid)
-        self.paths.bridge_pid.unlink(missing_ok=True)
-        raise RuntimeError(f"HTTP bridge port {http_port} never opened")
-
     def stop_http_bridge(self) -> None:
+        """Reap leftover Python HTTP→SOCKS children from older clients."""
         procutil.invalidate_proc_cache()
-        self.bridge.stop(log=self.log)
         http_port = get_http_bridge_port()
         targets: list[int] = []
         if self.paths.bridge_pid.is_file():
@@ -617,23 +439,6 @@ class OpsClient:
         clear_instead_of(self.log)
         self.paths.state_path.unlink(missing_ok=True)
 
-    def set_git_socks(self, cfg: dict[str, Any]) -> int:
-        http_port = self.start_http_bridge(cfg)
-        proxy = f"http://127.0.0.1:{http_port}"
-        set_git_http_proxy(proxy, log=self.log)
-        write_cli_env(http_port, self.paths.cli_env, self.paths.cli_ps1)
-        self.write_docker_helpers(cfg, http_port=http_port, active=True)
-        self._enable_browser_pac(cfg, http_port)
-        # Override corporate Squid in /etc/environment so ergoms/curl see the bridge
-        enable_linux_env_proxy(
-            http_port,
-            self.paths.env_proxy_backup,
-            log=self.log,
-        )
-        socks = int((cfg.get("ssh") or {}).get("local_socks_port") or 1080)
-        self.log(f"git via SOCKS {socks}, scope={get_socks_scope()}")
-        return http_port
-
     def write_docker_helpers(
         self,
         cfg: dict[str, Any] | None = None,
@@ -700,122 +505,13 @@ class OpsClient:
         self.write_docker_helpers(http_port=http_port, active=True)
         return docker_smoke_test(http_port, log=self.log)
 
-    def start_tunnel(self) -> None:
-        self.reload_env()
-        cfg = self.config()
-        ssh = cfg.get("ssh") or {}
-        host = str(ssh.get("host") or "")
-        if "YOUR_VPS" in host:
-            raise RuntimeError("Set real ssh.host in config.json (ssh.port=443)")
-
-        port = int(ssh.get("port") or 443)
-        self.log(f"Probing CONNECT {host}:{port} via Squid...")
-        if self.probe(host, port) != 0:
-            raise RuntimeError(
-                f"CONNECT to {host}:{port} failed (403=ACL, 503=nothing listening).\n"
-                "On the VPS run: bash modes/vps/bootstrap_sshd_443.sh"
-            )
-
-        socks_port = int(ssh.get("local_socks_port") or 1080)
-        if self.paths.ssh_pid.is_file():
-            try:
-                old = int(self.paths.ssh_pid.read_text().strip())
-            except ValueError:
-                old = 0
-            listeners = procutil.pids_listening_on(socks_port, cache=False)
-            if (
-                old
-                and procutil.pid_alive(old)
-                and _port_open("127.0.0.1", socks_port)
-                and (not listeners or old in listeners)
-            ):
-                self.log(f"Tunnel already running (pid={old})")
-                self.set_git_socks(cfg)
-                return
-
-        # Stale pid-file / orphan ssh holding :1080 would make a new -D "succeed"
-        # against the old listener while our ssh then dies.
-        self._reap_socks_orphans(socks_port)
-
-        if not _which("ssh"):
-            raise RuntimeError("ssh not found in PATH (install OpenSSH Client)")
-
-        os.environ["OPS_CONTENT_HTTP_PROXY"] = resolve_corporate_proxy(cfg)
-        args = self.ssh_args(cfg)
-        self.log(f"SSH SOCKS -> 127.0.0.1:{socks_port} via Squid")
-        self.log(f"ProxyCommand: {self.proxy_command(cfg)}")
-
-        proc = procutil.popen(["ssh", *args])
-        self.paths.ssh_pid.write_text(str(proc.pid), encoding="utf-8")
-
-        if proc.poll() is not None:
-            self.paths.ssh_pid.unlink(missing_ok=True)
-            raise RuntimeError("ssh exited immediately; check user/key/sshd")
-        ok = False
-        if _wait_port("127.0.0.1", socks_port, timeout=10.0):
-            ok = proc.poll() is None
-        if not ok or proc.poll() is not None:
-            procutil.kill_pid(proc.pid)
-            self.paths.ssh_pid.unlink(missing_ok=True)
-            raise RuntimeError(
-                f"SSH SOCKS port {socks_port} never opened. "
-                f"Check key, sshd on :443, user={ssh.get('user')}"
-            )
-
-        http_port = self.set_git_socks(cfg)
-        state = {
-            "mode": "ssh",
-            "scope": get_socks_scope(),
-            "pid": proc.pid,
-            "socks": f"socks5h://127.0.0.1:{socks_port}",
-            "http": f"http://127.0.0.1:{http_port}",
-            "started": datetime.now(timezone.utc).isoformat(),
-        }
-        self.paths.state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
-        self.log(f"SSH tunnel ready scope={get_socks_scope()}")
-
     def _reap_socks_orphans(self, socks_port: int) -> None:
-        """Kill ssh/ProxyCommand leftovers that still own the SOCKS port."""
+        """Free the local SOCKS port before starting sing-box."""
         procutil.invalidate_proc_cache()
-        targets: list[int] = []
-        if self.paths.ssh_pid.is_file():
-            try:
-                old = int(self.paths.ssh_pid.read_text().strip())
-            except ValueError:
-                old = 0
-            if old:
-                targets.append(old)
-            self.paths.ssh_pid.unlink(missing_ok=True)
-        targets.extend(procutil.pids_listening_on(socks_port, cache=False))
-        # Match our dynamic forward even if LISTEN owner lookup failed.
-        targets.extend(procutil.pids_cmdline_match(f"-D 127.0.0.1:{socks_port}", cache=False))
-        targets.extend(procutil.pids_cmdline_match("connect_proxy.py", cache=False))
+        targets = list(procutil.pids_listening_on(socks_port, cache=False))
         killed = procutil.kill_pids(targets, exclude=os.getpid())
         for pid in killed:
-            self.log(f"ssh/orphan pid={pid} stopped")
-
-    def stop_tunnel(self) -> None:
-        # Also tear down MODE=singbox if it was left running
-        try:
-            if self.singbox.running():
-                self.stop_singbox_mode()
-                return
-        except Exception as exc:  # noqa: BLE001
-            self.log(f"singbox stop: {exc}")
-        try:
-            self.tun.stop()
-        except Exception as exc:  # noqa: BLE001
-            self.log(f"TUN stop: {exc}")
-        disable_browser_proxy(self.paths.proxy_backup, log=self.log)
-        disable_linux_env_proxy(self.paths.env_proxy_backup, log=self.log)
-        self.stop_http_bridge()
-        self.stop_pac_server()
-        socks_port = int((self.config().get("ssh") or {}).get("local_socks_port") or 1080)
-        self._reap_socks_orphans(socks_port)
-        clear_git_proxy(self.paths.cli_env, self.paths.cli_ps1, log=self.log)
-        self.write_docker_helpers(http_port=get_http_bridge_port(), active=False)
-        clear_instead_of(self.log)
-        self.paths.state_path.unlink(missing_ok=True)
+            self.log(f"socks orphan pid={pid} stopped")
 
     def enable_tun(self, *, persist: bool = True) -> None:
         self.reload_env()
@@ -853,27 +549,6 @@ class OpsClient:
 
             save_config(self.paths.config_path, cfg)
         self.log(f"sing-box ready (auto): {path}")
-
-    def _maybe_autostart_tun(self) -> None:
-        self.reload_env()
-        if not get_tun_enabled():
-            self.log("tun.enabled=false — системный TUN не поднимаем")
-            self.log(
-                "Без TUN DNS в Docker Desktop часто мёртв "
-                "(getent/pip к внешним именам). Нужен tun.enabled=true или HTTP_PROXY из var/docker.env"
-            )
-            return
-        self.log("tun.enabled=true — поднимаем TUN поверх SOCKS (нужен для DNS в Docker)")
-        try:
-            self.enable_tun(persist=False)
-        except Exception as exc:  # noqa: BLE001
-            # Tunnel already up — don't fail the whole `on` because of TUN
-            self.log(f"TUN auto-start failed: {exc}")
-            self.log(
-                "SOCKS оставлен. Без TUN контейнеры не резолвят pypi.org — "
-                "повторите tun-on (UAC) или используйте var/docker.env (HTTP_PROXY)."
-            )
-            self.log("Нужен sing-box: download-sing-box / tools/")
 
     def watchdog_daemon_alive(self) -> bool:
         if not self.paths.watchdog_pid.is_file():
@@ -994,16 +669,11 @@ class OpsClient:
         include_git=False skips spawning `git config` (faster for GUI polling).
         """
         self.reload_env()
-        mode = get_mode()
         info: dict[str, Any] = {
-            "mode": mode,
+            "mode": "singbox",
             "socks_scope": get_socks_scope(),
             "git_http_proxy": "",
             "git_https_proxy": "",
-            "ssh_running": False,
-            "ssh_pid": None,
-            "bridge_running": False,
-            "bridge_pid": None,
             "singbox_running": False,
             "singbox_pid": None,
             "http_port": get_http_bridge_port(),
@@ -1025,23 +695,6 @@ class OpsClient:
             info["git_https_proxy"] = git_get("https.proxy")
             lines.append(f"git http.proxy  = {info['git_http_proxy']}")
             lines.append(f"git https.proxy = {info['git_https_proxy']}")
-
-        if self.bridge.running:
-            info["bridge_running"] = True
-            info["bridge_pid"] = os.getpid()
-            lines.append(f"http-bridge in-process (port={info['http_port']})")
-        elif self.paths.bridge_pid.is_file():
-            try:
-                bpid = int(self.paths.bridge_pid.read_text().strip())
-            except ValueError:
-                bpid = 0
-            info["bridge_pid"] = bpid
-            alive = bool(bpid and procutil.pid_alive(bpid))
-            if alive:
-                info["bridge_running"] = True
-                lines.append(f"http-bridge pid={bpid} running (port={info['http_port']})")
-            else:
-                lines.append(f"bridge pid={bpid} dead")
 
         info["singbox_running"] = self.singbox.running()
         info["singbox_pid"] = self.singbox.pid()
@@ -1155,11 +808,7 @@ class OpsClient:
         if self.paths.docker_compose_proxy.is_file():
             lines.append(f"docker compose  = {self.paths.docker_compose_proxy}")
 
-        info["active"] = bool(
-            info["bridge_running"]
-            or info.get("singbox_running")
-            or info.get("tun_running")
-        )
+        info["active"] = bool(info.get("singbox_running") or info.get("tun_running"))
         return info
 
     def test_bypass(self) -> None:

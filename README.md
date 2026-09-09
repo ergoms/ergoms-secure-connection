@@ -153,7 +153,7 @@ ops-content/
 ├── ops-content.ps1/.sh
 ├── deploy.ps1/.sh
 ├── config/            образцы
-├── lib/               connect_proxy, connect_socks, http_via_socks, probe
+├── lib/               connect_socks, http_via_socks (PAC)
 ├── modes/linux/       systemd-служба клиента
 ├── modes/windows/     WinSW-служба клиента
 └── modes/vps/         bootstrap sing-box на :443

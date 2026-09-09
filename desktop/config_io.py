@@ -502,11 +502,6 @@ def _runtime() -> dict[str, Any]:
     return {}
 
 
-def get_mode() -> str:
-    """Client is VLESS+Reality only."""
-    return "singbox"
-
-
 def get_server(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
     if not cfg:
         return {
@@ -517,9 +512,6 @@ def get_server(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
     server = cfg.get("server")
     if isinstance(server, dict):
         return server
-    legacy = cfg.get("ssh")
-    if isinstance(legacy, dict):
-        return legacy
     return {}
 
 

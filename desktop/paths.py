@@ -69,7 +69,7 @@ def data_root() -> Path:
 
 
 def self_command() -> list[str]:
-    """Argv prefix to re-invoke this app (for SSH ProxyCommand / bridge child)."""
+    """Argv prefix to re-invoke this app (PAC / watchdog / reverse-ssh)."""
     if is_frozen():
         return [str(Path(sys.executable).resolve())]
     return [sys.executable, "-m", "desktop"]
@@ -111,7 +111,6 @@ class Paths:
         self.config_path = self.root / "config.json"
         self.env_path = self.root / ".env"
         self.known_hosts = self.creds_dir / "ssh_known_hosts"
-        self.ssh_pid = self.var_dir / "ssh.pid"
         self.bridge_pid = self.var_dir / "bridge.pid"
         self.pac_pid = self.var_dir / "pac.pid"
         self.state_path = self.var_dir / "state.json"
@@ -127,8 +126,6 @@ class Paths:
         self.docker_run_sh = self.var_dir / "docker-run.sh"
         self.docker_proxy_backup = self.var_dir / "docker-proxy.bak.json"
         self.watchdog_pid = self.var_dir / "watchdog.pid"
-        self.proxy_cmd = self.var_dir / "proxy.cmd"
-        self.connect_py = self.root / "lib" / "connect_proxy.py"
 
     def ensure_dirs(self) -> None:
         (self.creds_dir / "certs").mkdir(parents=True, exist_ok=True)

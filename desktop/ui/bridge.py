@@ -339,7 +339,7 @@ class GuiBridge(QObject):
             self._sync_config_ready()
             return
         cfg = load_config(self.paths.config_path)
-        server = cfg.get("server") or cfg.get("ssh") or {}
+        server = cfg.get("server") or {}
         tun = cfg.get("tun") or {}
         tr = cfg.get("transport") or {}
         bypass = cfg.get("proxy_bypass") or []
