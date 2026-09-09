@@ -1,6 +1,6 @@
 #Requires -Version 5.1
 param(
-    [ValidateSet('setup', 'build', 'all', 'libraries', 'sing-box', 'pyinstaller', 'exe')]
+    [ValidateSet('setup', 'build', 'all', 'libraries', 'sing-box', 'pyinstaller', 'exe', 'installer')]
     [string]$Target = 'setup'
 )
 
@@ -151,18 +151,73 @@ function Invoke-PyInstaller {
         Install-SingBox
     }
     $py = Get-VenvPython
-    Write-Host 'PyInstaller: ErgomsSecureConnection.spec -> dist/ErgomsSecureConnection.exe'
+    Write-Host 'PyInstaller: ErgomsSecureConnection.spec -> dist/ErgomsSecureConnection/'
     & $py -m PyInstaller --noconfirm --clean ErgomsSecureConnection.spec
     if ($LASTEXITCODE -ne 0) { throw "pyinstaller failed: $LASTEXITCODE" }
-    $exe = Join-Path $Root 'dist\ErgomsSecureConnection.exe'
+    $exe = Join-Path $Root 'dist\ErgomsSecureConnection\ErgomsSecureConnection.exe'
     if (-not (Test-Path -LiteralPath $exe)) { throw "missing $exe" }
     Write-Host "OK: $exe"
+}
+
+function Get-AppVersion {
+    $init = Join-Path $Root 'desktop\__init__.py'
+    foreach ($line in Get-Content -LiteralPath $init) {
+        if ($line -match '__version__\s*=\s*"([^"]+)"') {
+            return $Matches[1]
+        }
+    }
+    return '1.0.0'
+}
+
+function Get-IsccExe {
+    $candidates = @(
+        (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe')
+        (Join-Path $env:ProgramFiles 'Inno Setup 6\ISCC.exe')
+        (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe')
+    )
+    $cmd = Get-Command iscc -ErrorAction SilentlyContinue
+    if ($cmd) { $candidates += $cmd.Source }
+    foreach ($c in $candidates) {
+        if ($c -and (Test-Path -LiteralPath $c)) { return $c }
+    }
+    return $null
+}
+
+function Install-InnoSetup {
+    Write-Host 'Inno Setup not found - installing via winget...'
+    $winget = Get-Command winget -ErrorAction SilentlyContinue
+    if (-not $winget) {
+        throw 'Inno Setup 6 (ISCC.exe) not found and winget is unavailable'
+    }
+    & $winget.Source install -e --id JRSoftware.InnoSetup --accept-package-agreements --accept-source-agreements
+    if ($LASTEXITCODE -ne 0) { throw "winget Inno Setup failed: $LASTEXITCODE" }
+    $iscc = Get-IsccExe
+    if (-not $iscc) { throw 'Inno Setup installed but ISCC.exe not found' }
+    return $iscc
+}
+
+function Invoke-Installer {
+    $exe = Join-Path $Root 'dist\ErgomsSecureConnection\ErgomsSecureConnection.exe'
+    if (-not (Test-Path -LiteralPath $exe)) {
+        throw 'missing dist/ErgomsSecureConnection/ErgomsSecureConnection.exe — run build first'
+    }
+    $iscc = Get-IsccExe
+    if (-not $iscc) { $iscc = Install-InnoSetup }
+    $ver = Get-AppVersion
+    $iss = Join-Path $Root 'installer\ErgomsSecureConnection.iss'
+    Write-Host "Inno Setup: $iscc /DAppVersion=$ver"
+    & $iscc "/DAppVersion=$ver" $iss
+    if ($LASTEXITCODE -ne 0) { throw "ISCC failed: $LASTEXITCODE" }
+    $setup = Join-Path $Root "dist\ErgomsSecureConnection-Setup-$ver.exe"
+    if (-not (Test-Path -LiteralPath $setup)) { throw "missing $setup" }
+    Write-Host "OK: $setup"
 }
 
 switch ($Target) {
     'libraries' { Install-Libraries }
     'sing-box' { Install-SingBox }
     'pyinstaller' { Invoke-PyInstaller }
+    'installer' { Invoke-Installer }
     { $_ -in @('setup', 'all') } { Install-Libraries; Install-SingBox }
-    { $_ -in @('build', 'exe') } { Install-Libraries; Install-SingBox; Invoke-PyInstaller }
+    { $_ -in @('build', 'exe') } { Install-Libraries; Install-SingBox; Invoke-PyInstaller; Invoke-Installer }
 }

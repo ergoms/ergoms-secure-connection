@@ -8,6 +8,7 @@ import os
 import shutil
 import socket
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,14 +38,11 @@ from desktop.config_io import (
     resolve_corporate_proxy,
     update_config_key,
 )
-from desktop.docker_env import docker_smoke_test, write_docker_env
-from desktop.docker_proxy import disable_docker_desktop_proxy, enable_docker_desktop_proxy
 from desktop.git_proxy import (
     git_get,
     set_git_http_proxy,
     write_cli_env,
     clear_git_proxy,
-    clear_instead_of,
 )
 from desktop.paths import Paths, is_frozen, self_command
 from desktop.reverse_ssh import ReverseSshManager
@@ -54,6 +52,7 @@ from desktop.kill_switch import clear as clear_kill_switch
 from desktop.kill_switch import install_commands as kill_switch_install_cmds
 from desktop.kill_switch import is_applied as kill_switch_is_applied
 from desktop.kill_switch import remember_plan as remember_kill_switch_plan
+from desktop.kill_switch import state_path as kill_switch_state_path
 from desktop.singbox_mode import SingboxModeManager, require_transport
 from desktop.tun import TunManager
 from desktop.sys_proxy import (
@@ -117,8 +116,38 @@ def _find_pythonw() -> str | None:
     return None
 
 
+_HELPER_CMDLINE = (
+    "desktop bridge",
+    "-m desktop bridge",
+    "desktop pac-serve",
+    "-m desktop pac-serve",
+    "watch --daemon",
+    "-m desktop watch",
+    "connect_socks.py",
+    "connect-socks",
+)
+
+
+def _pid_from_file(path: Path, *, unlink: bool = False) -> int | None:
+    if not path.is_file():
+        return None
+    try:
+        pid = int(path.read_text(encoding="utf-8").strip())
+    except ValueError:
+        pid = 0
+    if unlink:
+        path.unlink(missing_ok=True)
+    return pid or None
+
+
 class OpsClient:
-    def __init__(self, paths: Paths | None = None, log: LogFn = _noop) -> None:
+    def __init__(
+        self,
+        paths: Paths | None = None,
+        log: LogFn = _noop,
+        *,
+        startup_cleanup: bool = True,
+    ) -> None:
         self.paths = paths or Paths()
         self._user_log = log
         self.log = self._log
@@ -139,12 +168,14 @@ class OpsClient:
         )
         self.reverse_ssh = ReverseSshManager(self.paths, log=self.log)
         self._atexit_done = False
+        self._teardown_lock = threading.Lock()
         atexit.register(self._atexit_teardown)
-        try:
-            if not self._vpn_process_up():
-                self.teardown_overrides()
-        except Exception:  # noqa: BLE001
-            pass
+        if startup_cleanup:
+            try:
+                if not self._vpn_process_up():
+                    self.teardown_overrides_if_dirty()
+            except Exception:  # noqa: BLE001
+                pass
 
     def _log(self, msg: str) -> None:
         self._user_log(msg)
@@ -255,22 +286,12 @@ class OpsClient:
 
     def stop_http_bridge(self) -> None:
         """Reap leftover Python HTTP→SOCKS children from older clients."""
-        procutil.invalidate_proc_cache()
         http_port = get_http_bridge_port()
         targets: list[int] = []
-        if self.paths.bridge_pid.is_file():
-            try:
-                old = int(self.paths.bridge_pid.read_text().strip())
-            except ValueError:
-                old = 0
-            if old:
-                targets.append(old)
-            self.paths.bridge_pid.unlink(missing_ok=True)
-        # Reap orphans: previous `on` can leave a bridge if pid-file was overwritten
-        # while the old listener kept 1088 open.
+        old = _pid_from_file(self.paths.bridge_pid, unlink=True)
+        if old:
+            targets.append(old)
         targets.extend(procutil.pids_listening_on(http_port, cache=False))
-        targets.extend(procutil.pids_cmdline_match("desktop bridge", cache=False))
-        targets.extend(procutil.pids_cmdline_match("-m desktop bridge", cache=False))
         killed = procutil.kill_pids(targets, exclude=os.getpid())
         for pid in killed:
             self.log(f"http-bridge pid={pid} stopped")
@@ -292,20 +313,12 @@ class OpsClient:
         )
 
     def stop_pac_server(self) -> None:
-        procutil.invalidate_proc_cache()
         targets: list[int] = []
-        if self.paths.pac_pid.is_file():
-            try:
-                old = int(self.paths.pac_pid.read_text().strip())
-            except ValueError:
-                old = 0
-            if old:
-                targets.append(old)
-            self.paths.pac_pid.unlink(missing_ok=True)
+        old = _pid_from_file(self.paths.pac_pid, unlink=True)
+        if old:
+            targets.append(old)
         pac_port = get_pac_listen_port()
         targets.extend(procutil.pids_listening_on(pac_port, cache=False))
-        targets.extend(procutil.pids_cmdline_match("desktop pac-serve", cache=False))
-        targets.extend(procutil.pids_cmdline_match("-m desktop pac-serve", cache=False))
         killed = procutil.kill_pids(targets, exclude=os.getpid())
         for pid in killed:
             self.log(f"pac-serve pid={pid} stopped")
@@ -381,40 +394,61 @@ class OpsClient:
             pass
         return False
 
-    def teardown_overrides(self) -> None:
-        """Undo git / PAC / Docker / env changes. Safe if nothing was enabled."""
-        try:
-            disable_browser_proxy(self.paths.proxy_backup, log=self.log)
-        except Exception as exc:  # noqa: BLE001
-            self.log(f"PAC off: {exc}")
-        try:
-            disable_linux_env_proxy(self.paths.env_proxy_backup, log=self.log)
-        except Exception as exc:  # noqa: BLE001
-            self.log(f"env proxy off: {exc}")
-        try:
-            clear_git_proxy(
+    def _override_markers(self) -> bool:
+        return any(
+            path.is_file()
+            for path in (
+                self.paths.proxy_backup,
+                self.paths.env_proxy_backup,
+                self.paths.git_proxy_backup,
+                self.paths.docker_proxy_backup,
                 self.paths.cli_env,
                 self.paths.cli_ps1,
-                log=self.log,
-                backup_path=self.paths.git_proxy_backup,
+                self.paths.state_path,
             )
-        except Exception as exc:  # noqa: BLE001
-            self.log(f"git proxy off: {exc}")
+        )
+
+    def teardown_overrides_if_dirty(self) -> None:
+        """Skip git/PAC/Docker undo when there are no leftover markers."""
+        if not self._override_markers():
+            return
+        self.teardown_overrides()
+
+    def teardown_overrides(self) -> None:
+        """Undo git / PAC / Docker / env changes. Safe if nothing was enabled."""
+        if not self._teardown_lock.acquire(blocking=False):
+            return
         try:
-            self.write_docker_helpers(http_port=get_http_bridge_port(), active=False)
-        except Exception as exc:  # noqa: BLE001
-            self.log(f"docker proxy off: {exc}")
-        try:
-            clear_instead_of(self.log)
-        except Exception:  # noqa: BLE001
-            pass
+            try:
+                disable_browser_proxy(self.paths.proxy_backup, log=self.log)
+            except Exception as exc:  # noqa: BLE001
+                self.log(f"PAC off: {exc}")
+            try:
+                disable_linux_env_proxy(self.paths.env_proxy_backup, log=self.log)
+            except Exception as exc:  # noqa: BLE001
+                self.log(f"env proxy off: {exc}")
+            try:
+                clear_git_proxy(
+                    self.paths.cli_env,
+                    self.paths.cli_ps1,
+                    log=self.log,
+                    backup_path=self.paths.git_proxy_backup,
+                )
+            except Exception as exc:  # noqa: BLE001
+                self.log(f"git proxy off: {exc}")
+            try:
+                self.write_docker_helpers(http_port=get_http_bridge_port(), active=False)
+            except Exception as exc:  # noqa: BLE001
+                self.log(f"docker proxy off: {exc}")
+        finally:
+            self._teardown_lock.release()
 
     def _atexit_teardown(self) -> None:
         if self._atexit_done:
             return
         self._atexit_done = True
         try:
-            self.teardown_overrides()
+            self.teardown_overrides_if_dirty()
         except Exception:  # noqa: BLE001
             pass
 
@@ -475,9 +509,7 @@ class OpsClient:
 
         socks_port = get_local_socks_port(cfg)
         http_port = get_http_bridge_port()
-        # Reap Python HTTP bridge if it holds :1088
-        self.stop_http_bridge()
-        self._reap_socks_orphans(socks_port)
+        self.reap_leftovers(socks_port=socks_port)
 
         if not self.singbox.find_sing_box(get_sing_box_path(cfg)):
             self.log("sing-box missing — downloading…")
@@ -527,16 +559,19 @@ class OpsClient:
             f"socks=127.0.0.1:{socks_port} http=127.0.0.1:{http_port}"
         )
         self._log_singbox_tail("после запуска")
-        self._probe_exit(socks_port)
+        threading.Thread(
+            target=self._probe_exit, args=(socks_port,), daemon=True
+        ).start()
 
-    def stop_singbox_mode(self) -> None:
+    def stop_singbox_mode(self, *, teardown: bool = True) -> None:
         try:
-            self.reverse_ssh.stop()
+            self.reverse_ssh.stop(scan_cmdline=False)
         except Exception as exc:  # noqa: BLE001
             self.log(f"reverse-ssh stop: {exc}")
         self.singbox.stop()
         self.stop_pac_server()
-        self.teardown_overrides()
+        if teardown:
+            self.teardown_overrides_if_dirty()
         self.paths.state_path.unlink(missing_ok=True)
 
     def write_docker_helpers(
@@ -555,6 +590,12 @@ class OpsClient:
         port = int(http_port if http_port is not None else get_http_bridge_port())
         extra = cfg.get("docker_dns_hosts")
         dns_hosts = [str(h) for h in extra] if isinstance(extra, list) and extra else None
+        from desktop.docker_env import write_docker_env
+        from desktop.docker_proxy import (
+            disable_docker_desktop_proxy,
+            enable_docker_desktop_proxy,
+        )
+
         write_docker_env(
             port,
             self.paths.docker_env,
@@ -603,15 +644,80 @@ class OpsClient:
             return 2
         # Refresh helpers so docker.env has the current host IP
         self.write_docker_helpers(http_port=http_port, active=True)
+        from desktop.docker_env import docker_smoke_test
+
         return docker_smoke_test(http_port, log=self.log)
 
-    def _reap_socks_orphans(self, socks_port: int) -> None:
-        """Free the local SOCKS port before starting sing-box."""
-        procutil.invalidate_proc_cache()
-        targets = list(procutil.pids_listening_on(socks_port, cache=False))
+    def _helper_traces(self) -> bool:
+        return any(
+            path.is_file()
+            for path in (
+                self.paths.bridge_pid,
+                self.paths.pac_pid,
+                self.paths.watchdog_pid,
+                self.reverse_ssh.pid_path,
+                self.paths.state_path,
+            )
+        )
+
+    def reap_leftovers(self, *, socks_port: int | None = None) -> None:
+        """Free HTTP/PAC/SOCKS leftovers before starting sing-box."""
+        socks = int(socks_port if socks_port is not None else get_local_socks_port())
+        http_port = get_http_bridge_port()
+        pac_port = get_pac_listen_port()
+        by_port = procutil.pids_listening_on_many(
+            [socks, http_port, pac_port], cache=False
+        )
+        targets: list[int] = []
+        had_pid = False
+        for path in (self.paths.bridge_pid, self.paths.pac_pid):
+            pid = _pid_from_file(path, unlink=True)
+            if pid:
+                had_pid = True
+                targets.append(pid)
+        for pids in by_port.values():
+            targets.extend(pids)
+        if had_pid or any(by_port.values()) or self._helper_traces():
+            for extra in procutil.pids_cmdline_match_many(
+                (
+                    "desktop bridge",
+                    "-m desktop bridge",
+                    "desktop pac-serve",
+                    "-m desktop pac-serve",
+                ),
+                cache=False,
+            ).values():
+                targets.extend(extra)
         killed = procutil.kill_pids(targets, exclude=os.getpid())
         for pid in killed:
-            self.log(f"socks orphan pid={pid} stopped")
+            self.log(f"leftover pid={pid} stopped")
+
+    def _reap_helpers(self) -> None:
+        """Stop watchdog / PAC / HTTP bridge / reverse-ssh without extra PowerShell."""
+        traces = self._helper_traces()
+        http_port = get_http_bridge_port()
+        pac_port = get_pac_listen_port()
+        by_port = procutil.pids_listening_on_many([http_port, pac_port], cache=False)
+        targets: list[int] = []
+        for path in (
+            self.paths.watchdog_pid,
+            self.paths.pac_pid,
+            self.paths.bridge_pid,
+            self.reverse_ssh.pid_path,
+        ):
+            pid = _pid_from_file(path, unlink=True)
+            if pid:
+                targets.append(pid)
+        for pids in by_port.values():
+            targets.extend(pids)
+        if traces or any(by_port.values()):
+            for extra in procutil.pids_cmdline_match_many(
+                _HELPER_CMDLINE, cache=False
+            ).values():
+                targets.extend(extra)
+        killed = procutil.kill_pids(targets, exclude=os.getpid())
+        for pid in killed:
+            self.log(f"helper pid={pid} stopped")
 
     def enable_tun(self, *, persist: bool = True) -> None:
         self.reload_env()
@@ -664,19 +770,17 @@ class OpsClient:
 
     def stop_watchdog_daemon(self) -> None:
         targets: list[int] = []
-        if self.paths.watchdog_pid.is_file():
-            try:
-                pid = int(self.paths.watchdog_pid.read_text().strip())
-            except ValueError:
-                pid = 0
-            if pid and pid != os.getpid():
-                targets.append(pid)
-            self.paths.watchdog_pid.unlink(missing_ok=True)
-        targets.extend(procutil.pids_cmdline_match("watch --daemon", cache=False))
-        targets.extend(procutil.pids_cmdline_match("-m desktop watch", cache=False))
+        pid = _pid_from_file(self.paths.watchdog_pid, unlink=True)
+        if pid and pid != os.getpid():
+            targets.append(pid)
+        if pid:
+            for extra in procutil.pids_cmdline_match_many(
+                ("watch --daemon", "-m desktop watch"), cache=False
+            ).values():
+                targets.extend(extra)
         killed = procutil.kill_pids(targets, exclude=os.getpid())
-        for pid in killed:
-            self.log(f"watchdog pid={pid} остановлен")
+        for dead in killed:
+            self.log(f"watchdog pid={dead} остановлен")
         leftover = [p for p in targets if p != os.getpid() and procutil.pid_alive(p)]
         if leftover:
             self.log(
@@ -712,14 +816,16 @@ class OpsClient:
 
         proc = procutil.popen(args, env=env, cwd=root, detached=True)
         self.paths.watchdog_pid.write_text(str(proc.pid), encoding="utf-8")
-        time.sleep(0.4)
-        if proc.poll() is not None:
-            self.paths.watchdog_pid.unlink(missing_ok=True)
-            self.log(
-                f"watchdog exited immediately (code={proc.returncode}); "
-                "see logs/watchdog.log"
-            )
-            return
+        deadline = time.monotonic() + 0.25
+        while time.monotonic() < deadline:
+            if proc.poll() is not None:
+                self.paths.watchdog_pid.unlink(missing_ok=True)
+                self.log(
+                    f"watchdog exited immediately (code={proc.returncode}); "
+                    "see logs/watchdog.log"
+                )
+                return
+            time.sleep(0.05)
         self.log(f"watchdog pid={proc.pid} (logs/watchdog.log)")
 
     def _maybe_start_reverse_ssh(self, cfg: dict[str, Any] | None = None) -> None:
@@ -819,13 +925,24 @@ class OpsClient:
                 self.stop_watchdog_daemon()
             self.ensure_watchdog_daemon()
 
+    def shutdown(self) -> None:
+        """Quit path: disable once and skip atexit teardown."""
+        self._atexit_done = True
+        try:
+            self.disable()
+        except Exception:  # noqa: BLE001
+            try:
+                self.teardown_overrides_if_dirty()
+            except Exception:  # noqa: BLE001
+                pass
+
     def disable(self) -> None:
         self.reload_env()
         self.log("отключение VPN…")
-        self.stop_watchdog_daemon()
+        self._reap_helpers()
         stop_err: Exception | None = None
         try:
-            self.stop_singbox_mode()
+            self.stop_singbox_mode(teardown=False)
         except Exception as exc:  # noqa: BLE001
             stop_err = exc
             self.log(f"sing-box не остановился: {exc}")
@@ -833,8 +950,7 @@ class OpsClient:
             self.tun.stop()
         except Exception as exc:  # noqa: BLE001
             self.log(f"legacy TUN: {exc}")
-        self.stop_http_bridge()
-        self.teardown_overrides()
+        self.teardown_overrides_if_dirty()
         procutil.invalidate_proc_cache()
         leftover = self.singbox.pid()
         if leftover:
@@ -844,10 +960,13 @@ class OpsClient:
             )
         if stop_err:
             raise stop_err
-        try:
-            clear_kill_switch(var_dir=self.paths.var_dir, log=self.log)
-        except Exception as exc:  # noqa: BLE001
-            self.log(f"kill switch off: {exc}")
+        ks_state = kill_switch_state_path(self.paths.var_dir)
+        if ks_state.is_file():
+            try:
+                clear_kill_switch(var_dir=self.paths.var_dir, log=self.log)
+            except Exception as exc:  # noqa: BLE001
+                self.log(f"kill switch off: {exc}")
+        self._atexit_done = True
         self.log("VPN отключён: sing-box остановлен, PAC/git/Docker сброшены")
 
     def status(self, *, include_git: bool = True) -> dict[str, Any]:
@@ -878,7 +997,10 @@ class OpsClient:
         lines.append(f"SOCKS_SCOPE       = {info['socks_scope']}")
         lines.append(f"tun.enabled       = {1 if info['tun_env'] else 0}")
         info["kill_switch"] = get_kill_switch()
-        info["kill_switch_applied"] = kill_switch_is_applied()
+        ks_file = kill_switch_state_path(self.paths.var_dir).is_file()
+        info["kill_switch_applied"] = (
+            kill_switch_is_applied() if info["kill_switch"] and ks_file else False
+        )
         lines.append(
             f"kill_switch       = {1 if info['kill_switch'] else 0}"
             + (" applied" if info["kill_switch_applied"] else "")

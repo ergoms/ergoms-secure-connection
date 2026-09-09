@@ -119,20 +119,31 @@ def write_cli_env(http_port: int, cli_env: Path, cli_ps1: Path) -> None:
     os.environ["no_proxy"] = noproxy
 
 
+def _git_config_list() -> list[tuple[str, str]]:
+    r = _git("config", "--global", "--list")
+    if r.returncode != 0 or not r.stdout:
+        return []
+    pairs: list[tuple[str, str]] = []
+    for line in r.stdout.splitlines():
+        if "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip()
+        if key:
+            pairs.append((key, val))
+    return pairs
+
+
 def _backup_git_proxy(backup_path: Path) -> None:
     if backup_path.is_file():
         return
+    values = {"http.proxy": "", "https.proxy": ""}
+    for key, val in _git_config_list():
+        low = key.lower()
+        if low in values:
+            values[low] = val.strip()
     backup_path.parent.mkdir(parents=True, exist_ok=True)
-    backup_path.write_text(
-        json.dumps(
-            {
-                "http.proxy": git_get("http.proxy"),
-                "https.proxy": git_get("https.proxy"),
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
-    )
+    backup_path.write_text(json.dumps(values, indent=2), encoding="utf-8")
 
 
 def _restore_git_proxy(backup_path: Path) -> bool:
@@ -156,18 +167,33 @@ def _restore_git_proxy(backup_path: Path) -> bool:
     return True
 
 
-def _unset_bridge_keys() -> None:
-    for key in ("http.proxy", "https.proxy"):
-        cur = git_get(key)
-        if not cur or _is_local_bridge_proxy(cur):
-            _git("config", "--global", "--unset-all", key)
-    r = _git("config", "--global", "--get-regexp", r"^(http|https)\..*proxy$")
-    if r.returncode == 0 and r.stdout:
-        for line in r.stdout.splitlines():
-            key = line.split(None, 1)[0]
-            val = line.split(None, 1)[1] if " " in line else ""
-            if key and _is_local_bridge_proxy(val):
-                _git("config", "--global", "--unset-all", key)
+def _keys_to_clear(pairs: list[tuple[str, str]], *, keep_restored_proxy: bool) -> list[str]:
+    extra = (
+        "http.extraheader",
+        "http.version",
+        "protocol.version",
+        "http.postbuffer",
+    )
+    instead_re = re.compile(
+        r"ops-content|ergoms-vpn|ergoms-secure-connection|ERGOMS|proxy-kill|/https/github"
+    )
+    to_unset: list[str] = []
+    seen: set[str] = set()
+    for key, val in pairs:
+        low = key.lower()
+        drop = False
+        if low in ("http.proxy", "https.proxy"):
+            drop = (not keep_restored_proxy) or _is_local_bridge_proxy(val)
+        elif "proxy" in low and _is_local_bridge_proxy(val):
+            drop = True
+        elif "insteadof" in low and instead_re.search(f"{key} {val}"):
+            drop = True
+        elif low in extra or re.match(r"^http\..*\.extraheader$", low):
+            drop = True
+        if drop and key not in seen:
+            seen.add(key)
+            to_unset.append(key)
+    return to_unset
 
 
 def set_git_http_proxy(
@@ -193,22 +219,16 @@ def clear_git_proxy(
     backup_path: Path | None = None,
 ) -> None:
     restored = False
-    if backup_path is not None:
+    if backup_path is not None and backup_path.is_file():
         restored = _restore_git_proxy(backup_path)
-    _unset_bridge_keys()
-    clear_instead_of(log)
-    _git("config", "--global", "--unset-all", "http.extraHeader")
-    r = _git("config", "--global", "--get-regexp", r"^http\..*\.extraheader$")
-    if r.returncode == 0 and r.stdout:
-        for line in r.stdout.splitlines():
-            key = line.split(None, 1)[0]
-            if key:
-                _git("config", "--global", "--unset-all", key)
-    _git("config", "--global", "--unset", "http.version")
-    _git("config", "--global", "--unset", "protocol.version")
-    _git("config", "--global", "--unset", "http.postBuffer")
+    pairs = _git_config_list()
+    keys = _keys_to_clear(pairs, keep_restored_proxy=restored)
+    had_cli = cli_env.is_file() or cli_ps1.is_file()
+    for key in keys:
+        _git("config", "--global", "--unset-all", key)
     clear_cli_env_proxy(cli_env, cli_ps1)
-    log("git proxy restored" if restored else "git proxy cleared")
+    if restored or keys or had_cli:
+        log("git proxy restored" if restored else "git proxy cleared")
 
 
 def clear_stale_git_proxy(
@@ -219,9 +239,13 @@ def clear_stale_git_proxy(
     backup_path: Path | None = None,
 ) -> bool:
     """Remove our leftover git/CLI proxy when the VPN is not using it."""
-    proxy = git_get("http.proxy") or git_get("https.proxy")
     has_cli = cli_env.is_file() or cli_ps1.is_file()
     has_backup = bool(backup_path and backup_path.is_file())
+    proxy = ""
+    for key, val in _git_config_list():
+        if key.lower() in ("http.proxy", "https.proxy") and val.strip():
+            proxy = val.strip()
+            break
     if not _is_local_bridge_proxy(proxy) and not has_cli and not has_backup:
         return False
     clear_git_proxy(cli_env, cli_ps1, log=log, backup_path=backup_path)

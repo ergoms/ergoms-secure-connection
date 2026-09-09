@@ -376,71 +376,162 @@ def pids_listening_on(
     """PIDs with a TCP LISTEN socket on host:port (best-effort)."""
     if port <= 0:
         return []
-    key = ("listen", int(port), host)
-    if cache:
-        cached = _proc_cache_get(key)
-        if cached is not None:
-            return cached
-    found: list[int] = []
+    return pids_listening_on_many([port], host=host, cache=cache).get(int(port), [])
+
+
+def pids_listening_on_many(
+    ports: Sequence[int], host: str = "127.0.0.1", *, cache: bool = True
+) -> dict[int, list[int]]:
+    """One netstat/ss scan for several listen ports."""
+    wanted = [int(p) for p in ports if int(p) > 0]
+    out: dict[int, list[int]] = {p: [] for p in wanted}
+    if not wanted:
+        return out
+    pending: list[int] = []
+    for port in wanted:
+        if cache:
+            cached = _proc_cache_get(("listen", port, host))
+            if cached is not None:
+                out[port] = cached
+                continue
+        pending.append(port)
+    if not pending:
+        return out
+    found: dict[int, list[int]] = {p: [] for p in pending}
     if sys.platform == "win32":
-        found = _pids_listening_on_netstat(port, host)
+        r = run(["netstat", "-ano", "-p", "tcp"])
+        seen: dict[int, set[int]] = {p: set() for p in pending}
+        host_l = host.lower()
+        pending_s = {p: f":{p}" for p in pending}
+        for line in (r.stdout or "").splitlines():
+            if "LISTENING" not in line.upper():
+                continue
+            parts = line.split()
+            if len(parts) < 5:
+                continue
+            local_addr = parts[1]
+            matched: int | None = None
+            for port, suffix in pending_s.items():
+                if local_addr.endswith(suffix):
+                    matched = port
+                    break
+            if matched is None:
+                continue
+            addr = local_addr.rsplit(":", 1)[0]
+            if host_l not in ("127.0.0.1", "localhost", "::1"):
+                if addr not in (host_l, "0.0.0.0", "::", "[::]"):
+                    continue
+            elif addr not in ("127.0.0.1", "0.0.0.0", "::", "[::]", "localhost"):
+                continue
+            pid_s = parts[-1]
+            if not pid_s.isdigit():
+                continue
+            pid = int(pid_s)
+            if pid not in seen[matched]:
+                seen[matched].add(pid)
+                found[matched].append(pid)
     else:
-        r = run(["ss", "-ltnp", f"sport = :{int(port)}"])
-        for m in re.finditer(r"pid=(\d+)", r.stdout or ""):
-            pid = int(m.group(1))
-            if pid not in found:
-                found.append(pid)
-    if cache:
-        return _proc_cache_set(key, found)
-    return found
+        for port in pending:
+            r = run(["ss", "-ltnp", f"sport = :{port}"])
+            for m in re.finditer(r"pid=(\d+)", r.stdout or ""):
+                pid = int(m.group(1))
+                if pid not in found[port]:
+                    found[port].append(pid)
+    for port, pids in found.items():
+        out[port] = pids
+        if cache:
+            _proc_cache_set(("listen", port, host), pids)
+    return out
 
 
 def pids_cmdline_match(substr: str, *, cache: bool = True) -> list[int]:
-    """PIDs whose command line contains substr (case-insensitive on Windows).
-
-    The search string is not placed literally on the scanner command line,
-    otherwise the PowerShell/pgrep helper matches itself (false 'VPN on').
-    """
+    """PIDs whose command line contains substr (case-insensitive on Windows)."""
     if not substr:
         return []
-    key = ("cmdline", substr.lower())
-    if cache:
-        cached = _proc_cache_get(key)
-        if cached is not None:
-            return cached
-    found: list[int] = []
+    return pids_cmdline_match_many([substr], cache=cache).get(substr, [])
+
+
+def pids_cmdline_match_many(
+    substrs: Sequence[str], *, cache: bool = True
+) -> dict[str, list[int]]:
+    """One process scan for several command-line needles."""
+    needles = [s for s in substrs if s]
+    out: dict[str, list[int]] = {s: [] for s in needles}
+    if not needles:
+        return out
+    pending: list[str] = []
+    for needle in needles:
+        if cache:
+            cached = _proc_cache_get(("cmdline", needle.lower()))
+            if cached is not None:
+                out[needle] = cached
+                continue
+        pending.append(needle)
+    if not pending:
+        return out
+    found = _scan_cmdline_many(pending)
+    for needle in pending:
+        pids = found.get(needle, [])
+        out[needle] = pids
+        if cache:
+            _proc_cache_set(("cmdline", needle.lower()), pids)
+    return out
+
+
+def _scan_cmdline_many(needles: Sequence[str]) -> dict[str, list[int]]:
+    found: dict[str, list[int]] = {s: [] for s in needles}
     me = os.getpid()
     if sys.platform == "win32":
-        token = base64.b64encode(substr.encode("utf-8")).decode("ascii")
-        ps = (
-            f"$n = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{token}')); "
-            "Get-CimInstance Win32_Process | "
-            "Where-Object { "
-            "$_.CommandLine -and $_.CommandLine.ToLower().Contains($n.ToLower()) "
-            "} | Select-Object -ExpandProperty ProcessId"
-        )
-        r = run(["powershell", "-NoProfile", "-Command", ps])
-        for line in (r.stdout or "").splitlines():
-            line = line.strip()
-            if line.isdigit():
-                pid = int(line)
-                if pid != me:
-                    found.append(pid)
-    else:
-        # [s]ing-box… trick so pgrep -f does not match its own argv
-        if len(substr) >= 2:
-            pattern = f"[{substr[0]}]{substr[1:]}"
+        return _scan_cmdline_many_win(needles, me)
+    for needle in needles:
+        if len(needle) >= 2:
+            pattern = f"[{needle[0]}]{needle[1:]}"
         else:
-            pattern = substr
+            pattern = needle
         r = run(["pgrep", "-f", pattern])
         for line in (r.stdout or "").splitlines():
             line = line.strip()
             if line.isdigit():
                 pid = int(line)
-                if pid != me:
-                    found.append(pid)
-    if cache:
-        return _proc_cache_set(key, found)
+                if pid != me and pid not in found[needle]:
+                    found[needle].append(pid)
+    return found
+
+
+def _scan_cmdline_many_win(needles: Sequence[str], me: int) -> dict[str, list[int]]:
+    import json
+
+    token = base64.b64encode(
+        json.dumps(list(needles), ensure_ascii=False).encode("utf-8")
+    ).decode("ascii")
+    ps = (
+        f"$needles = @([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{token}')) "
+        "| ConvertFrom-Json); "
+        "$filter = \"Name='python.exe' OR Name='pythonw.exe' OR Name='py.exe' "
+        "OR Name='ErgomsSecureConnection.exe' OR Name='ssh.exe'\"; "
+        "Get-CimInstance Win32_Process -Filter $filter | ForEach-Object { "
+        "if (-not $_.CommandLine) { return }; "
+        "$cl = $_.CommandLine.ToLowerInvariant(); "
+        "foreach ($n in $needles) { "
+        "$ns = [string]$n; "
+        "if ($cl.Contains($ns.ToLowerInvariant())) { "
+        "Write-Output (($_.ProcessId.ToString()) + \"`t\" + $ns) "
+        "} } }"
+    )
+    r = run(["powershell", "-NoProfile", "-Command", ps])
+    found: dict[str, list[int]] = {s: [] for s in needles}
+    alias = {s.lower(): s for s in needles}
+    for line in (r.stdout or "").splitlines():
+        if "\t" not in line:
+            continue
+        pid_s, _, needle = line.partition("\t")
+        pid_s = pid_s.strip()
+        key = alias.get(needle.strip().lower())
+        if not key or not pid_s.isdigit():
+            continue
+        pid = int(pid_s)
+        if pid != me and pid not in found[key]:
+            found[key].append(pid)
     return found
 
 

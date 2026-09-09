@@ -54,6 +54,7 @@ class GuiBridge(QObject):
     logAppended = Signal(str)
     showRequested = Signal()
     hideRequested = Signal()
+    closingUi = Signal()
     quitRequested = Signal()
 
     activeChanged = Signal()
@@ -98,7 +99,9 @@ class GuiBridge(QObject):
             apply_config(self.paths.config_path, env_path=self.paths.env_path)
 
         self._log_lines: list[str] = []
-        self.client = OpsClient(paths=self.paths, log=self._enqueue_log)
+        self.client = OpsClient(
+            paths=self.paths, log=self._enqueue_log, startup_cleanup=False
+        )
 
         self._active = False
         self._tun = False
@@ -635,9 +638,11 @@ class GuiBridge(QObject):
 
     @Slot()
     def teardownNow(self) -> None:
-        """Synchronous undo of git/PAC/Docker leftovers (quit / aboutToQuit)."""
+        """AboutToQuit leftover undo. No-op if quitApp already owns shutdown."""
+        if self._closing:
+            return
         try:
-            self.client.teardown_overrides()
+            self.client.teardown_overrides_if_dirty()
         except Exception:  # noqa: BLE001
             pass
 
@@ -647,17 +652,14 @@ class GuiBridge(QObject):
             return
         self._closing = True
         self._status_timer.stop()
-        self.teardownNow()
+        self.hideRequested.emit()
+        self.closingUi.emit()
 
         def work() -> None:
             try:
-                self.client.disable()
+                self.client.shutdown()
             except Exception:  # noqa: BLE001
-                try:
-                    self.client.stop_http_bridge()
-                except Exception:  # noqa: BLE001
-                    pass
-                self.teardownNow()
+                pass
             self.quitRequested.emit()
 
         threading.Thread(target=work, daemon=True).start()
@@ -721,6 +723,13 @@ class GuiBridge(QObject):
             try:
                 st = self.client.status(include_git=False)
                 err = ""
+                if (
+                    isinstance(st, dict)
+                    and not self._overrides_cleared
+                    and not (st.get("singbox_running") or st.get("tun_running"))
+                ):
+                    self.client.teardown_overrides_if_dirty()
+                    self._overrides_cleared = True
             except Exception as exc:  # noqa: BLE001
                 st = None
                 err = str(exc)
@@ -778,12 +787,6 @@ class GuiBridge(QObject):
         self._singbox_up = singbox
         if active:
             self._overrides_cleared = False
-        elif not self._overrides_cleared:
-            self._overrides_cleared = True
-            try:
-                self.client.teardown_overrides()
-            except Exception:  # noqa: BLE001
-                pass
         self._watchdog_up = bool(st.get("watchdog_running"))
         self._reverse_ssh_up = bool(st.get("reverse_ssh_running"))
         self._reverse_ssh_port = int(st.get("reverse_ssh_listen") or 2222)

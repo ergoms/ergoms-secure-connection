@@ -50,7 +50,7 @@ bash modes/vps/bootstrap_singbox_443.sh
 # снять: ./ergoms-secure-connection.sh uninstall-service
 ```
 
-В `config.json` по умолчанию `tun.enabled` и `kill_switch` включены: TUN поднимается вместе с `on`, при обрыве интернет блокируется. Для окна: `poetry install --extras gui`, затем `python -m desktop gui` (или `poetry run python -m desktop gui`).
+В `config.json` по умолчанию `tun.enabled` и `kill_switch` включены: TUN поднимается вместе с `on`, при обрыве интернет блокируется. Для окна: `poetry install --extras gui`, затем `python -m desktop gui` (или `poetry run python -m desktop gui`). Сборка Windows: `.\.vscode\setup.ps1 -Target build` → папка `dist/ErgomsSecureConnection/` и установщик `dist/ErgomsSecureConnection-Setup-<ver>.exe`.
 
 Локально после `on`: SOCKS `:1080`, HTTP `:1088`, PAC `:1089`.
 
@@ -155,9 +155,31 @@ ERGOMS SECURE CONNECTION/
 ├── deploy.ps1/.sh
 ├── config/            образцы
 ├── lib/               connect_socks, http_via_socks (PAC)
+├── installer/         Inno Setup (Windows)
 ├── modes/linux/       systemd-служба клиента
 ├── modes/windows/     WinSW-служба клиента
 └── modes/vps/         bootstrap sing-box на :443
 ```
 
 Не коммитьте `config.json`, `config.json.enc`, `creds/`, `logs/`, `var/`.
+
+---
+
+## Сборка (Windows)
+
+```powershell
+.\.vscode\setup.ps1 -Target build
+```
+
+Результат:
+
+| Путь | Что это |
+|------|---------|
+| `dist/ErgomsSecureConnection/ErgomsSecureConnection.exe` | one-dir клиент (рядом `_internal/`) |
+| `dist/ErgomsSecureConnection-Setup-<версия>.exe` | установщик Inno Setup |
+
+Установщик кладёт программу в `Program Files\ERGOMS SECURE CONNECTION` (или per-user), ярлыки, опциональный автозапуск (`--autostart`). Данные остаются в `%LOCALAPPDATA%\ERGOMS SECURE CONNECTION`. При удалении вызывается `off` (kill switch / PAC / git), каталог данных не трогается.
+
+Только папка без Setup: `.\.vscode\setup.ps1 -Target pyinstaller`. Только Setup (после сборки): `-Target installer`. Если Inno Setup нет — ставится через `winget` (`JRSoftware.InnoSetup`).
+
+Linux: `./.vscode/setup.sh build` → `dist/ErgomsSecureConnection/ErgomsSecureConnection`.
