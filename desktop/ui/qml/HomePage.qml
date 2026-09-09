@@ -48,7 +48,7 @@ Item {
 
         Flow {
             Layout.fillWidth: true
-            Layout.preferredHeight: 28
+            Layout.preferredHeight: 56
             Layout.alignment: Qt.AlignHCenter
             spacing: 6
 
