@@ -1,0 +1,77 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "ops-content: setup",
+      "detail": "Poetry + .venv + PySide6 и скачать sing-box в tools/",
+      "dependsOn": [
+        "ops-content: install libraries",
+        "ops-content: download sing-box"
+      ],
+      "dependsOrder": "sequence",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "ops-content: install libraries",
+      "detail": "Poetry (если нет), .venv, пакеты + extra gui",
+      "type": "process",
+      "command": "bash",
+      "args": ["${workspaceFolder}/.vscode/setup.sh", "libraries"],
+      "windows": {
+        "command": "powershell.exe",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "${workspaceFolder}/.vscode/setup.ps1",
+          "-Target",
+          "libraries"
+        ]
+      },
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "focus": false,
+        "showReuseMessage": false
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "ops-content: download sing-box",
+      "detail": "Скачать бинарник sing-box в tools/",
+      "type": "process",
+      "command": "bash",
+      "args": ["${workspaceFolder}/.vscode/setup.sh", "sing-box"],
+      "windows": {
+        "command": "powershell.exe",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "${workspaceFolder}/.vscode/setup.ps1",
+          "-Target",
+          "sing-box"
+        ]
+      },
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "focus": false,
+        "showReuseMessage": false
+      },
+      "problemMatcher": []
+    }
+  ]
+}

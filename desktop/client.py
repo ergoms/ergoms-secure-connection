@@ -845,12 +845,13 @@ class OpsClient:
             proxy_url = f"http://127.0.0.1:{http_port}"
         path = self.tun.ensure_downloaded(proxy_url=proxy_url)
         # Keep empty in config → auto-resolve tools/sing-box next to project
-        cfg = self.config()
-        cfg.setdefault("tun", {})
-        cfg["tun"]["sing_box_path"] = ""
-        from desktop.config_io import save_config
+        if self.paths.config_path.is_file():
+            cfg = self.config()
+            cfg.setdefault("tun", {})
+            cfg["tun"]["sing_box_path"] = ""
+            from desktop.config_io import save_config
 
-        save_config(self.paths.config_path, cfg)
+            save_config(self.paths.config_path, cfg)
         self.log(f"sing-box ready (auto): {path}")
 
     def _maybe_autostart_tun(self) -> None:

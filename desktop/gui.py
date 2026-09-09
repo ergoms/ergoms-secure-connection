@@ -18,7 +18,7 @@ def run_gui() -> None:
         from PySide6.QtWidgets import QApplication
     except ImportError:
         print(
-            "GUI: установите PySide6 — pip install -r requirements-desktop.txt",
+            "GUI: установите PySide6 — poetry install --extras gui",
             file=sys.stderr,
         )
         raise SystemExit(1) from None

@@ -30,6 +30,10 @@ function Get-PythonExe {
     if ($env:OPS_CONTENT_PYTHON -and (Test-Path -LiteralPath $env:OPS_CONTENT_PYTHON)) {
         return $env:OPS_CONTENT_PYTHON
     }
+    $venvPy = Join-Path $Root '.venv\Scripts\python.exe'
+    if (Test-Path -LiteralPath $venvPy) {
+        return $venvPy
+    }
     foreach ($name in @('python', 'py')) {
         $cmd = Get-Command $name -ErrorAction SilentlyContinue
         if (-not $cmd) { continue }

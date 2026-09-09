@@ -7,6 +7,14 @@ cd "$ROOT"
 
 find_python() {
   local c
+  if [[ -x "$ROOT/.venv/bin/python" ]]; then
+    echo "$ROOT/.venv/bin/python"
+    return 0
+  fi
+  if [[ -x "$ROOT/.venv/Scripts/python.exe" ]]; then
+    echo "$ROOT/.venv/Scripts/python.exe"
+    return 0
+  fi
   for c in python3 python; do
     if command -v "$c" >/dev/null 2>&1; then
       if "$c" -c "import sys" 2>/dev/null; then

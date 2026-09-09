@@ -16,6 +16,10 @@ $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $Root
 
 function Get-PythonExe {
+    $venvPy = Join-Path $Root '.venv\Scripts\python.exe'
+    if (Test-Path -LiteralPath $venvPy) {
+        return @{ Exe = $venvPy; Prefix = @() }
+    }
     foreach ($name in @('python', 'py')) {
         $cmd = Get-Command $name -ErrorAction SilentlyContinue
         if (-not $cmd) { continue }

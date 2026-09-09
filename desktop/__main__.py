@@ -95,7 +95,7 @@ def _show_help() -> int:
   uninstall-service    убрать службу
   encrypt [OUT]        зашифровать config.json для передачи (пароль)
   decrypt [IN]         расшифровать в config.json
-  gui                  окно Qt Quick (нужен дисплей, pip install -r requirements-desktop.txt)
+  gui                  окно Qt Quick (нужен дисплей, poetry install --extras gui)
   help
 
 Транспорт: VLESS+Reality через корпоративный Squid на VPS :443
