@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# Install systemd system unit for ERGOMS VPN (autostart).
+# Install systemd system unit for ERGOMS SECURE CONNECTION (autostart).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-UNIT_SRC="$ROOT/modes/linux/ergoms-vpn.service"
-UNIT_NAME="ergoms-vpn.service"
+UNIT_SRC="$ROOT/modes/linux/ergoms-secure-connection.service"
+UNIT_NAME="ergoms-secure-connection.service"
 UNIT_DST="/etc/systemd/system/$UNIT_NAME"
-LEGACY_UNIT="ops-content.service"
+LEGACY_UNITS=("ergoms-vpn.service" "ops-content.service")
 
 find_python() {
   local c
-  if [[ -n "${ERGOMS_VPN_PYTHON:-}" && -x "${ERGOMS_VPN_PYTHON}" ]]; then
-    echo "$ERGOMS_VPN_PYTHON"
+  if [[ -n "${ERGOMS_SC_PYTHON:-}" && -x "${ERGOMS_SC_PYTHON}" ]]; then
+    echo "$ERGOMS_SC_PYTHON"
     return 0
   fi
   if [[ -n "${OPS_CONTENT_PYTHON:-}" && -x "${OPS_CONTENT_PYTHON}" ]]; then
@@ -49,11 +49,11 @@ if [[ "${EUID:-}" -ne 0 ]]; then
     echo "Нужен root: sudo $0" >&2
     exit 1
   fi
-  exec sudo --preserve-env=PATH env ERGOMS_VPN_PYTHON="$PY" "$0" "$@"
+  exec sudo --preserve-env=PATH env ERGOMS_SC_PYTHON="$PY" "$0" "$@"
 fi
 
 if [[ ! -f "$ROOT/config.json" ]]; then
-  echo "Нет $ROOT/config.json — сначала: ./ergoms-vpn.sh init" >&2
+  echo "Нет $ROOT/config.json — сначала: ./ergoms-secure-connection.sh init" >&2
   exit 1
 fi
 
@@ -80,18 +80,17 @@ remove_legacy_user_unit() {
 
 remove_legacy_user_unit "$REAL_USER"
 
-if systemctl list-unit-files "$LEGACY_UNIT" >/dev/null 2>&1; then
-  systemctl disable --now "$LEGACY_UNIT" 2>/dev/null || true
-  rm -f "/etc/systemd/system/$LEGACY_UNIT"
-fi
+for LEGACY_UNIT in "${LEGACY_UNITS[@]}"; do
+  if systemctl list-unit-files "$LEGACY_UNIT" >/dev/null 2>&1; then
+    systemctl disable --now "$LEGACY_UNIT" 2>/dev/null || true
+    rm -f "/etc/systemd/system/$LEGACY_UNIT"
+  fi
+done
 
 # Avoid two clients fighting for :1080 / TUN
-if [[ -x "$ROOT/ergoms-vpn.sh" ]]; then
-  sudo -u "$REAL_USER" env HOME="$REAL_HOME" "$ROOT/ergoms-vpn.sh" off >/dev/null 2>&1 || true
-  "$ROOT/ergoms-vpn.sh" off >/dev/null 2>&1 || true
-elif [[ -x "$ROOT/ops-content.sh" ]]; then
-  sudo -u "$REAL_USER" env HOME="$REAL_HOME" "$ROOT/ops-content.sh" off >/dev/null 2>&1 || true
-  "$ROOT/ops-content.sh" off >/dev/null 2>&1 || true
+if [[ -x "$ROOT/ergoms-secure-connection.sh" ]]; then
+  sudo -u "$REAL_USER" env HOME="$REAL_HOME" "$ROOT/ergoms-secure-connection.sh" off >/dev/null 2>&1 || true
+  "$ROOT/ergoms-secure-connection.sh" off >/dev/null 2>&1 || true
 fi
 
 esc() { printf '%s' "$1" | sed 's/[\/&]/\\&/g'; }
@@ -108,9 +107,9 @@ systemctl daemon-reload
 systemctl enable --now "$UNIT_NAME"
 
 echo "Installed: $UNIT_DST"
-echo "Start:     systemctl enable --now ergoms-vpn"
-echo "Status:    systemctl status ergoms-vpn"
-echo "Logs:      journalctl -u ergoms-vpn -f"
-echo "Remove:    ./ergoms-vpn.sh uninstall-service"
+echo "Start:     systemctl enable --now ergoms-secure-connection"
+echo "Status:    systemctl status ergoms-secure-connection"
+echo "Logs:      journalctl -u ergoms-secure-connection -f"
+echo "Remove:    ./ergoms-secure-connection.sh uninstall-service"
 echo
-systemctl --no-pager --full status ergoms-vpn.service || true
+systemctl --no-pager --full status ergoms-secure-connection.service || true

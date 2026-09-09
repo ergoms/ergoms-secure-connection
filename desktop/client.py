@@ -23,6 +23,7 @@ from desktop.config_io import (
     get_server_host,
     get_sing_box_path,
     get_socks_scope,
+    get_kill_switch,
     get_tun_elevate,
     get_tun_enabled,
     get_tun_mtu,
@@ -47,6 +48,12 @@ from desktop.git_proxy import (
 )
 from desktop.paths import Paths, is_frozen, self_command
 from desktop.reverse_ssh import ReverseSshManager
+from desktop.kill_switch import allow_ips as kill_switch_allow_ips
+from desktop.kill_switch import apply as apply_kill_switch
+from desktop.kill_switch import clear as clear_kill_switch
+from desktop.kill_switch import install_commands as kill_switch_install_cmds
+from desktop.kill_switch import is_applied as kill_switch_is_applied
+from desktop.kill_switch import remember_plan as remember_kill_switch_plan
 from desktop.singbox_mode import SingboxModeManager, require_transport
 from desktop.tun import TunManager
 from desktop.sys_proxy import (
@@ -144,7 +151,7 @@ class OpsClient:
         try:
             self.paths.logs_dir.mkdir(parents=True, exist_ok=True)
             stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            with (self.paths.logs_dir / "ergoms-vpn.log").open("a", encoding="utf-8") as fh:
+            with (self.paths.logs_dir / "ergoms-secure-connection.log").open("a", encoding="utf-8") as fh:
                 fh.write(f"{stamp} {msg}\n")
         except OSError:
             pass
@@ -480,7 +487,13 @@ class OpsClient:
             bypass = [str(h) for h in cfg.get("proxy_bypass") or [] if h]
         else:
             bypass = ["*.local", "*.lan"]
-        enable_tun = get_tun_enabled()
+        kill_switch = get_kill_switch()
+        enable_tun = get_tun_enabled() or kill_switch
+        if kill_switch and not get_tun_enabled():
+            self.log("kill switch: поднимаю TUN")
+        prelude: list[str] = []
+        if kill_switch:
+            prelude = self._ensure_kill_switch(cfg)
         self.singbox.start(
             server_host=host,
             transport=transport,
@@ -494,6 +507,8 @@ class OpsClient:
             mtu=get_tun_mtu(cfg),
             vps_proxy_ports=get_vps_proxy_ports(cfg),
             force_restart=True,
+            kill_switch=kill_switch,
+            prelude_cmds=prelude,
         )
         self.set_git_singbox(cfg, http_port)
         self._maybe_start_reverse_ssh(cfg)
@@ -568,7 +583,7 @@ class OpsClient:
         if not active:
             self.log(
                 f"HTTP bridge :{http_port} не слушает — пишу заглушку. "
-                "Сначала: ergoms-vpn on"
+                "Сначала: ergoms-secure-connection on"
             )
         self.write_docker_helpers(http_port=http_port, active=active)
         if active:
@@ -576,7 +591,7 @@ class OpsClient:
             self.log(f"wrapper:   {self.paths.docker_run_ps1} -- IMAGE")
             self.log(
                 f"compose:   -f {self.paths.docker_compose_proxy} "
-                f"(<<: *ergoms-vpn-proxy)"
+                f"(<<: *ergoms-secure-connection-proxy)"
             )
 
     def docker_test(self) -> int:
@@ -584,7 +599,7 @@ class OpsClient:
         self.reload_env()
         http_port = get_http_bridge_port()
         if not _port_open("127.0.0.1", http_port):
-            self.log(f"HTTP bridge :{http_port} down — сначала: ergoms-vpn on")
+            self.log(f"HTTP bridge :{http_port} down — сначала: ergoms-secure-connection on")
             return 2
         # Refresh helpers so docker.env has the current host IP
         self.write_docker_helpers(http_port=http_port, active=True)
@@ -608,6 +623,9 @@ class OpsClient:
 
     def disable_tun(self, *, persist: bool = True) -> None:
         self.reload_env()
+        if persist and get_kill_switch():
+            update_config_key(self.paths.config_path, "kill_switch", False)
+            self.log("kill switch выключен вместе с TUN")
         if persist:
             update_config_key(self.paths.config_path, "tun.enabled", False)
             self.log("tun.enabled=false записан в config.json")
@@ -690,7 +708,7 @@ class OpsClient:
         root = str(self.paths.root)
         prev = env.get("PYTHONPATH", "")
         env["PYTHONPATH"] = root if not prev else f"{root}{os.pathsep}{prev}"
-        env["ERGOMS_VPN_WATCHDOG_CHILD"] = "1"
+        env["ERGOMS_SC_WATCHDOG_CHILD"] = "1"
 
         proc = procutil.popen(args, env=env, cwd=root, detached=True)
         self.paths.watchdog_pid.write_text(str(proc.pid), encoding="utf-8")
@@ -726,7 +744,7 @@ class OpsClient:
         if not self.singbox.running() and not _port_open(
             "127.0.0.1", get_local_socks_port(cfg)
         ):
-            raise RuntimeError("Сначала включите туннель: ergoms-vpn on")
+            raise RuntimeError("Сначала включите туннель: ergoms-secure-connection on")
         self.reverse_ssh.start(cfg)
 
     def disable_reverse_ssh(self, *, persist: bool = True) -> None:
@@ -751,10 +769,33 @@ class OpsClient:
         else:
             self.log("проверка выхода: OK (SOCKS CONNECT прошёл)")
 
+    def _kill_switch_hosts(self, cfg: dict[str, Any]) -> list[str]:
+        hosts = [get_server_host(cfg)]
+        proxy = resolve_corporate_proxy(cfg)
+        if proxy:
+            hosts.append(proxy.split(":")[0])
+        return kill_switch_allow_ips(*hosts)
+
+    def _ensure_kill_switch(self, cfg: dict[str, Any]) -> list[str]:
+        """Apply OS routes now if admin; otherwise return prelude for UAC wrapper."""
+        allow = self._kill_switch_hosts(cfg)
+        if procutil.is_admin() or kill_switch_is_applied():
+            apply_kill_switch(allow, var_dir=self.paths.var_dir, log=self.log)
+            return []
+        cmds = kill_switch_install_cmds(allow)
+        if cmds:
+            remember_kill_switch_plan(self.paths.var_dir, allow)
+            self.log("kill switch: маршруты поставлю вместе с UAC для TUN")
+        return cmds
+
     def enable(self, *, spawn_watchdog: bool = True) -> None:
         self.reload_env()
-        tun = get_tun_enabled()
-        self.log(f"подключение: VLESS+Reality, TUN={'вкл' if tun else 'выкл'}")
+        tun = get_tun_enabled() or get_kill_switch()
+        ks = get_kill_switch()
+        self.log(
+            f"подключение: VLESS+Reality, TUN={'вкл' if tun else 'выкл'}"
+            f", kill switch={'вкл' if ks else 'выкл'}"
+        )
         self.start_singbox_mode()
         if spawn_watchdog:
             self.ensure_watchdog_daemon()
@@ -784,6 +825,10 @@ class OpsClient:
             )
         if stop_err:
             raise stop_err
+        try:
+            clear_kill_switch(var_dir=self.paths.var_dir, log=self.log)
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"kill switch off: {exc}")
         self.log("VPN отключён: sing-box остановлен, PAC/git/Docker сброшены")
 
     def status(self, *, include_git: bool = True) -> dict[str, Any]:
@@ -813,6 +858,12 @@ class OpsClient:
         lines.append("mode             = vless-reality")
         lines.append(f"SOCKS_SCOPE       = {info['socks_scope']}")
         lines.append(f"tun.enabled       = {1 if info['tun_env'] else 0}")
+        info["kill_switch"] = get_kill_switch()
+        info["kill_switch_applied"] = kill_switch_is_applied()
+        lines.append(
+            f"kill_switch       = {1 if info['kill_switch'] else 0}"
+            + (" applied" if info["kill_switch_applied"] else "")
+        )
         if include_git:
             info["git_http_proxy"] = git_get("http.proxy")
             info["git_https_proxy"] = git_get("https.proxy")
@@ -856,7 +907,7 @@ class OpsClient:
             if info["tun_env"]:
                 lines.append(
                     "WARN: TUN=1 but sing-box off — DNS в Docker Desktop сломан "
-                    "(tun-on или ergoms-vpn on)"
+                    "(tun-on или ergoms-secure-connection on)"
                 )
 
         if self.paths.state_path.is_file():

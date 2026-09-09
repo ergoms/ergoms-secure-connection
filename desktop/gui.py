@@ -1,4 +1,4 @@
-"""Qt Quick VPN GUI + system tray for ERGOMS VPN."""
+"""Qt Quick VPN GUI + system tray for ERGOMS SECURE CONNECTION."""
 
 from __future__ import annotations
 

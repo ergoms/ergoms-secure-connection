@@ -10,7 +10,7 @@ from desktop.branding import APP_ID, APP_NAME, ENV_AUTOSTART, ENV_DATA, env
 from desktop.paths import data_root, is_frozen
 
 _RUN_NAME = APP_NAME
-_LEGACY_RUN_NAME = "ops-content"
+_LEGACY_RUN_NAMES = ("ERGOMS VPN", "ops-content")
 _WIN_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 
 
@@ -74,7 +74,7 @@ def _win_command() -> str | None:
         import winreg
     except ImportError:
         return None
-    for name in (_RUN_NAME, _LEGACY_RUN_NAME):
+    for name in (_RUN_NAME, *_LEGACY_RUN_NAMES):
         try:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _WIN_RUN_KEY) as key:
                 value, _typ = winreg.QueryValueEx(key, name)
@@ -102,7 +102,7 @@ def _win_disable() -> None:
         import winreg
     except ImportError:
         return
-    for name in (_RUN_NAME, _LEGACY_RUN_NAME):
+    for name in (_RUN_NAME, *_LEGACY_RUN_NAMES):
         try:
             with winreg.OpenKey(
                 winreg.HKEY_CURRENT_USER, _WIN_RUN_KEY, 0, winreg.KEY_SET_VALUE

@@ -102,6 +102,7 @@ class SingboxModeManager:
         bypass_hosts: list[str] | None = None,
         mtu: int = 1400,
         vps_proxy_ports: list[int] | None = None,
+        kill_switch: bool = False,
     ) -> dict[str, Any]:
         squid_host, squid_port = parse_corporate_proxy(corporate_proxy)
         use_office_proxy = bool(squid_host)
@@ -130,6 +131,7 @@ class SingboxModeManager:
         proc_names = [
             "sing-box",
             "sing-box.exe",
+            "ErgomsSecureConnection.exe",
             "ErgomsVPN.exe",
             "OpsContent.exe",
         ]
@@ -226,11 +228,11 @@ class SingboxModeManager:
                 {
                     "type": "tun",
                     "tag": "tun-in",
-                    "interface_name": "ergoms-vpn-tun",
+                    "interface_name": "ergoms-secure-connection-tun",
                     "address": ["172.19.0.1/30"],
                     "mtu": mtu_val,
                     "auto_route": True,
-                    "strict_route": False,
+                    "strict_route": bool(kill_switch),
                     "stack": "system",
                     "route_exclude_address": route_exclude,
                 }
@@ -382,11 +384,13 @@ class SingboxModeManager:
         mtu: int = 1400,
         vps_proxy_ports: list[int] | None = None,
         force_restart: bool = False,
+        kill_switch: bool = False,
+        prelude_cmds: list[str] | None = None,
     ) -> None:
         exe = self.find_sing_box(sing_box_path)
         if not exe:
             raise RuntimeError(
-                "sing-box не найден. Выполните: ergoms-vpn download-sing-box"
+                "sing-box не найден. Выполните: ergoms-secure-connection download-sing-box"
             )
 
         cfg = self.build_config(
@@ -399,6 +403,7 @@ class SingboxModeManager:
             bypass_hosts=bypass_hosts,
             mtu=mtu,
             vps_proxy_ports=vps_proxy_ports,
+            kill_switch=kill_switch,
         )
         config_text = json.dumps(cfg, indent=2)
         if self.running():
@@ -422,11 +427,12 @@ class SingboxModeManager:
             f"Starting MODE=singbox → VLESS {server_host}:{transport['port']}"
             f"{' via proxy' if (corporate_proxy or '').strip() else ''}"
             f"; socks=:{socks_port} http=:{http_port} tun={int(enable_tun)}"
+            f" kill_switch={int(kill_switch)}"
         )
         if need_admin:
             self.log("TUN: подтвердите UAC — sing-box должен работать от администратора")
 
-        pid = self._launch(exe, elevate=need_admin)
+        pid = self._launch(exe, elevate=need_admin, prelude_cmds=prelude_cmds or [])
         if pid:
             self.pid_path.write_text(str(pid), encoding="utf-8")
             self.log(f"sing-box pid={pid}")
@@ -509,10 +515,13 @@ class SingboxModeManager:
         self._pid_scan_result = None
         self.pid_path.unlink(missing_ok=True)
 
-    def _launch(self, exe: Path, *, elevate: bool) -> int | None:
+    def _launch(
+        self, exe: Path, *, elevate: bool, prelude_cmds: list[str] | None = None
+    ) -> int | None:
         args = [str(exe), "run", "-c", str(self.config_path)]
+        prelude = [c for c in (prelude_cmds or []) if c]
         if sys.platform == "win32" and elevate and not procutil.is_admin():
-            return self._start_elevated_win(exe, self.config_path)
+            return self._start_elevated_win(exe, self.config_path, prelude)
 
         if (
             sys.platform != "win32"
@@ -520,7 +529,7 @@ class SingboxModeManager:
             and hasattr(os, "geteuid")
             and os.geteuid() != 0
         ):
-            return self._start_elevated_linux(args)
+            return self._start_elevated_linux(args, prelude)
 
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         log_f = open(self.log_path, "a", encoding="utf-8")  # noqa: SIM115
@@ -533,13 +542,24 @@ class SingboxModeManager:
         )
         return proc.pid
 
-    def _start_elevated_win(self, exe: Path, config: Path) -> int | None:
+    def _start_elevated_win(
+        self, exe: Path, config: Path, prelude: list[str] | None = None
+    ) -> int | None:
         import ctypes
 
-        params = f'run -c "{config}"'
+        if prelude:
+            wrapper = self.var_dir / "sing-box-elevated.cmd"
+            lines = ["@echo off"]
+            for cmd in prelude:
+                lines.append(f"{cmd} 2>nul")
+            lines.append(f'"{exe}" run -c "{config}"')
+            wrapper.write_text("\r\n".join(lines) + "\r\n", encoding="utf-8")
+            file, params, cwd = str(wrapper), "", str(self.var_dir)
+        else:
+            file, params, cwd = str(exe), f'run -c "{config}"', str(exe.parent)
         rc = int(
             ctypes.windll.shell32.ShellExecuteW(  # type: ignore[attr-defined]
-                None, "runas", str(exe), params, str(exe.parent), 0
+                None, "runas", file, params, cwd, 0
             )
         )
         if rc <= 32:
@@ -555,13 +575,24 @@ class SingboxModeManager:
             time.sleep(0.05)
         return None
 
-    def _start_elevated_linux(self, args: list[str]) -> int | None:
+    def _start_elevated_linux(
+        self, args: list[str], prelude: list[str] | None = None
+    ) -> int | None:
+        import shlex
+
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         log_f = open(self.log_path, "a", encoding="utf-8")  # noqa: SIM115
+        if prelude:
+            inner = " ; ".join(prelude) + " ; exec " + " ".join(
+                shlex.quote(a) for a in args
+            )
+            launched = ["sh", "-c", inner]
+        else:
+            launched = args
         for wrapper in (
-            ["pkexec", *args],
-            ["sudo", "-n", *args],
-            ["sudo", *args],
+            ["pkexec", *launched],
+            ["sudo", "-n", *launched],
+            ["sudo", *launched],
         ):
             try:
                 proc = subprocess.Popen(

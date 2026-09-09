@@ -17,7 +17,7 @@ from desktop import procutil
 
 LogFn = Callable[[str], None]
 
-_LINUX_PROFILE_D = Path("/etc/profile.d/Z50-ergoms-vpn-proxy.sh")
+_LINUX_PROFILE_D = Path("/etc/profile.d/Z50-ergoms-secure-connection-proxy.sh")
 _LINUX_PROFILE_D_LEGACY = Path("/etc/profile.d/Z50-ops-content-proxy.sh")
 _LINUX_ENVIRONMENT = Path("/etc/environment")
 _ENV_PROXY_KEYS = (
@@ -84,7 +84,7 @@ def enable_linux_env_proxy(
     noproxy = "localhost,127.0.0.1,::1"
     profile_body = "\n".join(
         [
-            "# Managed by ERGOMS VPN — do not edit by hand",
+            "# Managed by ERGOMS SECURE CONNECTION — do not edit by hand",
             f'export http_proxy="{proxy}"',
             f'export https_proxy="{proxy}"',
             f'export HTTP_PROXY="{proxy}"',

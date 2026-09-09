@@ -105,7 +105,7 @@ function Install-Libraries {
 function Install-SingBox {
     $py = Join-Path $Root '.venv\Scripts\python.exe'
     if (-not (Test-Path -LiteralPath $py)) {
-        throw '.venv not found - run ERGOMS VPN: setup first'
+        throw '.venv not found - run ERGOMS SECURE CONNECTION: setup first'
     }
     & $py -m desktop download-sing-box
     if ($LASTEXITCODE -ne 0) { throw "download-sing-box failed: $LASTEXITCODE" }
@@ -123,10 +123,10 @@ function Invoke-PyInstaller {
     if (-not (Test-Path -LiteralPath $sb)) {
         Install-SingBox
     }
-    Write-Host 'PyInstaller: ErgomsVPN.spec -> dist/ErgomsVPN.exe'
-    & $poetry run pyinstaller --noconfirm --clean ErgomsVPN.spec
+    Write-Host 'PyInstaller: ErgomsSecureConnection.spec -> dist/ErgomsSecureConnection.exe'
+    & $poetry run pyinstaller --noconfirm --clean ErgomsSecureConnection.spec
     if ($LASTEXITCODE -ne 0) { throw "pyinstaller failed: $LASTEXITCODE" }
-    $exe = Join-Path $Root 'dist\ErgomsVPN.exe'
+    $exe = Join-Path $Root 'dist\ErgomsSecureConnection.exe'
     if (-not (Test-Path -LiteralPath $exe)) { throw "missing $exe" }
     Write-Host "OK: $exe"
 }

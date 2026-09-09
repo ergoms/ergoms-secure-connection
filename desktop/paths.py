@@ -52,18 +52,21 @@ def _appdata_root() -> Path:
     local = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
     base = Path(local)
     current = base / APP_NAME
-    legacy = base / "ops-content"
-    if current.is_dir() or not legacy.is_dir():
+    if current.exists():
         return current
-    return legacy
+    for name in ("ERGOMS VPN", "ops-content"):
+        legacy = base / name
+        if legacy.is_dir():
+            return legacy
+    return current
 
 
 def data_root() -> Path:
     """Writable project root.
 
     - Dev: repository root
-    - Frozen exe: %LOCALAPPDATA%\\ERGOMS VPN (legacy: ops-content)
-    - Override: ERGOMS_VPN_DATA (or OPS_CONTENT_DATA)
+    - Frozen exe: %LOCALAPPDATA%\\ERGOMS SECURE CONNECTION
+    - Override: ERGOMS_SC_DATA
     """
     override = env(ENV_DATA)
     if override:

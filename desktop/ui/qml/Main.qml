@@ -7,7 +7,7 @@ import "Theme.js" as T
 
 ApplicationWindow {
     id: win
-    title: "ERGOMS VPN"
+    title: "ERGOMS SECURE CONNECTION"
     width: 420
     height: 680
     minimumWidth: 420
@@ -57,7 +57,7 @@ ApplicationWindow {
                     anchors.left: parent.left
                     anchors.leftMargin: 18
                     anchors.verticalCenter: parent.verticalCenter
-                    text: "ERGOMS VPN"
+                    text: "ERGOMS SECURE CONNECTION"
                     color: T.text
                     font.pixelSize: 16
                     font.bold: true

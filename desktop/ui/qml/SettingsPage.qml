@@ -78,7 +78,25 @@ Item {
                                 { label: "Выкл", value: "0" },
                                 { label: "Вкл", value: "1" }
                             ]
-                            onActivated: (v) => { bridge.settings.tunAuto = (v === "1") }
+                            onActivated: (v) => {
+                                bridge.settings.tunAuto = (v === "1")
+                                if (v === "0")
+                                    bridge.settings.killSwitch = false
+                            }
+                        }
+                        Text { text: "Kill switch"; color: T.muted; font.pixelSize: 11; font.family: T.fontUi }
+                        Segmented {
+                            width: parent.width
+                            value: bridge.settings.killSwitch ? "1" : "0"
+                            model: [
+                                { label: "Выкл", value: "0" },
+                                { label: "Вкл", value: "1" }
+                            ]
+                            onActivated: (v) => {
+                                bridge.settings.killSwitch = (v === "1")
+                                if (v === "1")
+                                    bridge.settings.tunAuto = true
+                            }
                         }
                         Text { text: "Автозапуск с компьютером"; color: T.muted; font.pixelSize: 11; font.family: T.fontUi }
                         Segmented {

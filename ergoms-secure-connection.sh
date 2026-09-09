@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ERGOMS VPN — CLI wrapper → Python client
+# ERGOMS SECURE CONNECTION — CLI wrapper → Python client
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

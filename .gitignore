@@ -33,6 +33,7 @@ var/*
 .netlify_site_id
 .ops-content.*
 .ergoms-vpn.*
+.ergoms-secure-connection.*
 ssh-debug.log
 ssh-debug.out
 

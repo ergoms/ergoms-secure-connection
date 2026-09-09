@@ -163,7 +163,7 @@ class ReverseSshManager:
             raise RuntimeError("Set real server.host in config.json")
         socks = get_local_socks_port(cfg)
         if not procutil.wait_port_open("127.0.0.1", socks, timeout=2.0):
-            raise RuntimeError(f"SOCKS 127.0.0.1:{socks} down — сначала ergoms-vpn on")
+            raise RuntimeError(f"SOCKS 127.0.0.1:{socks} down — сначала ergoms-secure-connection on")
 
         ssh = _which("ssh")
         if not ssh:
@@ -233,7 +233,7 @@ class ReverseSshManager:
         ]
 
         env = os.environ.copy()
-        env["ERGOMS_VPN_SOCKS"] = f"127.0.0.1:{socks}"
+        env["ERGOMS_SC_SOCKS"] = f"127.0.0.1:{socks}"
         env["OPS_CONTENT_SOCKS"] = f"127.0.0.1:{socks}"
         root = str(self.paths.root)
         prev = env.get("PYTHONPATH", "")

@@ -1,1 +1,1 @@
-"""Shared helpers for ERGOMS VPN (SOCKS ProxyCommand, PAC, routing)."""
+"""Shared helpers for ERGOMS SECURE CONNECTION (SOCKS ProxyCommand, PAC, routing)."""

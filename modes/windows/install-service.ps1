@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Install ERGOMS VPN as a Windows service (autostart, LocalSystem, TUN without UAC).
+  Install ERGOMS SECURE CONNECTION as a Windows service (autostart, LocalSystem, TUN without UAC).
 #>
 param(
     [string]$PythonExe = '',
@@ -9,8 +9,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$ServiceId = 'ergoms-vpn'
-$LegacyServiceId = 'ops-content'
+$ServiceId = 'ergoms-secure-connection'
+$LegacyServiceIds = @('ergoms-vpn', 'ops-content')
 $WinswVersion = '2.12.0'
 $WinswUrl = "https://github.com/winsw/winsw/releases/download/v$WinswVersion/WinSW-x64.exe"
 
@@ -28,8 +28,8 @@ function Get-PythonExe {
     if ($PythonExe -and (Test-Path -LiteralPath $PythonExe)) {
         return $PythonExe
     }
-    if ($env:ERGOMS_VPN_PYTHON -and (Test-Path -LiteralPath $env:ERGOMS_VPN_PYTHON)) {
-        return $env:ERGOMS_VPN_PYTHON
+    if ($env:ERGOMS_SC_PYTHON -and (Test-Path -LiteralPath $env:ERGOMS_SC_PYTHON)) {
+        return $env:ERGOMS_SC_PYTHON
     }
     if ($env:OPS_CONTENT_PYTHON -and (Test-Path -LiteralPath $env:OPS_CONTENT_PYTHON)) {
         return $env:OPS_CONTENT_PYTHON
@@ -84,7 +84,7 @@ Set-Location $Root
 
 $config = Join-Path $Root 'config.json'
 if (-not (Test-Path -LiteralPath $config)) {
-    Write-Error "Missing $config - run: .\ergoms-vpn.ps1 init"
+    Write-Error "Missing $config - run: .\ergoms-secure-connection.ps1 init"
     exit 1
 }
 
@@ -93,13 +93,13 @@ $tools = Join-Path $Root 'tools'
 $logs = Join-Path $Root 'logs'
 New-Item -ItemType Directory -Force -Path $tools, $logs | Out-Null
 
-$winsw = Join-Path $tools 'ergoms-vpn-service.exe'
-$xmlPath = Join-Path $tools 'ergoms-vpn-service.xml'
+$winsw = Join-Path $tools 'ergoms-secure-connection-service.exe'
+$xmlPath = Join-Path $tools 'ergoms-secure-connection-service.xml'
 
 if (-not (Test-Path -LiteralPath $winsw)) {
-    Write-Host "[ERGOMS VPN] downloading WinSW $WinswVersion -> tools/ergoms-vpn-service.exe"
+    Write-Host "[ERGOMS SECURE CONNECTION] downloading WinSW $WinswVersion -> tools/ergoms-secure-connection-service.exe"
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    $tmp = Join-Path $tools 'ergoms-vpn-service.exe.download'
+    $tmp = Join-Path $tools 'ergoms-secure-connection-service.exe.download'
     try {
         Invoke-WebRequest -Uri $WinswUrl -OutFile $tmp -UseBasicParsing
         Move-Item -LiteralPath $tmp -Destination $winsw -Force
@@ -110,7 +110,7 @@ if (-not (Test-Path -LiteralPath $winsw)) {
 Failed to download WinSW ($WinswUrl): $_
 Download WinSW-x64.exe manually and save as:
   $winsw
-Then retry: .\ergoms-vpn.ps1 install-service
+Then retry: .\ergoms-secure-connection.ps1 install-service
 "@
         exit 1
     }
@@ -120,10 +120,10 @@ Then retry: .\ergoms-vpn.ps1 install-service
 $env:PYTHONPATH = $Root
 & $py -m desktop off 2>$null | Out-Null
 
-foreach ($id in @($ServiceId, $LegacyServiceId)) {
+foreach ($id in @($ServiceId) + $LegacyServiceIds) {
     $existing = Get-Service -Name $id -ErrorAction SilentlyContinue
     if ($existing) {
-        Write-Host "[ERGOMS VPN] replacing existing service $id"
+        Write-Host "[ERGOMS SECURE CONNECTION] replacing existing service $id"
         & $winsw stop 2>$null | Out-Null
         Start-Sleep -Seconds 1
         & $winsw uninstall 2>$null | Out-Null
@@ -139,8 +139,8 @@ $logsEsc = Escape-XmlValue $logs
 $xml = @"
 <service>
   <id>$ServiceId</id>
-  <name>ERGOMS VPN</name>
-  <description>ERGOMS VPN VLESS+Reality (sing-box TUN + SOCKS/HTTP)</description>
+  <name>ERGOMS SECURE CONNECTION</name>
+  <description>ERGOMS SECURE CONNECTION VLESS+Reality (sing-box TUN + SOCKS/HTTP)</description>
   <executable>$pyEsc</executable>
   <arguments>-u -m desktop watch</arguments>
   <workingdirectory>$rootEsc</workingdirectory>
@@ -161,7 +161,7 @@ $xml = @"
   <depend>Tcpip</depend>
   <env name="PYTHONUNBUFFERED" value="1"/>
   <env name="PYTHONPATH" value="$rootEsc"/>
-  <env name="ERGOMS_VPN_DATA" value="$rootEsc"/>
+  <env name="ERGOMS_SC_DATA" value="$rootEsc"/>
 </service>
 "@
 $utf8 = New-Object System.Text.UTF8Encoding $false
@@ -180,13 +180,13 @@ $svc = Get-Service -Name $ServiceId -ErrorAction SilentlyContinue
 Write-Host "Installed: service $ServiceId ($winsw)"
 Write-Host "Start:     Start-Service $ServiceId"
 Write-Host "Status:    Get-Service $ServiceId"
-Write-Host "Logs:      $logs\ergoms-vpn-service.wrapper.log  and  logs\watchdog.log"
-Write-Host "Remove:    .\ergoms-vpn.ps1 uninstall-service"
+Write-Host "Logs:      $logs\ergoms-secure-connection-service.wrapper.log  and  logs\watchdog.log"
+Write-Host "Remove:    .\ergoms-secure-connection.ps1 uninstall-service"
 Write-Host ""
 if ($svc) {
     Write-Host ("State:     {0}" -f $svc.Status)
     if ($svc.Status -ne 'Running') {
-        Write-Host "Service is not Running yet - see logs\ergoms-vpn-service*.log" -ForegroundColor Yellow
+        Write-Host "Service is not Running yet - see logs\ergoms-secure-connection-service*.log" -ForegroundColor Yellow
     }
 }
 else {

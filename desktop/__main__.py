@@ -47,7 +47,7 @@ def _has_display() -> bool:
 
 def _run_connect_socks(argv: list[str]) -> int:
     if len(argv) != 2:
-        print("usage: ergoms-vpn connect-socks <host> <port>", file=sys.stderr)
+        print("usage: ergoms-secure-connection connect-socks <host> <port>", file=sys.stderr)
         return 2
     import lib.connect_socks as connect_socks
 
@@ -57,13 +57,13 @@ def _run_connect_socks(argv: list[str]) -> int:
 
 def _show_help() -> int:
     print(
-        """ERGOMS VPN — клиент VLESS+Reality (Windows / Linux)
+        """ERGOMS SECURE CONNECTION — клиент VLESS+Reality (Windows / Linux)
 
 Конфиг: один файл config.json  (образец: config/config.example.json)
 
 Команды (одинаковы везде):
   init                 создать config.json
-  on / off             включить / выключить (+ TUN если tun.enabled)
+  on / off             включить / выключить (TUN и kill switch по умолчанию вкл.)
   start / stop         то же, что on / off
   status               состояние
   probe HOST [PORT]    CONNECT через Squid
@@ -85,8 +85,8 @@ def _show_help() -> int:
 
 Запуск:
   python -m desktop <cmd> …
-  ./ergoms-vpn.sh <cmd> …           # Linux
-  .\\ergoms-vpn.ps1 <cmd> …         # Windows
+  ./ergoms-secure-connection.sh <cmd> …           # Linux
+  .\\ergoms-secure-connection.ps1 <cmd> …         # Windows
 """
     )
     return 0
@@ -128,7 +128,7 @@ def _run_service(cmd: str) -> int:
     if sys.platform == "win32":
         script = _ROOT / "modes" / "windows" / f"{cmd}.ps1"
         if not script.is_file():
-            print(f"[ERGOMS VPN] ERROR: missing {script}", file=sys.stderr)
+            print(f"[ERGOMS SECURE CONNECTION] ERROR: missing {script}", file=sys.stderr)
             return 1
         powershell = os.path.join(
             os.environ.get("SystemRoot", r"C:\Windows"),
@@ -148,7 +148,7 @@ def _run_service(cmd: str) -> int:
         )
     script = _ROOT / "modes" / "linux" / f"{cmd}.sh"
     if not script.is_file():
-        print(f"[ERGOMS VPN] ERROR: missing {script}", file=sys.stderr)
+        print(f"[ERGOMS SECURE CONNECTION] ERROR: missing {script}", file=sys.stderr)
         return 1
     return int(subprocess.call(["bash", str(script)]))
 
@@ -169,7 +169,7 @@ def _run_encrypt(rest: list[str]) -> int:
     password = password or _ask_password(confirm=True)
     apply_config(paths.config_path, force=True, env_path=paths.env_path)
     encrypt_file(paths.config_path, out, password)
-    print(f"[ERGOMS VPN] encrypted → {out}")
+    print(f"[ERGOMS SECURE CONNECTION] encrypted → {out}")
     return 0
 
 
@@ -185,13 +185,13 @@ def _run_decrypt(rest: list[str]) -> int:
     if not src.is_absolute():
         src = Path.cwd() / src
     if not src.is_file():
-        print(f"[ERGOMS VPN] ERROR: file not found: {src}", file=sys.stderr)
+        print(f"[ERGOMS SECURE CONNECTION] ERROR: file not found: {src}", file=sys.stderr)
         return 1
     password = password or _ask_password(confirm=False)
     cfg = decrypt_file(src, paths.config_path, password)
     save_config(paths.config_path, ensure_config_defaults(cfg))
     apply_config(paths.config_path, force=True)
-    print(f"[ERGOMS VPN] decrypted → {paths.config_path}")
+    print(f"[ERGOMS SECURE CONNECTION] decrypted → {paths.config_path}")
     return 0
 
 
@@ -206,7 +206,7 @@ def _run_cli(cmd: str, rest: list[str]) -> int:
     from desktop.client import OpsClient
 
     def log(msg: str) -> None:
-        print(f"[ERGOMS VPN] {msg}", flush=True)
+        print(f"[ERGOMS SECURE CONNECTION] {msg}", flush=True)
 
     client = OpsClient(log=log)
     try:
@@ -224,7 +224,7 @@ def _run_cli(cmd: str, rest: list[str]) -> int:
             host = rest[0] if rest else ""
             port = int(rest[1]) if len(rest) > 1 else 443
             if not host:
-                print("usage: ergoms-vpn probe HOST [PORT]", file=sys.stderr)
+                print("usage: ergoms-secure-connection probe HOST [PORT]", file=sys.stderr)
                 return 2
             return client.probe(host, port)
         elif cmd == "test":
@@ -260,7 +260,7 @@ def _run_cli(cmd: str, rest: list[str]) -> int:
             print(f"unknown command: {cmd}", file=sys.stderr)
             return _show_help() or 2
     except Exception as exc:  # noqa: BLE001
-        print(f"[ERGOMS VPN] ERROR: {exc}", file=sys.stderr)
+        print(f"[ERGOMS SECURE CONNECTION] ERROR: {exc}", file=sys.stderr)
         return 1
     return 0
 
@@ -268,7 +268,7 @@ def _run_cli(cmd: str, rest: list[str]) -> int:
 def _run_gui() -> int:
     if not _has_display():
         print(
-            "[ERGOMS VPN] GUI недоступен (нет DISPLAY). Используйте CLI, напр.: python -m desktop on",
+            "[ERGOMS SECURE CONNECTION] GUI недоступен (нет DISPLAY). Используйте CLI, напр.: python -m desktop on",
             file=sys.stderr,
         )
         return _show_help() or 1
@@ -296,17 +296,10 @@ def main(argv: list[str] | None = None) -> int:
 
     # No args: GUI when frozen (double-click exe); else help
     if not argv:
+        from desktop.branding import ENV_GUI, env
+
         frozen = bool(getattr(sys, "frozen", False))
-        if (
-            frozen
-            or autostart
-            or os.environ.get("ERGOMS_VPN_GUI", os.environ.get("OPS_CONTENT_GUI", "")).strip()
-            in (
-                "1",
-                "true",
-                "yes",
-            )
-        ):
+        if frozen or autostart or env(ENV_GUI).lower() in ("1", "true", "yes"):
             return _run_gui()
         return _show_help()
 

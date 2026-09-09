@@ -70,7 +70,7 @@ def detect_bind_interface(dest: str) -> str | None:
         if i + 1 >= len(parts):
             return None
         dev = parts[i + 1].strip()
-        if not dev or dev.startswith("ops-content") or dev.startswith("ergoms-vpn"):
+        if not dev or dev.startswith("ops-content") or dev.startswith("ergoms-secure-connection"):
             return None
         return dev
     return None
@@ -109,7 +109,7 @@ def _direct_python_paths() -> list[str]:
         siblings = [exe.with_name(n) for n in ("pythonw.exe", "python.exe", "python3.exe")]
         for sib in siblings:
             add(sib)
-        # Frozen ErgomsVPN.exe: ProxyCommand falls back to PATH pythonw
+        # Frozen ErgomsSecureConnection.exe: ProxyCommand falls back to PATH pythonw
         if not any(s.is_file() for s in siblings):
             for name in ("pythonw.exe", "python.exe", "python3.exe"):
                 w = shutil.which(name)

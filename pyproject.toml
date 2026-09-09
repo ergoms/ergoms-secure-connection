@@ -1,7 +1,7 @@
 [project]
-name = "ergoms-vpn"
+name = "ergoms-secure-connection"
 version = "1.0.0"
-description = "ERGOMS VPN — клиент VLESS+Reality через корпоративный Squid на VPS"
+description = "ERGOMS SECURE CONNECTION — клиент VLESS+Reality через корпоративный Squid на VPS"
 readme = "README.md"
 requires-python = ">=3.10,<3.15"
 dependencies = []
@@ -11,8 +11,7 @@ gui = ["PySide6_Essentials>=6.6"]
 build = ["pyinstaller>=6.3"]
 
 [project.scripts]
-ergoms-vpn = "desktop.__main__:main"
-ops-content = "desktop.__main__:main"
+ergoms-secure-connection = "desktop.__main__:main"
 
 [tool.poetry]
 packages = [
