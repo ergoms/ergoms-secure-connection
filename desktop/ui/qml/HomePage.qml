@@ -46,19 +46,6 @@ Item {
             wrapMode: Text.WordWrap
         }
 
-        Flow {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 56
-            Layout.alignment: Qt.AlignHCenter
-            spacing: 6
-
-            Chip { label: "SOCKS :" + bridge.socksPort; lit: bridge.socksUp }
-            Chip { label: "HTTP :" + bridge.httpPort; lit: bridge.httpUp }
-            Chip { label: "PAC"; lit: bridge.pacUp }
-            Chip { label: "TUN"; lit: bridge.tun }
-            Chip { label: "Kill switch"; lit: bridge.killSwitchOn }
-        }
-
         PrimaryButton {
             Layout.fillWidth: true
             Layout.preferredHeight: 50
