@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from desktop.branding import APP_NAME, ORG_NAME
-from desktop.paths import bundle_dir
+from desktop.paths import Paths, bundle_dir
 
 
 def run_gui() -> None:
@@ -24,6 +24,11 @@ def run_gui() -> None:
         )
         raise SystemExit(1) from None
 
+    data = Paths()
+    data.ensure_dirs()
+    qml_cache = data.var_dir / "qmlcache"
+    qml_cache.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("QML_DISK_CACHE_PATH", str(qml_cache))
     os.environ.setdefault("QT_QUICK_CONTROLS_STYLE", "Material")
     try:
         from PySide6.QtQuickControls2 import QQuickStyle
@@ -67,6 +72,7 @@ def run_gui() -> None:
     _round_corners(window)
 
     tray = _setup_tray(app, icon, bridge)
+    bridge.closingUi.connect(tray.hide)
     bridge.quitRequested.connect(app.quit)
     app.aboutToQuit.connect(bridge.teardownNow)
     if getattr(bridge, "startHidden", False):

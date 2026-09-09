@@ -144,14 +144,18 @@ class ReverseSshManager:
     def running(self) -> bool:
         return self.pid() is not None
 
-    def stop(self) -> None:
+    def stop(self, *, scan_cmdline: bool = True) -> None:
         targets: list[int] = []
         old = self.pid()
         if old:
             targets.append(old)
         self.pid_path.unlink(missing_ok=True)
-        targets.extend(procutil.pids_cmdline_match("connect_socks.py", cache=False))
-        targets.extend(procutil.pids_cmdline_match("connect-socks", cache=False))
+        if scan_cmdline and old:
+            found = procutil.pids_cmdline_match_many(
+                ("connect_socks.py", "connect-socks"), cache=False
+            )
+            for extra in found.values():
+                targets.extend(extra)
         killed = procutil.kill_pids(targets, exclude=os.getpid())
         for pid in killed:
             self.log(f"reverse-ssh pid={pid} stopped")

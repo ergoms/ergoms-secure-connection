@@ -8,10 +8,7 @@ import shutil
 import socket
 import subprocess
 import sys
-import tarfile
 import time
-import urllib.request
-import zipfile
 from pathlib import Path
 from typing import Callable
 
@@ -277,6 +274,9 @@ class TunManager:
 
     def ensure_downloaded(self, proxy_url: str | None = None) -> Path:
         """Download sing-box for current OS/arch into tools/."""
+        import tarfile
+        import zipfile
+
         existing = self.find_sing_box()
         if existing:
             return existing
@@ -328,6 +328,7 @@ class TunManager:
         return target
 
     def _download_file(self, url: str, dest: Path, *, proxy_url: str | None = None) -> None:
+        import urllib.request
         curl = shutil.which("curl.exe") or shutil.which("curl")
         if curl:
             args = [curl, "-fsSL", "--connect-timeout", "30", "--max-time", "180", "-o", str(dest), url]

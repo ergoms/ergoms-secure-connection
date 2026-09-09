@@ -96,14 +96,14 @@ run_pyinstaller() {
     install_singbox
   fi
   py="$(venv_python)"
-  echo "PyInstaller: ErgomsSecureConnection.spec -> dist/ErgomsSecureConnection"
+  echo "PyInstaller: ErgomsSecureConnection.spec -> dist/ErgomsSecureConnection/"
   "$py" -m PyInstaller --noconfirm --clean ErgomsSecureConnection.spec
-  if [[ -f "${ROOT}/dist/ErgomsSecureConnection.exe" ]]; then
-    echo "OK: ${ROOT}/dist/ErgomsSecureConnection.exe"
-  elif [[ -f "${ROOT}/dist/ErgomsSecureConnection" ]]; then
-    echo "OK: ${ROOT}/dist/ErgomsSecureConnection"
+  if [[ -f "${ROOT}/dist/ErgomsSecureConnection/ErgomsSecureConnection.exe" ]]; then
+    echo "OK: ${ROOT}/dist/ErgomsSecureConnection/ErgomsSecureConnection.exe"
+  elif [[ -x "${ROOT}/dist/ErgomsSecureConnection/ErgomsSecureConnection" ]]; then
+    echo "OK: ${ROOT}/dist/ErgomsSecureConnection/ErgomsSecureConnection"
   else
-    echo "pyinstaller finished but dist/ErgomsSecureConnection is missing" >&2
+    echo "pyinstaller finished but dist/ErgomsSecureConnection/ is missing" >&2
     exit 1
   fi
 }

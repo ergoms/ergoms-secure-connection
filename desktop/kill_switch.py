@@ -27,6 +27,8 @@ BLACKHOLE_V4 = (
 BLACKHOLE_GW = "127.0.0.1"
 BLACKHOLE_METRIC = 512
 _SKIP_GW = frozenset({"on-link", "0.0.0.0", "127.0.0.1", "::", "::1"})
+_APPLIED_TTL = 2.0
+_applied_cache: tuple[float, bool] | None = None
 
 
 def _noop(_msg: str) -> None:
@@ -197,7 +199,26 @@ def _cmds_linux_remove(allow: list[str], gw: str | None) -> list[str]:
     return cmds
 
 
-def is_applied() -> bool:
+def invalidate_applied_cache() -> None:
+    global _applied_cache
+    _applied_cache = None
+
+
+def is_applied(*, force: bool = False) -> bool:
+    global _applied_cache
+    now = time.monotonic()
+    if (
+        not force
+        and _applied_cache
+        and now - _applied_cache[0] < _APPLIED_TTL
+    ):
+        return _applied_cache[1]
+    result = _is_applied_uncached()
+    _applied_cache = (now, result)
+    return result
+
+
+def _is_applied_uncached() -> bool:
     if sys.platform == "win32":
         try:
             r = procutil.run(["route", "print", "-4"], timeout=8)
@@ -229,6 +250,7 @@ def apply(allow: list[str], *, var_dir: Path, log: LogFn = _noop) -> bool:
         return False
     cmds = install_commands(unique, gw=gw)
     ok = _run_privileged_lines(cmds, log=log, expect_applied=True)
+    invalidate_applied_cache()
     present = is_applied()
     _save_state(var_dir, {"allow": unique, "gw": gw, "applied": present})
     if present:
@@ -246,6 +268,7 @@ def clear(*, var_dir: Path, log: LogFn = _noop) -> None:
     gw = str(st.get("gw") or "") or None
     cmds = remove_commands(allow, gw=gw)
     _run_privileged_lines(cmds, log=log, ignore_fail=True, expect_applied=False)
+    invalidate_applied_cache()
     try:
         state_path(var_dir).unlink(missing_ok=True)
     except OSError:
@@ -356,10 +379,10 @@ def _elevate_win_script(
         if expect_applied is None:
             time.sleep(0.8)
             return True
-        if is_applied() == expect_applied:
+        if is_applied(force=True) == expect_applied:
             return True
         time.sleep(0.2)
-    return is_applied() == expect_applied if expect_applied is not None else True
+    return is_applied(force=True) == expect_applied if expect_applied is not None else True
 
 
 def _elevate_linux_script(script: Path, *, log: LogFn) -> bool:
