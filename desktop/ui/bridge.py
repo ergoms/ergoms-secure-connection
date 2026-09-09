@@ -308,7 +308,7 @@ class GuiBridge(QObject):
         if not self._config_ready and not self._active:
             self.importConfigFile()
             return
-        if self._active:
+        if self._active or self._kill_switch_on:
             self._run_bg(self.client.disable, waiting="Отключение…")
         else:
             self._run_bg(self.client.enable, waiting="Подключение…")
@@ -780,7 +780,7 @@ class GuiBridge(QObject):
         elif ks_on:
             title, sub, color = (
                 "Нет сети",
-                "Kill switch блокирует интернет — подключите или отключите VPN",
+                "Kill switch блокирует интернет — отключите VPN, чтобы снять блок",
                 _C_WARN,
             )
             power = "Отключить"

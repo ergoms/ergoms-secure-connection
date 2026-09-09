@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -227,7 +228,7 @@ def apply(allow: list[str], *, var_dir: Path, log: LogFn = _noop) -> bool:
         _save_state(var_dir, {"allow": unique, "gw": "", "applied": False})
         return False
     cmds = install_commands(unique, gw=gw)
-    ok = _run_privileged_lines(cmds, log=log)
+    ok = _run_privileged_lines(cmds, log=log, expect_applied=True)
     present = is_applied()
     _save_state(var_dir, {"allow": unique, "gw": gw, "applied": present})
     if present:
@@ -244,7 +245,7 @@ def clear(*, var_dir: Path, log: LogFn = _noop) -> None:
     allow = [str(x) for x in (st.get("allow") or []) if x]
     gw = str(st.get("gw") or "") or None
     cmds = remove_commands(allow, gw=gw)
-    _run_privileged_lines(cmds, log=log, ignore_fail=True)
+    _run_privileged_lines(cmds, log=log, ignore_fail=True, expect_applied=False)
     try:
         state_path(var_dir).unlink(missing_ok=True)
     except OSError:
@@ -260,6 +261,7 @@ def _run_privileged_lines(
     *,
     log: LogFn,
     ignore_fail: bool = False,
+    expect_applied: bool | None = None,
 ) -> bool:
     if not lines:
         return True
@@ -267,7 +269,7 @@ def _run_privileged_lines(
         return _run_lines_now(lines, ignore_fail=ignore_fail)
     script = _write_helper_script(lines)
     if sys.platform == "win32":
-        return _elevate_win_script(script, log=log)
+        return _elevate_win_script(script, log=log, expect_applied=expect_applied)
     return _elevate_linux_script(script, log=log)
 
 
@@ -336,44 +338,28 @@ def _write_helper_script(lines: list[str]) -> Path:
     return path
 
 
-def _elevate_win_script(script: Path, *, log: LogFn) -> bool:
+def _elevate_win_script(
+    script: Path, *, log: LogFn, expect_applied: bool | None = None
+) -> bool:
     import ctypes
-    from ctypes import wintypes
 
-    class SHELLEXECUTEINFOW(ctypes.Structure):
-        _fields_ = [
-            ("cbSize", wintypes.DWORD),
-            ("fMask", wintypes.ULONG),
-            ("hwnd", wintypes.HWND),
-            ("lpVerb", wintypes.LPCWSTR),
-            ("lpFile", wintypes.LPCWSTR),
-            ("lpParameters", wintypes.LPCWSTR),
-            ("lpDirectory", wintypes.LPCWSTR),
-            ("nShow", ctypes.c_int),
-            ("hInstApp", wintypes.HINSTANCE),
-            ("lpIDList", ctypes.c_void_p),
-            ("lpClass", wintypes.LPCWSTR),
-            ("hkeyClass", wintypes.HKEY),
-            ("dwHotKey", wintypes.DWORD),
-            ("hIconOrMonitor", wintypes.HANDLE),
-            ("hProcess", wintypes.HANDLE),
-        ]
-
-    see_noclose = 0x00000040
-    see_noasync = 0x00000100
-    sei = SHELLEXECUTEINFOW()
-    sei.cbSize = ctypes.sizeof(sei)
-    sei.fMask = see_noclose | see_noasync
-    sei.lpVerb = "runas"
-    sei.lpFile = str(script)
-    sei.nShow = 0
-    if not ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(sei)):  # type: ignore[attr-defined]
+    rc = int(
+        ctypes.windll.shell32.ShellExecuteW(  # type: ignore[attr-defined]
+            None, "runas", str(script), None, str(script.parent), 0
+        )
+    )
+    if rc <= 32:
         log("kill switch: UAC отклонён")
         return False
-    if sei.hProcess:
-        ctypes.windll.kernel32.WaitForSingleObject(sei.hProcess, 20000)
-        ctypes.windll.kernel32.CloseHandle(sei.hProcess)
-    return True
+    deadline = time.monotonic() + 20.0
+    while time.monotonic() < deadline:
+        if expect_applied is None:
+            time.sleep(0.8)
+            return True
+        if is_applied() == expect_applied:
+            return True
+        time.sleep(0.2)
+    return is_applied() == expect_applied if expect_applied is not None else True
 
 
 def _elevate_linux_script(script: Path, *, log: LogFn) -> bool:
