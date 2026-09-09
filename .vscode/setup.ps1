@@ -183,13 +183,21 @@ function Get-IsccExe {
     return $null
 }
 
+function Get-WingetExe {
+    $cmd = Get-Command winget -ErrorAction SilentlyContinue
+    if ($cmd -and (Test-Path -LiteralPath $cmd.Source)) { return $cmd.Source }
+    $apps = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\winget.exe'
+    if (Test-Path -LiteralPath $apps) { return $apps }
+    return $null
+}
+
 function Install-InnoSetup {
     Write-Host 'Inno Setup not found - installing via winget...'
-    $winget = Get-Command winget -ErrorAction SilentlyContinue
+    $winget = Get-WingetExe
     if (-not $winget) {
         throw 'Inno Setup 6 (ISCC.exe) not found and winget is unavailable'
     }
-    & $winget.Source install -e --id JRSoftware.InnoSetup --accept-package-agreements --accept-source-agreements
+    & $winget install -e --id JRSoftware.InnoSetup --accept-package-agreements --accept-source-agreements | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "winget Inno Setup failed: $LASTEXITCODE" }
     $iscc = Get-IsccExe
     if (-not $iscc) { throw 'Inno Setup installed but ISCC.exe not found' }
@@ -202,7 +210,11 @@ function Invoke-Installer {
         throw 'missing dist/ErgomsSecureConnection/ErgomsSecureConnection.exe — run build first'
     }
     $iscc = Get-IsccExe
-    if (-not $iscc) { $iscc = Install-InnoSetup }
+    if (-not $iscc) {
+        Install-InnoSetup | Out-Null
+        $iscc = Get-IsccExe
+    }
+    if (-not $iscc) { throw 'ISCC.exe not found after Inno Setup install' }
     $ver = Get-AppVersion
     $iss = Join-Path $Root 'installer\ErgomsSecureConnection.iss'
     Write-Host "Inno Setup: $iscc /DAppVersion=$ver"
