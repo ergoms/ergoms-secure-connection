@@ -27,6 +27,7 @@ Item {
         }
 
         Text {
+            visible: !bridge.busy
             Layout.fillWidth: true
             horizontalAlignment: Text.AlignHCenter
             text: bridge.statusTitle
@@ -37,6 +38,7 @@ Item {
         }
 
         Text {
+            visible: !bridge.busy
             Layout.fillWidth: true
             horizontalAlignment: Text.AlignHCenter
             text: bridge.statusSub
@@ -47,6 +49,7 @@ Item {
         }
 
         PrimaryButton {
+            visible: !bridge.busy
             Layout.fillWidth: true
             Layout.preferredHeight: 50
             text: bridge.powerText
@@ -54,16 +57,6 @@ Item {
             danger: bridge.active
             enabled: !bridge.busy
             onClicked: bridge.toggleConnection()
-        }
-
-        Text {
-            Layout.fillWidth: true
-            text: bridge.busyText
-            color: T.muted
-            font.pixelSize: 11
-            font.family: T.fontUi
-            horizontalAlignment: Text.AlignHCenter
-            opacity: bridge.busy ? 1 : 0
         }
 
         Item { Layout.fillHeight: true }

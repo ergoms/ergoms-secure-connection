@@ -429,8 +429,9 @@ class SingboxModeManager:
             f"; socks=:{socks_port} http=:{http_port} tun={int(enable_tun)}"
             f" kill_switch={int(kill_switch)}"
         )
-        if need_admin:
-            self.log("TUN: подтвердите UAC — sing-box должен работать от администратора")
+        if need_admin and not procutil.is_admin():
+            self.log("TUN: нужен один запрос прав — дальше без окон Windows")
+        self._ensure_win_firewall(exe)
 
         pid = self._launch(exe, elevate=need_admin, prelude_cmds=prelude_cmds or [])
         if pid:
@@ -616,6 +617,41 @@ class SingboxModeManager:
         for pid in procutil.pids_named("sing-box.exe", "sing-box"):
             return pid
         return None
+
+    def _ensure_win_firewall(self, exe: Path) -> None:
+        """Allow sing-box once so Windows does not show the firewall popup."""
+        if sys.platform != "win32" or not procutil.is_admin():
+            return
+        marker = self.var_dir / "firewall-sing-box.flag"
+        key = str(exe.resolve()).lower()
+        try:
+            if marker.is_file() and marker.read_text(encoding="utf-8").strip() == key:
+                return
+        except OSError:
+            pass
+        name = "ERGOMS SECURE CONNECTION (sing-box)"
+        for direction in ("in", "out"):
+            procutil.run(
+                [
+                    "netsh",
+                    "advfirewall",
+                    "firewall",
+                    "add",
+                    "rule",
+                    f"name={name}",
+                    f"dir={direction}",
+                    "action=allow",
+                    f"program={exe}",
+                    "enable=yes",
+                    "profile=any",
+                ],
+                timeout=8,
+            )
+        try:
+            marker.write_text(key, encoding="utf-8")
+        except OSError:
+            pass
+        self.log("брандмауэр: sing-box разрешён без окна Windows")
 
 
 def _port_open(host: str, port: int, timeout: float = 0.35) -> bool:

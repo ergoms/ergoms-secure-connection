@@ -213,8 +213,12 @@ def _run_cli(cmd: str, rest: list[str]) -> int:
         if cmd == "init":
             client.init()
         elif cmd in ("on", "start"):
+            if _elevate_cli_if_needed(client, "on", rest):
+                return 0
             client.enable()
         elif cmd in ("off", "stop"):
+            if _elevate_cli_if_needed(client, "off", rest):
+                return 0
             client.disable()
         elif cmd == "status":
             st = client.status()
@@ -230,8 +234,12 @@ def _run_cli(cmd: str, rest: list[str]) -> int:
         elif cmd == "test":
             client.test_bypass()
         elif cmd == "tun-on":
+            if _elevate_cli_if_needed(client, "tun-on", rest):
+                return 0
             client.enable_tun()
         elif cmd == "tun-off":
+            if _elevate_cli_if_needed(client, "tun-off", rest):
+                return 0
             client.disable_tun()
         elif cmd == "reverse-on":
             client.enable_reverse_ssh()
@@ -265,6 +273,33 @@ def _run_cli(cmd: str, rest: list[str]) -> int:
     return 0
 
 
+_RESUME_FLAGS = {
+    "--connect": "on",
+    "--disconnect": "off",
+    "--tun-on": "tun-on",
+    "--tun-off": "tun-off",
+}
+
+
+def _elevate_cli_if_needed(client: object, action: str, rest: list[str]) -> bool:
+    """Relaunch CLI elevated once. True = this process should exit."""
+    from desktop import procutil
+    from desktop.paths import self_command
+
+    needs = getattr(client, "needs_elevation", None)
+    if not callable(needs) or not needs(action=action):
+        return False
+    args = [*self_command(), action, *rest]
+    ok = procutil.relaunch_as_admin(args, cwd=str(client.paths.root))  # type: ignore[attr-defined]
+    if not ok:
+        print(
+            "[ERGOMS SECURE CONNECTION] нужны права администратора (TUN / kill switch)",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    return True
+
+
 def _run_gui() -> int:
     if not _has_display():
         print(
@@ -291,8 +326,23 @@ def _ensure_utf8_stdio() -> None:
 def main(argv: list[str] | None = None) -> int:
     _ensure_utf8_stdio()
     argv = list(sys.argv[1:] if argv is None else argv)
-    autostart = "--autostart" in argv
-    argv = [a for a in argv if a != "--autostart"]
+    autostart = False
+    resume = ""
+    kept: list[str] = []
+    for arg in argv:
+        if arg == "--autostart":
+            autostart = True
+            continue
+        mapped = _RESUME_FLAGS.get(arg)
+        if mapped:
+            resume = mapped
+            continue
+        kept.append(arg)
+    argv = kept
+    if resume:
+        from desktop.branding import ENV_RESUME
+
+        os.environ[ENV_RESUME] = resume
 
     # No args: GUI when frozen (double-click exe); else help
     if not argv:

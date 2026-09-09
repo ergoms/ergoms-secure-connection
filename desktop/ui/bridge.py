@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +15,8 @@ from PySide6.QtWidgets import QFileDialog, QInputDialog, QLineEdit
 
 from desktop import __version__
 from desktop import autostart
+from desktop import procutil
+from desktop.branding import ENV_RESUME, env
 from desktop.client import OpsClient
 from desktop.config_crypto import MAGIC, decrypt_config
 from desktop.config_io import (
@@ -29,7 +32,7 @@ from desktop.config_io import (
     load_config,
     save_config,
 )
-from desktop.paths import Paths
+from desktop.paths import Paths, gui_command
 
 LogFn = Callable[[str], None]
 
@@ -157,10 +160,19 @@ class GuiBridge(QObject):
         self._status_timer.timeout.connect(self._on_poll_tick)
         self._schedulePoll.connect(self._status_timer.start)
         QTimer.singleShot(300, self._on_poll_tick)
+        resume = env(ENV_RESUME).lower()
         if autostart.launched_from_autostart():
             self._start_hidden = True
-            if self._config_ready:
-                QTimer.singleShot(600, self.enableConnection)
+        if resume == "on":
+            QTimer.singleShot(400, self.enableConnection)
+        elif resume == "off":
+            QTimer.singleShot(400, self.disableConnection)
+        elif resume == "tun-on":
+            QTimer.singleShot(400, self.enableTun)
+        elif resume == "tun-off":
+            QTimer.singleShot(400, self.disableTun)
+        elif autostart.launched_from_autostart() and self._config_ready:
+            QTimer.singleShot(600, self.enableConnection)
 
     # ── properties ──────────────────────────────────────────────────────
 
@@ -301,6 +313,29 @@ class GuiBridge(QObject):
         self._page = page
         self.pageChanged.emit()
 
+    def _handoff_if_needed(self, action: str) -> bool:
+        """Relaunch elevated once. True = caller must stop (handoff or cancel)."""
+        if not self.client.needs_elevation(action=action):
+            return False
+        flags = [f"--{action}"]
+        if action == "on":
+            flags = ["--connect"]
+        elif action == "off":
+            flags = ["--disconnect"]
+        if self._start_hidden:
+            flags.append("--autostart")
+        ok = procutil.relaunch_as_admin(
+            gui_command(*flags),
+            cwd=str(self.paths.root),
+        )
+        if ok:
+            os._exit(0)
+        self.toast.emit(
+            "Нужны права администратора один раз — потом окна Windows больше не появятся.",
+            "error",
+        )
+        return True
+
     @Slot()
     def toggleConnection(self) -> None:
         if self._busy:
@@ -309,19 +344,29 @@ class GuiBridge(QObject):
             self.importConfigFile()
             return
         if self._active or self._kill_switch_on:
+            if self._handoff_if_needed("off"):
+                return
             self._run_bg(self.client.disable, waiting="Отключение…")
         else:
+            if self._handoff_if_needed("on"):
+                return
             self._run_bg(self.client.enable, waiting="Подключение…")
 
     @Slot()
     def enableConnection(self) -> None:
-        if not self._busy:
-            self._run_bg(self.client.enable, waiting="Подключение…")
+        if self._busy:
+            return
+        if self._handoff_if_needed("on"):
+            return
+        self._run_bg(self.client.enable, waiting="Подключение…")
 
     @Slot()
     def disableConnection(self) -> None:
-        if not self._busy:
-            self._run_bg(self.client.disable, waiting="Отключение…")
+        if self._busy:
+            return
+        if self._handoff_if_needed("off"):
+            return
+        self._run_bg(self.client.disable, waiting="Отключение…")
 
     @Slot()
     def toggleTun(self) -> None:
@@ -334,13 +379,19 @@ class GuiBridge(QObject):
 
     @Slot()
     def enableTun(self) -> None:
-        if not self._busy:
-            self._run_bg(self.client.enable_tun, waiting="Включаю TUN…")
+        if self._busy:
+            return
+        if self._handoff_if_needed("tun-on"):
+            return
+        self._run_bg(self.client.enable_tun, waiting="Включаю TUN…")
 
     @Slot()
     def disableTun(self) -> None:
-        if not self._busy:
-            self._run_bg(self.client.disable_tun, waiting="Выключаю TUN…")
+        if self._busy:
+            return
+        if self._handoff_if_needed("tun-off"):
+            return
+        self._run_bg(self.client.disable_tun, waiting="Выключаю TUN…")
 
     @Slot()
     def loadSettings(self) -> None:
