@@ -100,12 +100,20 @@ def backup_win_proxy(backup_path: Path) -> None:
     backup_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
+def _is_our_pac(url: str) -> bool:
+    text = (url or "").strip().lower()
+    if "127.0.0.1" not in text and "localhost" not in text:
+        return False
+    return "proxy.pac" in text or ":1089" in text
+
+
 def restore_win_proxy(backup_path: Path, log: LogFn = _noop) -> None:
     if not _is_windows():
         return
     import winreg
 
     with _reg_key() as key:
+        current_pac = _get_reg_str(key, "AutoConfigURL", "")
         if backup_path.is_file():
             b: dict[str, Any] = json.loads(backup_path.read_text(encoding="utf-8-sig"))
             _set_reg_int(key, "ProxyEnable", int(b.get("ProxyEnable") or 0))
@@ -116,18 +124,20 @@ def restore_win_proxy(backup_path: Path, log: LogFn = _noop) -> None:
             if "AutoDetect" in b:
                 _set_reg_int(key, "AutoDetect", int(b.get("AutoDetect") or 0))
             ac = b.get("AutoConfigURL") or ""
-            if ac:
+            if ac and not _is_our_pac(str(ac)):
                 _set_reg_str(key, "AutoConfigURL", str(ac))
             else:
                 _delete_reg(key, "AutoConfigURL")
             backup_path.unlink(missing_ok=True)
             notify_proxy_change()
             log("Windows proxy restored from backup")
-        else:
+            return
+        if _is_our_pac(current_pac):
             _delete_reg(key, "AutoConfigURL")
             _set_reg_int(key, "ProxyEnable", 0)
             notify_proxy_change()
-            log("Windows proxy disabled")
+            log("Windows PAC снят")
+            return
 
 
 def enable_browser_pac(

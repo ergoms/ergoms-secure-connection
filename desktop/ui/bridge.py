@@ -125,6 +125,7 @@ class GuiBridge(QObject):
         self._last_status_sig = ""
         self._status_busy = False
         self._closing = False
+        self._overrides_cleared = False
 
         self._settings = QQmlPropertyMap(self)
         for key, value in _settings_defaults().items():
@@ -572,21 +573,30 @@ class GuiBridge(QObject):
         self.showRequested.emit()
 
     @Slot()
+    def teardownNow(self) -> None:
+        """Synchronous undo of git/PAC/Docker leftovers (quit / aboutToQuit)."""
+        try:
+            self.client.teardown_overrides()
+        except Exception:  # noqa: BLE001
+            pass
+
+    @Slot()
     def quitApp(self) -> None:
         if self._closing:
             return
         self._closing = True
         self._status_timer.stop()
+        self.teardownNow()
 
         def work() -> None:
             try:
-                if self._active or self._tun or self._singbox_up:
-                    self.client.disable()
+                self.client.disable()
             except Exception:  # noqa: BLE001
                 try:
                     self.client.stop_http_bridge()
                 except Exception:  # noqa: BLE001
                     pass
+                self.teardownNow()
             self.quitRequested.emit()
 
         threading.Thread(target=work, daemon=True).start()
@@ -697,6 +707,14 @@ class GuiBridge(QObject):
         self._active = active
         self._tun = tun
         self._singbox_up = singbox
+        if active:
+            self._overrides_cleared = False
+        elif not self._overrides_cleared:
+            self._overrides_cleared = True
+            try:
+                self.client.teardown_overrides()
+            except Exception:  # noqa: BLE001
+                pass
         self._watchdog_up = bool(st.get("watchdog_running"))
         self._reverse_ssh_up = bool(st.get("reverse_ssh_running"))
         self._reverse_ssh_port = int(st.get("reverse_ssh_listen") or 2222)
