@@ -27,19 +27,20 @@ Item {
         }
 
         Text {
-            visible: !bridge.busy
             Layout.fillWidth: true
             horizontalAlignment: Text.AlignHCenter
-            text: bridge.statusTitle
+            text: bridge.busy ? bridge.busyText : bridge.statusTitle
             color: T.text
             font.pixelSize: 24
             font.bold: true
             font.family: T.fontUi
+            Behavior on opacity { NumberAnimation { duration: 160 } }
         }
 
         Text {
-            visible: !bridge.busy
+            visible: !bridge.busy && bridge.statusSub.length > 0
             Layout.fillWidth: true
+            Layout.preferredHeight: visible ? implicitHeight : 0
             horizontalAlignment: Text.AlignHCenter
             text: bridge.statusSub
             color: T.muted
@@ -49,7 +50,6 @@ Item {
         }
 
         PrimaryButton {
-            visible: !bridge.busy
             Layout.fillWidth: true
             Layout.preferredHeight: 50
             text: bridge.powerText

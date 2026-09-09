@@ -130,6 +130,9 @@ def detect_docker_host_ip(
             return _DOCKER_DESKTOP_HOST_FALLBACK
         return None
 
+    if sys.platform == "win32":
+        return _DOCKER_DESKTOP_HOST_FALLBACK
+
     images = (
         "alpine:3.20",
         "alpine:latest",

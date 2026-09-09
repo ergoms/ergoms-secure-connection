@@ -168,6 +168,7 @@ def _restore_git_proxy(backup_path: Path) -> bool:
 
 
 def _keys_to_clear(pairs: list[tuple[str, str]], *, keep_restored_proxy: bool) -> list[str]:
+    del keep_restored_proxy
     extra = (
         "http.extraheader",
         "http.version",
@@ -183,7 +184,7 @@ def _keys_to_clear(pairs: list[tuple[str, str]], *, keep_restored_proxy: bool) -
         low = key.lower()
         drop = False
         if low in ("http.proxy", "https.proxy"):
-            drop = (not keep_restored_proxy) or _is_local_bridge_proxy(val)
+            drop = _is_local_bridge_proxy(val)
         elif "proxy" in low and _is_local_bridge_proxy(val):
             drop = True
         elif "insteadof" in low and instead_re.search(f"{key} {val}"):

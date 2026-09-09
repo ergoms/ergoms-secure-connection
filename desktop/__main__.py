@@ -307,6 +307,24 @@ def _run_gui() -> int:
             file=sys.stderr,
         )
         return _show_help() or 1
+    from desktop.branding import ENV_RESUME, env
+    from desktop.elevate import ensure_elevated_gui
+
+    flags: list[str] = []
+    from desktop import autostart
+
+    if autostart.launched_from_autostart():
+        flags.append("--autostart")
+    resume = env(ENV_RESUME).lower()
+    flags.extend(
+        {
+            "on": ["--connect"],
+            "off": ["--disconnect"],
+            "tun-on": ["--tun-on"],
+            "tun-off": ["--tun-off"],
+        }.get(resume, [])
+    )
+    ensure_elevated_gui(flags)
     from desktop.gui import run_gui
 
     run_gui()

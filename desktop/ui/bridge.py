@@ -100,7 +100,10 @@ class GuiBridge(QObject):
 
         self._log_lines: list[str] = []
         self.client = OpsClient(
-            paths=self.paths, log=self._enqueue_log, startup_cleanup=False
+            paths=self.paths,
+            log=self._enqueue_log,
+            startup_cleanup=False,
+            inprocess_helpers=True,
         )
 
         self._active = False
@@ -135,6 +138,7 @@ class GuiBridge(QObject):
         self._status_busy = False
         self._closing = False
         self._overrides_cleared = False
+        self._await_status = False
 
         self._settings = QQmlPropertyMap(self)
         for key, value in _settings_defaults().items():
@@ -412,6 +416,8 @@ class GuiBridge(QObject):
         self._settings.insert("socksScope", str(cfg.get("socks_scope") or "full"))
         self._settings.insert("tunAuto", bool(tun.get("enabled")))
         self._settings.insert("killSwitch", bool(cfg.get("kill_switch", True)))
+        self._settings.insert("gitProxy", bool(cfg.get("git_proxy")))
+        self._settings.insert("dockerProxy", bool(cfg.get("docker_proxy")))
         self._settings.insert("httpBridgePort", str(cfg.get("http_bridge_port") or 1088))
         self._settings.insert(
             "useProxy",
@@ -477,6 +483,8 @@ class GuiBridge(QObject):
             self._settings.insert("proxyBypass", ", ".join(STANDARD_BYPASS_PRESET))
             self._settings.insert("proxyBypassVia", "direct")
             self._settings.insert("reverseSsh", False)
+        self._settings.insert("gitProxy", on)
+        self._settings.insert("dockerProxy", on)
         self._mode_label = "Корпоративный" if on else "VPN"
         self.modeLabelChanged.emit()
 
@@ -587,6 +595,8 @@ class GuiBridge(QObject):
                 ]
                 cfg["proxy_bypass_via"] = "direct"
             cfg["kill_switch"] = bool(s.value("killSwitch"))
+            cfg["git_proxy"] = bool(s.value("gitProxy"))
+            cfg["docker_proxy"] = bool(s.value("dockerProxy"))
             cfg.setdefault("tun", {})
             cfg["tun"]["enabled"] = bool(s.value("tunAuto")) or cfg["kill_switch"]
             cfg["tun"]["elevate"] = True
@@ -680,9 +690,6 @@ class GuiBridge(QObject):
         self._busy_text = waiting if busy else ""
         self.busyChanged.emit()
         self.busyTextChanged.emit()
-        if busy:
-            self._status_sub = waiting
-            self.statusSubChanged.emit()
 
     def _run_bg(self, fn: Callable[[], None], waiting: str = "Подождите…") -> None:
         if self._busy:
@@ -702,10 +709,16 @@ class GuiBridge(QObject):
 
     @Slot(str)
     def _on_bg_finished(self, err: str) -> None:
-        self._set_busy(False)
+        self._await_status = True
         if err:
             self.toast.emit(err, "error")
         self._refresh_status(force=True)
+
+    def _finish_await_status(self) -> None:
+        if not self._await_status:
+            return
+        self._await_status = False
+        self._set_busy(False)
 
     @Slot()
     def _on_poll_tick(self) -> None:
@@ -749,11 +762,12 @@ class GuiBridge(QObject):
     @Slot(object, bool)
     def _on_status_ready(self, st: object, force: bool) -> None:
         if isinstance(st, dict):
-            self._apply_status(st, force=force)
+            self._apply_status(st, force=force or self._await_status)
+        self._finish_await_status()
 
     @Slot(str)
     def _apply_status_error(self, err: str) -> None:
-        if self._busy:
+        if self._busy and not self._await_status:
             return
         self._status_title = "Ошибка"
         self._status_sub = err[:80]
@@ -761,6 +775,7 @@ class GuiBridge(QObject):
         self.statusTitleChanged.emit()
         self.statusSubChanged.emit()
         self.statusColorChanged.emit()
+        self._finish_await_status()
 
     def _apply_status(self, st: dict[str, Any], *, force: bool = False) -> None:
         singbox = bool(st.get("singbox_running"))
@@ -777,7 +792,7 @@ class GuiBridge(QObject):
             f"|{st.get('watchdog_running')}|{st.get('reverse_ssh_running')}"
             f"|{st.get('reverse_ssh_listen')}|{ks_on}"
         )
-        if not force and (sig == self._last_status_sig or self._busy):
+        if not force and (sig == self._last_status_sig or (self._busy and not self._await_status)):
             return
         self._last_status_sig = sig
 
@@ -810,13 +825,8 @@ class GuiBridge(QObject):
                 pass
 
         socks_s = f"SOCKS :{self._socks_port}"
-        http_s = f"HTTP :{self._http_port}"
         if singbox and tun and socks_up:
-            title, sub, color = (
-                "Защищено",
-                f"{target} · {socks_s} · TUN",
-                _C_ACCENT,
-            )
+            title, sub, color = "Защищено", "", _C_ACCENT
             power = "Отключить"
         elif singbox and not socks_up:
             title, sub, color = (
@@ -826,7 +836,7 @@ class GuiBridge(QObject):
             )
             power = "Отключить"
         elif singbox:
-            title, sub, color = "Подключено", f"{target} · {socks_s} · {http_s}", _C_OK
+            title, sub, color = "Подключено", "", _C_OK
             power = "Отключить"
         elif tun:
             title, sub, color = "TUN", "Без VLESS", _C_WARN
@@ -842,7 +852,7 @@ class GuiBridge(QObject):
             title, sub, color = (
                 ("Нет конфига", "Загрузите config.json или .enc", _C_MUTED)
                 if not self._config_ready
-                else ("Отключено", "Нажмите «Подключить»", _C_MUTED)
+                else ("Отключено", "", _C_MUTED)
             )
             power = "Загрузить конфиг" if not self._config_ready else "Подключить"
 
@@ -881,6 +891,8 @@ def _settings_defaults() -> dict[str, Any]:
         "socksScope": "full",
         "tunAuto": True,
         "killSwitch": True,
+        "gitProxy": False,
+        "dockerProxy": False,
         "httpBridgePort": "1088",
         "corporateProxy": "",
         "serverHost": "",

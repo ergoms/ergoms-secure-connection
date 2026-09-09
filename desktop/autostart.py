@@ -27,6 +27,10 @@ def launched_from_autostart(argv: list[str] | None = None) -> bool:
 
 def is_enabled() -> bool:
     if sys.platform == "win32":
+        from desktop.elevate import TASK_AUTOSTART, task_enabled
+
+        if task_enabled(TASK_AUTOSTART):
+            return True
         return _win_command() is not None
     current = _linux_desktop().is_file()
     config = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
@@ -36,18 +40,40 @@ def is_enabled() -> bool:
 
 def enable() -> None:
     if sys.platform == "win32":
-        _win_enable()
+        from desktop.elevate import TASK_AUTOSTART, set_task_enabled
+
+        _win_disable()
+        if not set_task_enabled(TASK_AUTOSTART, True):
+            raise RuntimeError(
+                "Не удалось включить автозапуск (нужны права администратора)"
+            )
         return
     _linux_enable()
 
 
 def disable() -> None:
     if sys.platform == "win32":
+        from desktop.elevate import TASK_AUTOSTART, set_task_enabled
+
+        set_task_enabled(TASK_AUTOSTART, False)
         _win_disable()
         return
     _linux_desktop().unlink(missing_ok=True)
     config = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
     (config / "autostart" / "ops-content.desktop").unlink(missing_ok=True)
+
+
+def migrate_legacy_run() -> None:
+    """Replace HKCU\\...\\Run with the scheduled autostart task (elevated)."""
+    if sys.platform != "win32":
+        return
+    cmd = _win_command()
+    if not cmd:
+        return
+    _win_disable()
+    from desktop.elevate import TASK_AUTOSTART, set_task_enabled
+
+    set_task_enabled(TASK_AUTOSTART, True)
 
 
 def _gui_args() -> list[str]:

@@ -96,6 +96,8 @@ def default_config_template() -> dict[str, Any]:
         "watchdog_interval": 15,
         "watchdog_max_retries": 5,
         "kill_switch": True,
+        "git_proxy": False,
+        "docker_proxy": False,
         "server": {
             "host": "YOUR_VPS_IP_OR_HOSTNAME",
             "port": 443,
@@ -213,6 +215,8 @@ def apply_corporate_profile(cfg: dict[str, Any]) -> dict[str, Any]:
     out["corporate_proxy"] = CORPORATE_PROXY_PRESET
     out["proxy_bypass"] = list(CORPORATE_BYPASS_PRESET)
     out.setdefault("proxy_bypass_via", "direct")
+    out["git_proxy"] = True
+    out["docker_proxy"] = True
     return out
 
 
@@ -246,6 +250,14 @@ def ensure_config_defaults(cfg: dict[str, Any]) -> dict[str, Any]:
     out.setdefault("watchdog_interval", tmpl["watchdog_interval"])
     out.setdefault("watchdog_max_retries", tmpl["watchdog_max_retries"])
     out.setdefault("kill_switch", tmpl["kill_switch"])
+    if "git_proxy" not in out:
+        out["git_proxy"] = _as_bool(out.get("corporate"), False)
+    else:
+        out["git_proxy"] = _as_bool(out.get("git_proxy"), False)
+    if "docker_proxy" not in out:
+        out["docker_proxy"] = _as_bool(out.get("corporate"), False)
+    else:
+        out["docker_proxy"] = _as_bool(out.get("docker_proxy"), False)
 
     # Migrate legacy ssh{} → server{} (SSH tunnel mode removed)
     legacy = out.pop("ssh", None)
@@ -327,6 +339,8 @@ def ensure_config_defaults(cfg: dict[str, Any]) -> dict[str, Any]:
     out["watchdog_interval"] = max(5, _as_int(out.get("watchdog_interval"), 15))
     out["watchdog_max_retries"] = max(1, _as_int(out.get("watchdog_max_retries"), 5))
     out["kill_switch"] = _as_bool(out.get("kill_switch"), True)
+    out["git_proxy"] = _as_bool(out.get("git_proxy"), False)
+    out["docker_proxy"] = _as_bool(out.get("docker_proxy"), False)
     mtu = tun.get("mtu")
     tun["mtu"] = max(1280, min(1500, _as_int(mtu, 1500)))
     return out
@@ -584,6 +598,16 @@ def get_kill_switch(cfg: dict[str, Any] | None = None) -> bool:
 
 def get_tun_elevate(cfg: dict[str, Any] | None = None) -> bool:
     return True
+
+
+def get_git_proxy_enabled(cfg: dict[str, Any] | None = None) -> bool:
+    src = cfg if cfg is not None else _runtime()
+    return _as_bool((src or {}).get("git_proxy"), False)
+
+
+def get_docker_proxy_enabled(cfg: dict[str, Any] | None = None) -> bool:
+    src = cfg if cfg is not None else _runtime()
+    return _as_bool((src or {}).get("docker_proxy"), False)
 
 
 def get_watchdog_enabled(cfg: dict[str, Any] | None = None) -> bool:

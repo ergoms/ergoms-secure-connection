@@ -185,6 +185,10 @@ class TunnelWatchdog:
         self._reconnecting = False
 
     @property
+    def running(self) -> bool:
+        return bool(self._thread and self._thread.is_alive())
+
+    @property
     def desired(self) -> bool:
         return self._desired
 

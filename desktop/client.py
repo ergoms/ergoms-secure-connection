@@ -25,6 +25,8 @@ from desktop.config_io import (
     get_sing_box_path,
     get_socks_scope,
     get_kill_switch,
+    get_git_proxy_enabled,
+    get_docker_proxy_enabled,
     get_tun_elevate,
     get_tun_enabled,
     get_tun_mtu,
@@ -147,10 +149,14 @@ class OpsClient:
         log: LogFn = _noop,
         *,
         startup_cleanup: bool = True,
+        inprocess_helpers: bool = False,
     ) -> None:
         self.paths = paths or Paths()
         self._user_log = log
         self.log = self._log
+        self._inprocess_helpers = inprocess_helpers
+        self._pac_server: Any = None
+        self._watchdog: Any = None
         self.paths.ensure_dirs()
         if self.paths.config_path.is_file():
             apply_config(self.paths.config_path, env_path=self.paths.env_path)
@@ -313,6 +319,15 @@ class OpsClient:
         )
 
     def stop_pac_server(self) -> None:
+        if self._pac_server is not None:
+            try:
+                self._pac_server.stop(log=self.log)
+            except Exception as exc:  # noqa: BLE001
+                self.log(f"PAC off: {exc}")
+            self._pac_server = None
+            return
+        if self._inprocess_helpers:
+            return
         targets: list[int] = []
         old = _pid_from_file(self.paths.pac_pid, unlink=True)
         if old:
@@ -323,8 +338,38 @@ class OpsClient:
         for pid in killed:
             self.log(f"pac-serve pid={pid} stopped")
 
+    def _start_pac_inprocess(self, cfg: dict[str, Any], *, proxy_port: int) -> str:
+        from desktop.pac_serve import PacServer
+        from lib.http_via_socks import build_pac
+
+        scope = get_socks_scope()
+        mode = "full" if scope == "full" else "github"
+        pac_port = get_pac_listen_port()
+        bypass_via = str(cfg.get("proxy_bypass_via") or "direct").strip().lower()
+        if bypass_via not in ("direct", "corporate"):
+            bypass_via = "direct"
+        pac_hosts, bypass = self._bridge_hosts(cfg, mode)
+        self.stop_pac_server()
+        corp = resolve_corporate_proxy(cfg)
+        body = build_pac(
+            int(proxy_port),
+            mode,
+            pac_hosts,
+            bypass,
+            corp,
+            bypass_via,
+        )
+        srv = PacServer()
+        srv.start(body, listen_host="127.0.0.1", listen_port=pac_port, log=self.log)
+        self._pac_server = srv
+        url = f"http://127.0.0.1:{pac_port}/proxy.pac"
+        self.log(f"PAC {url} → PROXY 127.0.0.1:{proxy_port}")
+        return url
+
     def start_pac_server(self, cfg: dict[str, Any], *, proxy_port: int) -> str:
         """Spawn PAC-only child; returns AutoConfigURL (PROXY line → proxy_port)."""
+        if self._inprocess_helpers:
+            return self._start_pac_inprocess(cfg, proxy_port=proxy_port)
         scope = get_socks_scope()
         mode = "full" if scope == "full" else "github"
         pac_port = get_pac_listen_port()
@@ -427,19 +472,29 @@ class OpsClient:
                 disable_linux_env_proxy(self.paths.env_proxy_backup, log=self.log)
             except Exception as exc:  # noqa: BLE001
                 self.log(f"env proxy off: {exc}")
-            try:
-                clear_git_proxy(
-                    self.paths.cli_env,
-                    self.paths.cli_ps1,
-                    log=self.log,
-                    backup_path=self.paths.git_proxy_backup,
-                )
-            except Exception as exc:  # noqa: BLE001
-                self.log(f"git proxy off: {exc}")
-            try:
-                self.write_docker_helpers(http_port=get_http_bridge_port(), active=False)
-            except Exception as exc:  # noqa: BLE001
-                self.log(f"docker proxy off: {exc}")
+            git_marked = (
+                self.paths.git_proxy_backup.is_file()
+                or self.paths.cli_env.is_file()
+                or self.paths.cli_ps1.is_file()
+            )
+            if git_marked or get_git_proxy_enabled():
+                try:
+                    clear_git_proxy(
+                        self.paths.cli_env,
+                        self.paths.cli_ps1,
+                        log=self.log,
+                        backup_path=self.paths.git_proxy_backup,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    self.log(f"git proxy off: {exc}")
+            docker_marked = self.paths.docker_proxy_backup.is_file()
+            if docker_marked or get_docker_proxy_enabled():
+                try:
+                    self.write_docker_helpers(
+                        http_port=get_http_bridge_port(), active=False
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    self.log(f"docker proxy off: {exc}")
         finally:
             self._teardown_lock.release()
 
@@ -454,22 +509,57 @@ class OpsClient:
 
     def set_git_singbox(self, cfg: dict[str, Any], http_port: int) -> None:
         """Point CLI/docker/browser at sing-box HTTP inbound + PAC server."""
-        if get_tun_enabled():
-            # TUN already routes git. Global http.proxy only survives a crash.
-            clear_git_proxy(
-                self.paths.cli_env,
-                self.paths.cli_ps1,
-                log=self.log,
-                backup_path=self.paths.git_proxy_backup,
+        self._apply_integrations(cfg, http_port)
+
+    def _apply_integrations(self, cfg: dict[str, Any], http_port: int) -> None:
+        """Git / Docker / PAC after sing-box is up. Git and Docker are optional."""
+        if get_git_proxy_enabled(cfg):
+            if get_tun_enabled():
+                clear_git_proxy(
+                    self.paths.cli_env,
+                    self.paths.cli_ps1,
+                    log=self.log,
+                    backup_path=self.paths.git_proxy_backup,
+                )
+            else:
+                set_git_http_proxy(
+                    f"http://127.0.0.1:{http_port}",
+                    log=self.log,
+                    backup_path=self.paths.git_proxy_backup,
+                )
+            write_cli_env(http_port, self.paths.cli_env, self.paths.cli_ps1)
+            self.log(
+                f"git via {'TUN' if get_tun_enabled() else f'sing-box HTTP :{http_port}'}"
             )
-        else:
-            set_git_http_proxy(
-                f"http://127.0.0.1:{http_port}",
-                log=self.log,
-                backup_path=self.paths.git_proxy_backup,
-            )
-        write_cli_env(http_port, self.paths.cli_env, self.paths.cli_ps1)
-        self.write_docker_helpers(cfg, http_port=http_port, active=True)
+        elif (
+            self.paths.git_proxy_backup.is_file()
+            or self.paths.cli_env.is_file()
+            or self.paths.cli_ps1.is_file()
+        ):
+            try:
+                clear_git_proxy(
+                    self.paths.cli_env,
+                    self.paths.cli_ps1,
+                    log=self.log,
+                    backup_path=self.paths.git_proxy_backup,
+                )
+            except Exception as exc:  # noqa: BLE001
+                self.log(f"git proxy off: {exc}")
+
+        if get_docker_proxy_enabled(cfg):
+            def _docker_bg() -> None:
+                try:
+                    self.write_docker_helpers(cfg, http_port=http_port, active=True)
+                except Exception as exc:  # noqa: BLE001
+                    self.log(f"docker proxy: {exc}")
+
+            threading.Thread(target=_docker_bg, daemon=True).start()
+        elif self.paths.docker_proxy_backup.is_file():
+            try:
+                self.write_docker_helpers(cfg, http_port=http_port, active=False)
+            except Exception as exc:  # noqa: BLE001
+                self.log(f"docker proxy off: {exc}")
+
         pac_url = self.start_pac_server(cfg, proxy_port=http_port)
         self._enable_browser_pac(cfg, http_port, pac_url=pac_url)
         enable_linux_env_proxy(
@@ -477,7 +567,6 @@ class OpsClient:
             self.paths.env_proxy_backup,
             log=self.log,
         )
-        self.log(f"git via {'TUN' if get_tun_enabled() else f'sing-box HTTP :{http_port}'}")
 
     def start_singbox_mode(self) -> None:
         """VLESS+Reality through Squid (sing-box)."""
@@ -693,12 +782,15 @@ class OpsClient:
             self.log(f"leftover pid={pid} stopped")
 
     def _reap_helpers(self) -> None:
-        """Stop watchdog / PAC / HTTP bridge / reverse-ssh without extra PowerShell."""
-        traces = self._helper_traces()
+        """Stop leftover helper children. Skip cmdline scan unless pid files remain."""
         http_port = get_http_bridge_port()
         pac_port = get_pac_listen_port()
-        by_port = procutil.pids_listening_on_many([http_port, pac_port], cache=False)
+        ports = [http_port]
+        if self._pac_server is None:
+            ports.append(pac_port)
+        by_port = procutil.pids_listening_on_many(ports, cache=False)
         targets: list[int] = []
+        had_pid = False
         for path in (
             self.paths.watchdog_pid,
             self.paths.pac_pid,
@@ -707,10 +799,11 @@ class OpsClient:
         ):
             pid = _pid_from_file(path, unlink=True)
             if pid:
+                had_pid = True
                 targets.append(pid)
         for pids in by_port.values():
             targets.extend(pids)
-        if traces or any(by_port.values()):
+        if had_pid:
             for extra in procutil.pids_cmdline_match_many(
                 _HELPER_CMDLINE, cache=False
             ).values():
@@ -760,6 +853,10 @@ class OpsClient:
         self.log(f"sing-box ready (auto): {path}")
 
     def watchdog_daemon_alive(self) -> bool:
+        if self._watchdog is not None and getattr(self._watchdog, "running", False):
+            return True
+        if self._inprocess_helpers:
+            return False
         if not self.paths.watchdog_pid.is_file():
             return False
         try:
@@ -768,7 +865,34 @@ class OpsClient:
             return False
         return bool(pid and procutil.pid_alive(pid))
 
+    def _stop_watchdog_inprocess(self) -> None:
+        wd = self._watchdog
+        if wd is None:
+            return
+        try:
+            wd.set_desired(False)
+            wd.stop()
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"watchdog stop: {exc}")
+        self._watchdog = None
+
+    def _ensure_watchdog_inprocess(self) -> None:
+        if not get_watchdog_enabled():
+            self._stop_watchdog_inprocess()
+            self.log("WATCHDOG=0 — фоновый сторож не запускаем")
+            return
+        from desktop.watchdog import TunnelWatchdog
+
+        if self._watchdog is None:
+            self._watchdog = TunnelWatchdog(self, log=self.log)
+        self._watchdog.set_desired(True)
+        self._watchdog.start()
+
     def stop_watchdog_daemon(self) -> None:
+        if self._watchdog is not None or self._inprocess_helpers:
+            self._stop_watchdog_inprocess()
+            if self._inprocess_helpers:
+                return
         targets: list[int] = []
         pid = _pid_from_file(self.paths.watchdog_pid, unlink=True)
         if pid and pid != os.getpid():
@@ -791,6 +915,9 @@ class OpsClient:
     def ensure_watchdog_daemon(self) -> None:
         """Spawn background `watch --daemon` so CLI `on` keeps monitoring after exit."""
         self.reload_env()
+        if self._inprocess_helpers:
+            self._ensure_watchdog_inprocess()
+            return
         if not get_watchdog_enabled():
             self.log("WATCHDOG=0 — фоновый сторож не запускаем")
             return
@@ -921,7 +1048,7 @@ class OpsClient:
         )
         self.start_singbox_mode()
         if spawn_watchdog:
-            if procutil.is_admin():
+            if procutil.is_admin() and not self._inprocess_helpers:
                 self.stop_watchdog_daemon()
             self.ensure_watchdog_daemon()
 
@@ -939,6 +1066,8 @@ class OpsClient:
     def disable(self) -> None:
         self.reload_env()
         self.log("отключение VPN…")
+        self._stop_watchdog_inprocess()
+        self.stop_pac_server()
         self._reap_helpers()
         stop_err: Exception | None = None
         try:

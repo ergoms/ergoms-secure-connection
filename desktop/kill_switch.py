@@ -27,7 +27,7 @@ BLACKHOLE_V4 = (
 BLACKHOLE_GW = "127.0.0.1"
 BLACKHOLE_METRIC = 512
 _SKIP_GW = frozenset({"on-link", "0.0.0.0", "127.0.0.1", "::", "::1"})
-_APPLIED_TTL = 2.0
+_APPLIED_TTL = 10.0
 _applied_cache: tuple[float, bool] | None = None
 
 
@@ -297,8 +297,17 @@ def _run_privileged_lines(
 
 
 def _run_lines_now(lines: list[str], *, ignore_fail: bool) -> bool:
+    cleaned = [ln.strip() for ln in lines if ln and ln.strip()]
+    if not cleaned:
+        return True
+    if sys.platform == "win32" and len(cleaned) > 1:
+        try:
+            r = procutil.run(["cmd", "/d", "/c", " & ".join(cleaned)], timeout=20)
+        except (OSError, FileNotFoundError):
+            return ignore_fail
+        return r.returncode == 0 or ignore_fail
     ok = True
-    for line in lines:
+    for line in cleaned:
         args = _split_cmd(line)
         if not args:
             continue
