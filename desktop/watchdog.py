@@ -13,14 +13,12 @@ from typing import Callable
 from desktop.client import OpsClient, _port_open
 from desktop.config_io import (
     get_local_socks_port,
-    get_mode,
     get_reverse_ssh_enabled,
     get_tun_enabled,
     get_watchdog_enabled,
     get_watchdog_interval,
     get_watchdog_max_retries,
 )
-from desktop import procutil
 
 LogFn = Callable[[str], None]
 NotifyFn = Callable[[str, str], None]
@@ -54,7 +52,7 @@ def socks_probe(
 ) -> str | None:
     """SOCKS5 CONNECT probe. Return None if OK, else a short error string.
 
-    Detects zombie tunnels: :1080 still accepts TCP but SSH/Squid no longer
+    Detects zombie tunnels: :1080 still accepts TCP but VLESS/Squid no longer
     forwards (the usual cause of TUN blackholing the whole OS).
     """
     s: socket.socket | None = None
@@ -115,15 +113,6 @@ def health_problem(client: OpsClient, *, probe: bool = False) -> str | None:
     socks = socks_port_from_client(client)
     socks_up = _port_open("127.0.0.1", socks, timeout=0.35)
 
-    ssh_pid = 0
-    ssh_alive = False
-    if client.paths.ssh_pid.is_file():
-        try:
-            ssh_pid = int(client.paths.ssh_pid.read_text().strip())
-        except ValueError:
-            ssh_pid = 0
-        ssh_alive = bool(ssh_pid and procutil.pid_alive(ssh_pid))
-
     singbox_alive = False
     try:
         singbox_alive = bool(client.singbox.running())
@@ -134,22 +123,17 @@ def health_problem(client: OpsClient, *, probe: bool = False) -> str | None:
         singbox_alive and getattr(client.singbox, "tun_active", lambda: False)()
     )
     tun_wanted = get_tun_enabled()
-    transport_alive = ssh_alive or singbox_alive
 
     if tun_up and not socks_up:
         return f"TUN up but SOCKS :{socks} refused"
-    if ssh_alive and not socks_up:
-        return f"ssh pid={ssh_pid} alive but SOCKS :{socks} closed"
     if singbox_alive and not socks_up:
         return f"singbox up but SOCKS :{socks} closed"
-    if client.paths.state_path.is_file() and not socks_up and not transport_alive:
+    if client.paths.state_path.is_file() and not socks_up and not singbox_alive:
         return f"state present but SOCKS :{socks} down"
-    if ssh_pid and not ssh_alive and not socks_up and not singbox_alive:
-        return f"ssh pid={ssh_pid} dead, SOCKS :{socks} down"
     # Probe before TUN recovery — otherwise failsafe TUN-stop + "sing-box down"
     # would bring TUN back on top of a zombie SOCKS and blackhole the OS again.
     if probe and socks_up and (
-        transport_alive or tun_up or tun_wanted or client.paths.state_path.is_file()
+        singbox_alive or tun_up or tun_wanted or client.paths.state_path.is_file()
     ):
         err = socks_probe(socks)
         if err:
@@ -164,8 +148,6 @@ def health_problem(client: OpsClient, *, probe: bool = False) -> str | None:
 def infer_desired_on(client: OpsClient) -> bool:
     """True if leftover state suggests the user wanted the tunnel up."""
     if client.paths.state_path.is_file():
-        return True
-    if client.paths.ssh_pid.is_file():
         return True
     try:
         if client.singbox.running():
@@ -256,7 +238,7 @@ class TunnelWatchdog:
             return
 
         # Always probe SOCKS CONNECT when the port is up — port-open alone
-        # misses zombie SSH/Squid (TUN still up → whole OS blackholed).
+        # misses zombie VLESS/Squid (TUN still up → whole OS blackholed).
         problem = health_problem(self.client, probe=True)
         if problem and "zombie" in problem:
             self._probe_fails += 1
@@ -264,19 +246,12 @@ class TunnelWatchdog:
                 f"watchdog: {problem} "
                 f"({self._probe_fails}/{_PROBE_FAILS_BEFORE_RECONNECT})"
             )
-            if get_mode() == "singbox":
-                try:
-                    if self.client.singbox.running():
-                        self.client.singbox.stop()
-                        self.log("watchdog: singbox stopped (failsafe while SOCKS zombie)")
-                except Exception as exc:  # noqa: BLE001
-                    self.log(f"watchdog: singbox failsafe stop: {exc}")
-            elif self.client.tun.running():
-                try:
-                    self.client.tun.stop()
-                    self.log("watchdog: TUN stopped (failsafe while SOCKS zombie)")
-                except Exception as exc:  # noqa: BLE001
-                    self.log(f"watchdog: TUN failsafe stop: {exc}")
+            try:
+                if self.client.singbox.running():
+                    self.client.singbox.stop()
+                    self.log("watchdog: singbox stopped (failsafe while SOCKS zombie)")
+            except Exception as exc:  # noqa: BLE001
+                self.log(f"watchdog: singbox failsafe stop: {exc}")
             if self._probe_fails < _PROBE_FAILS_BEFORE_RECONNECT:
                 return
         elif problem is None:
@@ -287,7 +262,7 @@ class TunnelWatchdog:
             self._ensure_reverse_ssh()
             return
         else:
-            # Hard failure (port closed / ssh dead) — reset soft probe counter
+            # Hard failure (port closed / process dead) — reset soft probe counter
             self._probe_fails = 0
 
         max_retries = get_watchdog_max_retries()
@@ -306,14 +281,6 @@ class TunnelWatchdog:
             self._notify("TUN упал", f"{problem}. Поднимаю…")
             self._reconnect(tun_only=True)
         else:
-            # Drop TUN ASAP so a dead SOCKS does not blackhole the whole OS.
-            # MODE=socks: separate TUN process. MODE=singbox: full reconnect.
-            if get_mode() != "singbox" and self.client.tun.running() and "SOCKS" in problem:
-                try:
-                    self.client.tun.stop()
-                    self.log("watchdog: TUN stopped (failsafe while SOCKS down)")
-                except Exception as exc:  # noqa: BLE001
-                    self.log(f"watchdog: TUN failsafe stop: {exc}")
             self._notify("Туннель упал", f"{problem}. Переподключаю…")
             self._reconnect(tun_only=False)
 
@@ -327,17 +294,8 @@ class TunnelWatchdog:
                     self.log(f"watchdog: TUN restart: {exc}")
                     raise
             else:
-                # Stop TUN first so sing-box stops flooding refused-to-1080 logs
                 try:
-                    if get_mode() != "singbox" and self.client.tun.running():
-                        self.client.tun.stop()
-                except Exception as exc:  # noqa: BLE001
-                    self.log(f"watchdog: TUN stop: {exc}")
-                try:
-                    if get_mode() == "singbox":
-                        self.client.stop_singbox_mode()
-                    else:
-                        self.client.stop_tunnel()
+                    self.client.stop_singbox_mode()
                 except Exception as exc:  # noqa: BLE001
                     self.log(f"watchdog: stop: {exc}")
                 self.client.enable(spawn_watchdog=False)

@@ -45,16 +45,6 @@ def _has_display() -> bool:
     return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
 
-def _run_connect(argv: list[str]) -> int:
-    if len(argv) != 2:
-        print("usage: ops-content connect <host> <port>", file=sys.stderr)
-        return 2
-    import lib.connect_proxy as connect_proxy
-
-    sys.argv = ["connect_proxy.py", argv[0], argv[1]]
-    return int(connect_proxy.main())
-
-
 def _run_connect_socks(argv: list[str]) -> int:
     if len(argv) != 2:
         print("usage: ops-content connect-socks <host> <port>", file=sys.stderr)
@@ -63,13 +53,6 @@ def _run_connect_socks(argv: list[str]) -> int:
 
     sys.argv = ["connect_socks.py", argv[0], argv[1]]
     return int(connect_socks.main())
-
-
-def _run_bridge(argv: list[str]) -> int:
-    import lib.http_via_socks as http_via_socks
-
-    sys.argv = ["http_via_socks.py", *argv]
-    return int(http_via_socks.main())
 
 
 def _show_help() -> int:
@@ -324,12 +307,8 @@ def main(argv: list[str] | None = None) -> int:
         return _show_help()
 
     head = argv[0].lower()
-    if head in ("connect", "proxy-command"):
-        return _run_connect(argv[1:])
     if head in ("connect-socks", "socks-command"):
         return _run_connect_socks(argv[1:])
-    if head == "bridge":
-        return _run_bridge(argv[1:])
     if head == "pac-serve":
         from desktop.pac_serve import main as pac_main
 

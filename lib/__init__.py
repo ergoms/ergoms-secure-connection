@@ -1,1 +1,1 @@
-"""Shared helpers for ops-content (CONNECT shim, HTTP bridge, probe)."""
+"""Shared helpers for ops-content (SOCKS ProxyCommand, PAC, routing)."""
