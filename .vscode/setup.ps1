@@ -57,7 +57,7 @@ function Install-Poetry {
     if (-not (Test-Path -LiteralPath $installer) -or (Get-Item -LiteralPath $installer).Length -lt 100) {
         throw 'Failed to download Poetry installer'
     }
-    # Native stdout must not enter the function success stream — callers
+    # Native stdout must not enter the function success stream - callers
     # assign the return value to $poetry.
     & $py.Exe @($py.Prefix + @($installer)) | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "Poetry installer failed: $LASTEXITCODE" }
@@ -90,7 +90,36 @@ function Use-RealPythonPath {
     return $pyExe
 }
 
+function Repair-ProjectVenv {
+    $venvDir = Join-Path $Root '.venv'
+    $cfg = Join-Path $venvDir 'pyvenv.cfg'
+    if (-not (Test-Path -LiteralPath $cfg)) { return }
+    $command = $null
+    foreach ($line in Get-Content -LiteralPath $cfg) {
+        if ($line -match '^\s*command\s*=\s*(.+)$') {
+            $command = $Matches[1].Trim()
+            break
+        }
+    }
+    if (-not $command) { return }
+    $expected = (Join-Path $Root '.venv').TrimEnd('\')
+    $cmdNorm = $command.Replace('/', '\').TrimEnd('\').ToLowerInvariant()
+    $expNorm = $expected.ToLowerInvariant()
+    if ($cmdNorm -like ('*' + $expNorm + '*')) { return }
+    Write-Host "[ERGOMS SECURE CONNECTION] .venv belongs to another project - recreating"
+    Remove-Item -LiteralPath $venvDir -Recurse -Force
+}
+
+function Get-VenvPython {
+    $py = Join-Path $Root '.venv\Scripts\python.exe'
+    if (-not (Test-Path -LiteralPath $py)) {
+        throw '.venv not found - run ERGOMS SECURE CONNECTION: setup first'
+    }
+    return $py
+}
+
 function Install-Libraries {
+    Repair-ProjectVenv
     $poetry = Get-PoetryExe
     if (-not $poetry) { $poetry = Install-Poetry }
     $pyExe = Use-RealPythonPath
@@ -103,15 +132,13 @@ function Install-Libraries {
 }
 
 function Install-SingBox {
-    $py = Join-Path $Root '.venv\Scripts\python.exe'
-    if (-not (Test-Path -LiteralPath $py)) {
-        throw '.venv not found - run ERGOMS SECURE CONNECTION: setup first'
-    }
+    $py = Get-VenvPython
     & $py -m desktop download-sing-box
     if ($LASTEXITCODE -ne 0) { throw "download-sing-box failed: $LASTEXITCODE" }
 }
 
 function Invoke-PyInstaller {
+    Repair-ProjectVenv
     $poetry = Get-PoetryExe
     if (-not $poetry) { $poetry = Install-Poetry }
     Use-RealPythonPath | Out-Null
@@ -123,8 +150,9 @@ function Invoke-PyInstaller {
     if (-not (Test-Path -LiteralPath $sb)) {
         Install-SingBox
     }
+    $py = Get-VenvPython
     Write-Host 'PyInstaller: ErgomsSecureConnection.spec -> dist/ErgomsSecureConnection.exe'
-    & $poetry run pyinstaller --noconfirm --clean ErgomsSecureConnection.spec
+    & $py -m PyInstaller --noconfirm --clean ErgomsSecureConnection.spec
     if ($LASTEXITCODE -ne 0) { throw "pyinstaller failed: $LASTEXITCODE" }
     $exe = Join-Path $Root 'dist\ErgomsSecureConnection.exe'
     if (-not (Test-Path -LiteralPath $exe)) { throw "missing $exe" }

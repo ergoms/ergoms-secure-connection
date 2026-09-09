@@ -42,8 +42,34 @@ install_poetry() {
   find_poetry
 }
 
+repair_project_venv() {
+  local cfg command expected
+  cfg="${ROOT}/.venv/pyvenv.cfg"
+  [[ -f "$cfg" ]] || return 0
+  command="$(sed -n 's/^[[:space:]]*command[[:space:]]*=[[:space:]]*//p' "$cfg" | head -n 1)"
+  [[ -n "$command" ]] || return 0
+  expected="${ROOT}/.venv"
+  case "$command" in
+    *"$expected"*) return 0 ;;
+  esac
+  echo "[ERGOMS SECURE CONNECTION] .venv belongs to another project — recreating"
+  rm -rf "${ROOT}/.venv"
+}
+
+venv_python() {
+  if [[ -x "${ROOT}/.venv/bin/python" ]]; then
+    echo "${ROOT}/.venv/bin/python"
+  elif [[ -x "${ROOT}/.venv/Scripts/python.exe" ]]; then
+    echo "${ROOT}/.venv/Scripts/python.exe"
+  else
+    echo ".venv не найден — сначала поставьте библиотеки (Poetry)" >&2
+    exit 1
+  fi
+}
+
 install_libraries() {
   local poetry
+  repair_project_venv
   poetry="$(find_poetry || true)"
   if [[ -z "${poetry:-}" ]]; then
     poetry="$(install_poetry)"
@@ -54,33 +80,24 @@ install_libraries() {
 
 install_singbox() {
   local py
-  if [[ -x "${ROOT}/.venv/bin/python" ]]; then
-    py="${ROOT}/.venv/bin/python"
-  elif [[ -x "${ROOT}/.venv/Scripts/python.exe" ]]; then
-    py="${ROOT}/.venv/Scripts/python.exe"
-  else
-    echo ".venv не найден — сначала поставьте библиотеки (Poetry)" >&2
-    exit 1
-  fi
+  py="$(venv_python)"
   "$py" -m desktop download-sing-box
 }
 
 run_pyinstaller() {
-  local poetry sb
+  local poetry py
+  repair_project_venv
   poetry="$(find_poetry || true)"
   if [[ -z "${poetry:-}" ]]; then
     poetry="$(install_poetry)"
   fi
   "$poetry" install --extras gui --extras build
-  if [[ -x "${ROOT}/tools/sing-box" ]]; then
-    sb="${ROOT}/tools/sing-box"
-  elif [[ -x "${ROOT}/tools/sing-box.exe" ]]; then
-    sb="${ROOT}/tools/sing-box.exe"
-  else
+  if [[ ! -x "${ROOT}/tools/sing-box" && ! -x "${ROOT}/tools/sing-box.exe" ]]; then
     install_singbox
   fi
+  py="$(venv_python)"
   echo "PyInstaller: ErgomsSecureConnection.spec -> dist/ErgomsSecureConnection"
-  "$poetry" run pyinstaller --noconfirm --clean ErgomsSecureConnection.spec
+  "$py" -m PyInstaller --noconfirm --clean ErgomsSecureConnection.spec
   if [[ -f "${ROOT}/dist/ErgomsSecureConnection.exe" ]]; then
     echo "OK: ${ROOT}/dist/ErgomsSecureConnection.exe"
   elif [[ -f "${ROOT}/dist/ErgomsSecureConnection" ]]; then
