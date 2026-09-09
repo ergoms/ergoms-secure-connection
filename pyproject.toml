@@ -1,0 +1,23 @@
+[project]
+name = "ops-content"
+version = "1.0.0"
+description = "Клиент для выхода в интернет через корпоративный Squid на VPS (VLESS+Reality)"
+readme = "README.md"
+requires-python = ">=3.10,<3.15"
+dependencies = []
+
+[project.optional-dependencies]
+gui = ["PySide6_Essentials>=6.6"]
+
+[project.scripts]
+ops-content = "desktop.__main__:main"
+
+[tool.poetry]
+packages = [
+    { include = "desktop" },
+    { include = "lib" },
+]
+
+[build-system]
+requires = ["poetry-core>=2.0.0"]
+build-backend = "poetry.core.masonry.api"

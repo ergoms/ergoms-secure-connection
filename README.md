@@ -50,7 +50,7 @@ bash modes/vps/bootstrap_singbox_443.sh
 # снять: ./ops-content.sh uninstall-service
 ```
 
-В `config.json`: `"tun": { "enabled": true }` поднимает TUN вместе с `on`. Для окна: `pip install -r requirements-desktop.txt`, затем `python -m desktop gui`.
+В `config.json`: `"tun": { "enabled": true }` поднимает TUN вместе с `on`. Для окна: `poetry install --extras gui`, затем `python -m desktop gui` (или `poetry run python -m desktop gui`).
 
 Локально после `on`: SOCKS `:1080`, HTTP `:1088`, PAC `:1089`.
 
@@ -128,6 +128,20 @@ bash modes/vps/ssh-to-client.sh 2222 ПОЛЬЗОВАТЕЛЬ_КЛИЕНТА
 ```
 
 Слушает только `127.0.0.1` на VPS. Несколько клиентов — разные `reverse_ssh.listen_port`.
+
+---
+
+## Окружение (Poetry)
+
+Нужны Python 3.10–3.14 и [Poetry](https://python-poetry.org/docs/#installation). Виртуальное окружение создаётся в `.venv`.
+
+```powershell
+poetry install              # CLI
+poetry install --extras gui # + окно (PySide6)
+.\ops-content.ps1 status
+```
+
+То же: `poetry run python -m desktop …`. Обёртки `ops-content.ps1` / `ops-content.sh` берут Python из `.venv`, если оно есть.
 
 ---
 

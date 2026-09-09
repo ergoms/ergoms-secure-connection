@@ -255,6 +255,14 @@ apply_proxy_env() {
 
 find_python() {
   local cand resolved
+  if [[ -x "$ROOT/.venv/bin/python" ]]; then
+    printf '%s' "$ROOT/.venv/bin/python"
+    return 0
+  fi
+  if [[ -x "$ROOT/.venv/Scripts/python.exe" ]]; then
+    printf '%s' "$ROOT/.venv/Scripts/python.exe"
+    return 0
+  fi
   for cand in python3 python; do
     if command -v "$cand" >/dev/null 2>&1; then
       resolved="$(command -v "$cand")"
