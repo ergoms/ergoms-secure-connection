@@ -1,25 +1,30 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""One-file GUI/CLI build → dist/OpsContent.exe"""
+"""One-file GUI/CLI build → dist/OpsContent.exe (Windows) / dist/OpsContent (Linux)."""
 
+import sys
 from pathlib import Path
 
 root = Path(SPECPATH).resolve()
 
-sb = root / "tools" / "sing-box.exe"
+sb = root / "tools" / ("sing-box.exe" if sys.platform == "win32" else "sing-box")
 if not sb.is_file():
     raise SystemExit(
-        "tools/sing-box.exe missing — run: python -m desktop download-sing-box"
+        f"{sb.name} missing in tools/ — run: python -m desktop download-sing-box"
     )
+
+ico = root / "desktop" / "app_icon.ico"
+datas = [
+    (str(root / "desktop" / "ui" / "qml"), "desktop/ui/qml"),
+    (str(root / "lib"), "lib"),
+]
+if ico.is_file():
+    datas.append((str(ico), "desktop"))
 
 a = Analysis(
     [str(root / "desktop" / "entry.py")],
     pathex=[str(root)],
     binaries=[(str(sb), "tools")],
-    datas=[
-        (str(root / "desktop" / "ui" / "qml"), "desktop/ui/qml"),
-        (str(root / "desktop" / "app_icon.ico"), "desktop"),
-        (str(root / "lib"), "lib"),
-    ],
+    datas=datas,
     hiddenimports=[
         "desktop",
         "desktop.gui",
@@ -88,5 +93,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=str(root / "desktop" / "app_icon.ico"),
+    icon=str(ico) if ico.is_file() else None,
 )

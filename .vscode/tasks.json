@@ -11,7 +11,7 @@
       "dependsOrder": "sequence",
       "group": {
         "kind": "build",
-        "isDefault": true
+        "isDefault": false
       },
       "problemMatcher": []
     },
@@ -69,6 +69,50 @@
         "reveal": "always",
         "panel": "shared",
         "focus": false,
+        "showReuseMessage": false
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "ops-content: build exe",
+      "detail": "Poetry extras + sing-box + PyInstaller → dist/OpsContent.exe",
+      "dependsOn": [
+        "ops-content: install libraries",
+        "ops-content: download sing-box",
+        "ops-content: pyinstaller"
+      ],
+      "dependsOrder": "sequence",
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "ops-content: pyinstaller",
+      "detail": "Собрать onefile exe из OpsContent.spec",
+      "type": "process",
+      "command": "bash",
+      "args": ["${workspaceFolder}/.vscode/setup.sh", "pyinstaller"],
+      "windows": {
+        "command": "powershell.exe",
+        "args": [
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "${workspaceFolder}/.vscode/setup.ps1",
+          "-Target",
+          "pyinstaller"
+        ]
+      },
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "focus": true,
         "showReuseMessage": false
       },
       "problemMatcher": []

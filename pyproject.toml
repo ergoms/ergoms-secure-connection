@@ -8,6 +8,7 @@ dependencies = []
 
 [project.optional-dependencies]
 gui = ["PySide6_Essentials>=6.6"]
+build = ["pyinstaller>=6.3"]
 
 [project.scripts]
 ops-content = "desktop.__main__:main"
