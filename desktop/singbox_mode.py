@@ -246,8 +246,10 @@ class SingboxModeManager:
                     "address": ["172.19.0.1/30"],
                     "mtu": mtu_val,
                     "auto_route": True,
-                    "strict_route": bool(kill_switch),
-                    "stack": "system",
+                    # Windows strict_route deletes the Wi-Fi default and often
+                    # steals VLESS. OS kill switch already blackholes leaks.
+                    "strict_route": bool(kill_switch) and sys.platform != "win32",
+                    "stack": "gvisor" if sys.platform == "win32" else "system",
                     "route_exclude_address": route_exclude,
                 }
             )

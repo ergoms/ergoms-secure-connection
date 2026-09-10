@@ -91,12 +91,205 @@ _FOREIGN_VPN = (
     "proton",
     "surfshark",
 )
+# GUI/daemon binaries only. AmneziaVPN-service is a resident Windows service
+# that keeps running while the tunnel is down, so it never means "VPN is on".
 _FOREIGN_PROCS = (
     "AmneziaVPN.exe",
-    "AmneziaVPN-service.exe",
     "outline.exe",
     "wireguard.exe",
 )
+_IFACE_UP = frozenset({"connected", "подключен", "подключено"})
+
+
+def foreign_vpn_processes() -> list[str]:
+    """Third-party VPN front-ends running (informational, never a blocker)."""
+    found: list[str] = []
+    if sys.platform != "win32":
+        return found
+    for proc in _FOREIGN_PROCS:
+        try:
+            r = subprocess.run(
+                ["tasklist", "/FI", f"IMAGENAME eq {proc}", "/NH"],
+                capture_output=True,
+                text=True,
+                timeout=4,
+                check=False,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if proc.lower() in (r.stdout or "").lower():
+            tag = proc.replace(".exe", "")
+            if tag not in found:
+                found.append(tag)
+    return found
+
+
+def leftover_vpn_ifaces() -> list[tuple[int, str]]:
+    """Foreign VPN NICs that are up with a routable IPv4 (tunnel still live)."""
+    found: list[tuple[int, str]] = []
+    if sys.platform != "win32":
+        return found
+    try:
+        r = subprocess.run(
+            ["netsh", "interface", "ipv4", "show", "interfaces"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return found
+    for line in (r.stdout or "").splitlines():
+        m = re.match(r"^\s*(\d+)\s+\d+\s+\d+\s+(\S+)\s+(.+?)\s*$", line)
+        if not m:
+            continue
+        state = m.group(2).lower()
+        name = m.group(3).strip()
+        if state not in _IFACE_UP or _is_tun_iface(name):
+            continue
+        low = name.lower()
+        if not any(tag in low for tag in _FOREIGN_VPN):
+            continue
+        routable = [
+            ip
+            for ip in iface_ipv4s(name)
+            if not ip.startswith(("169.254.", "0."))
+        ]
+        if routable:
+            found.append((int(m.group(1)), name))
+    return found
+
+
+def leftover_vpn_default_cmds() -> list[str]:
+    """Remove leftover 0.0.0.0/0 on Amnezia/etc so Wi-Fi default can win."""
+    cmds: list[str] = []
+    for idx, _name in leftover_vpn_ifaces():
+        cmds.append(f"route delete 0.0.0.0 mask 0.0.0.0 if {idx}")
+    return cmds
+
+
+def iface_ipv4s(alias: str) -> list[str]:
+    alias = (alias or "").strip().lower()
+    if not alias or sys.platform != "win32":
+        return []
+    try:
+        r = subprocess.run(
+            ["netsh", "interface", "ipv4", "show", "addresses", f"name={alias}"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    found: list[str] = []
+    for raw in (r.stdout or "").splitlines():
+        m = re.search(r"(\d+\.\d+\.\d+\.\d+)", raw)
+        if m and not m.group(1).startswith("127."):
+            found.append(m.group(1))
+    return found
+
+
+def gateway_via_dest(dest: str) -> str | None:
+    """Default gateway of the NIC that actually reaches dest (not Amnezia)."""
+    name = detect_bind_interface(dest)
+    ips = set(iface_ipv4s(name or ""))
+    if not ips:
+        from desktop.kill_switch import underlay_gateway
+
+        return underlay_gateway(dest)
+    for raw in default_route_lines():
+        parts = raw.split()
+        if len(parts) < 4:
+            continue
+        hop, iface = parts[2], parts[3]
+        if iface in ips and hop.lower() not in {"on-link", "onlink", "0.0.0.0"}:
+            return hop
+    from desktop.kill_switch import underlay_gateway
+
+    return underlay_gateway(dest)
+
+
+def stale_default_cmds(keep_gw: str) -> list[str]:
+    """Drop IPv4 defaults that are not the current underlay gateway.
+
+    Office Ethernet / old TAP often leave 10.x defaults with metric 0.
+    On home Wi-Fi they blackhole the internet even after Amnezia is off.
+    """
+    keep = (keep_gw or "").strip()
+    cmds: list[str] = []
+    seen: set[str] = set()
+    if sys.platform != "win32" or not keep:
+        return cmds
+    try:
+        r = subprocess.run(
+            ["route", "print", "-4"],
+            capture_output=True,
+            text=True,
+            timeout=8,
+            check=False,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return cmds
+    for raw in (r.stdout or "").splitlines():
+        # Active Routes only: persistent rows carry "Default" instead of a metric.
+        m = re.match(
+            r"^\s*0\.0\.0\.0\s+0\.0\.0\.0\s+(\S+)\s+(\S+)\s+(\d+)\s*$",
+            raw,
+        )
+        if not m:
+            continue
+        hop = m.group(1).strip()
+        iface = m.group(2).strip()
+        if hop == keep:
+            continue
+        if iface.startswith("127.") or iface.startswith("172.19."):
+            continue
+        # On-link default belongs to a tunnel NIC; drop it by index, never by
+        # gateway 0.0.0.0 (that pattern can match unrelated routes).
+        if hop.lower() in {"on-link", "onlink", "0.0.0.0"}:
+            continue
+        if hop in seen:
+            continue
+        seen.add(hop)
+        cmds.append(f"route delete 0.0.0.0 mask 0.0.0.0 {hop}")
+    return cmds
+
+
+def default_route_lines() -> list[str]:
+    """Short IPv4 default-route rows for diagnostics."""
+    if sys.platform == "win32":
+        try:
+            r = subprocess.run(
+                ["route", "print", "-4"],
+                capture_output=True,
+                text=True,
+                timeout=8,
+                check=False,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return []
+        out: list[str] = []
+        for raw in (r.stdout or "").splitlines():
+            if re.match(r"^\s*0\.0\.0\.0\s+0\.0\.0\.0\s+", raw):
+                out.append(" ".join(raw.split()))
+        return out[:8]
+    try:
+        r = subprocess.run(
+            ["ip", "-4", "route", "show", "default"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    return [ln.strip() for ln in (r.stdout or "").splitlines() if ln.strip()][:8]
 
 
 def foreign_vpn_adapters() -> list[str]:

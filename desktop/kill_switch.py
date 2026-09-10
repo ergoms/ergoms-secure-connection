@@ -134,11 +134,21 @@ def _route_print_win(*, force: bool = False) -> str:
 
 
 def _gateway_win(dest: str) -> str | None:
-    del dest
     text = _route_print_win()
     if not text:
         return None
+    prefer: set[str] = set()
+    if dest:
+        try:
+            from desktop.tun import _win_if_alias, iface_ipv4s
+
+            idx = _iface_index_win(dest)
+            name = _win_if_alias(idx) if idx else None
+            prefer.update(iface_ipv4s(name or ""))
+        except Exception:
+            prefer = set()
     best: tuple[int, str] | None = None
+    preferred: str | None = None
     for raw in text.splitlines():
         m = re.search(
             r"^\s*0\.0\.0\.0\s+0\.0\.0\.0\s+(\S+)\s+(\S+)\s+(\d+)\s*$",
@@ -156,9 +166,11 @@ def _gateway_win(dest: str) -> str | None:
             continue
         if iface.startswith("127.") or iface.startswith("172.19."):
             continue
+        if prefer and iface in prefer:
+            preferred = gw
         if best is None or metric < best[0]:
             best = (metric, gw)
-    return best[1] if best else None
+    return preferred or (best[1] if best else None)
 
 
 def install_commands(allow: list[str], *, gw: str | None = None) -> list[str]:

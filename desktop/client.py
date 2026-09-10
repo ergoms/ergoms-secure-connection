@@ -58,7 +58,13 @@ from desktop.kill_switch import pin_underlay as pin_kill_switch_underlay
 from desktop.kill_switch import remember_plan as remember_kill_switch_plan
 from desktop.kill_switch import state_path as kill_switch_state_path
 from desktop.singbox_mode import SingboxModeManager, require_transport
-from desktop.tun import TunManager, foreign_vpn_adapters
+from desktop.tun import (
+    TunManager,
+    gateway_via_dest,
+    leftover_vpn_default_cmds,
+    leftover_vpn_ifaces,
+    stale_default_cmds,
+)
 from desktop.sys_proxy import (
     disable_browser_proxy,
     disable_linux_env_proxy,
@@ -636,18 +642,34 @@ class OpsClient:
         enable_tun = get_tun_enabled() or kill_switch
         if kill_switch and not get_tun_enabled():
             self.log("kill switch: поднимаю TUN")
-        others = foreign_vpn_adapters()
-        if others:
-            raise RuntimeError(
-                "выключите Amnezia (или другой VPN) и подключитесь снова — "
-                "сейчас активны: " + ", ".join(others)
+        leftover = leftover_vpn_ifaces()
+        leftover_cmds = leftover_vpn_default_cmds()
+        keep_gw = gateway_via_dest(host) or ""
+        stale = stale_default_cmds(keep_gw) if keep_gw else []
+        leftover_cmds = list(dict.fromkeys(leftover_cmds + stale))
+        if leftover:
+            names = ", ".join(name for _idx, name in leftover)
+            self.log(
+                f"чужой туннель ещё поднят ({names}) — сниму его default, "
+                f"выход оставлю через {keep_gw or 'underlay'}"
             )
+        if stale:
+            self.log(
+                f"лишние default (не {keep_gw}) сниму — иначе интернет уйдёт "
+                "в мёртвый офисный/VPN шлюз"
+            )
+        if leftover_cmds and procutil.is_admin():
+            for line in leftover_cmds:
+                args = [p for p in line.split(" ") if p]
+                procutil.run(args, timeout=8)
+            leftover_cmds = []
         prelude: list[str] = []
         allow = self._kill_switch_hosts(cfg)
         if kill_switch:
-            prelude = self._ensure_kill_switch(cfg)
+            prelude = leftover_cmds + self._ensure_kill_switch(cfg)
         elif enable_tun:
             remember_kill_switch_plan(self.paths.var_dir, allow)
+            prelude = leftover_cmds
         postlude = (
             kill_switch_pin_cmds(self.paths.var_dir, allow) if enable_tun else []
         )
