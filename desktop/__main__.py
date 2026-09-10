@@ -324,6 +324,10 @@ def _run_gui() -> int:
             "tun-off": ["--tun-off"],
         }.get(resume, [])
     )
+    from desktop.instance import activate_existing
+
+    if activate_existing():
+        return 0
     ensure_elevated_gui(flags)
     from desktop.gui import run_gui
 

@@ -9,6 +9,7 @@ APP_ID = "ergoms-secure-connection"
 APP_EXE = "ERGOMS SECURE CONNECTION"
 APP_EXE_LEGACY = ("ErgomsSecureConnection", "ErgomsVPN", "OpsContent")
 APP_AUMID = "ERGOMS.SECURE.CONNECTION"
+APP_IPC = "ergoms-secure-connection-gui"
 ORG_NAME = "ERGOMS"
 
 ENV_DATA = "ERGOMS_SC_DATA"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import platform
+import re
 import shutil
 import socket
 import subprocess
@@ -67,9 +68,61 @@ def detect_bind_interface(dest: str) -> str | None:
         if i + 1 >= len(parts):
             return None
         dev = parts[i + 1].strip()
-        if not dev or dev.startswith("ops-content") or dev.startswith("ergoms-secure-connection"):
+        if not dev or _is_tun_iface(dev):
             return None
         return dev
+    if sys.platform == "win32":
+        return _detect_bind_win(dest)
+    return None
+
+
+def _is_tun_iface(name: str) -> bool:
+    low = (name or "").strip().lower()
+    return low.startswith(("ops-content", "ergoms-secure-connection", "ergoms"))
+
+
+def _detect_bind_win(dest: str) -> str | None:
+    """Windows NIC alias (e.g. Wi-Fi) used to reach dest before TUN is up."""
+    ip = _resolve_host(dest)
+    if not ip:
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        dest_n = ctypes.windll.ws2_32.inet_addr(ip.encode("ascii"))  # type: ignore[attr-defined]
+        if dest_n == 0xFFFFFFFF:
+            return None
+        idx = wintypes.DWORD()
+        err = ctypes.windll.iphlpapi.GetBestInterface(dest_n, ctypes.byref(idx))  # type: ignore[attr-defined]
+        if err or not idx.value:
+            return None
+        name = _win_if_alias(int(idx.value))
+        if name and not _is_tun_iface(name):
+            return name
+    except Exception:
+        return None
+    return None
+
+
+def _win_if_alias(if_index: int) -> str | None:
+    try:
+        r = subprocess.run(
+            ["netsh", "interface", "ipv4", "show", "interfaces"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    for line in (r.stdout or "").splitlines():
+        m = re.match(r"^\s*(\d+)\s+\d+\s+\d+\s+\S+\s+(.+?)\s*$", line)
+        if not m or int(m.group(1)) != if_index:
+            continue
+        name = m.group(2).strip()
+        return name or None
     return None
 
 

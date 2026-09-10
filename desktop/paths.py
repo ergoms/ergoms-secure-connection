@@ -52,12 +52,17 @@ def _appdata_root() -> Path:
     local = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
     base = Path(local)
     current = base / APP_NAME
-    if current.exists():
-        return current
-    for name in ("ERGOMS VPN", "ops-content"):
-        legacy = base / name
-        if legacy.is_dir():
-            return legacy
+    current.mkdir(parents=True, exist_ok=True)
+    dst = current / "config.json"
+    if not dst.is_file():
+        for name in ("ERGOMS VPN", "ops-content"):
+            src = base / name / "config.json"
+            if src.is_file():
+                try:
+                    dst.write_bytes(src.read_bytes())
+                except OSError:
+                    pass
+                break
     return current
 
 
