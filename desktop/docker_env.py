@@ -5,12 +5,13 @@ from __future__ import annotations
 import concurrent.futures
 import ipaddress
 import os
-import shutil
 import socket
 import subprocess
 import sys
 from pathlib import Path
 from typing import Callable
+
+from desktop import procutil
 
 LogFn = Callable[[str], None]
 
@@ -86,6 +87,10 @@ def _is_usable_host_ip(ip: str) -> bool:
     return True
 
 
+def _docker_exe() -> str | None:
+    return procutil.which_exe("docker")
+
+
 def detect_docker_host_ip(
     *, log: LogFn = _noop, timeout: float = _DOCKER_PROBE_TIMEOUT
 ) -> str | None:
@@ -99,25 +104,27 @@ def detect_docker_host_ip(
     if override and _is_usable_host_ip(override):
         return override
 
-    docker = shutil.which("docker")
+    # Windows Docker Desktop host-gateway is always 192.168.65.254.
+    # `docker info` cannot change that, flashes a console, and hangs for
+    # seconds when the engine is down or still starting.
+    if sys.platform == "win32":
+        return _DOCKER_DESKTOP_HOST_FALLBACK
+
+    docker = _docker_exe()
     if not docker:
-        if sys.platform == "win32":
-            log(f"docker not in PATH — fallback host IP {_DOCKER_DESKTOP_HOST_FALLBACK}")
+        if sys.platform == "darwin":
             return _DOCKER_DESKTOP_HOST_FALLBACK
         return None
 
     # Fail fast when daemon is down/hung — do not block `on` for minutes.
     try:
-        info = subprocess.run(
+        info = procutil.run(
             [docker, "info"],
-            capture_output=True,
-            text=True,
             timeout=min(3.0, timeout),
-            check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         log(f"docker info: {exc} — skip host-ip probe")
-        if sys.platform in ("win32", "darwin"):
+        if sys.platform == "darwin":
             return _DOCKER_DESKTOP_HOST_FALLBACK
         return None
     if info.returncode != 0:
@@ -126,12 +133,9 @@ def detect_docker_host_ip(
             "docker info failed — skip host-ip probe"
             + (f": {err[-1][:160]}" if err else "")
         )
-        if sys.platform in ("win32", "darwin"):
+        if sys.platform == "darwin":
             return _DOCKER_DESKTOP_HOST_FALLBACK
         return None
-
-    if sys.platform == "win32":
-        return _DOCKER_DESKTOP_HOST_FALLBACK
 
     images = (
         "alpine:3.20",
@@ -140,7 +144,7 @@ def detect_docker_host_ip(
     )
     for image in images:
         try:
-            r = subprocess.run(
+            r = procutil.run(
                 [
                     docker,
                     "run",
@@ -151,10 +155,7 @@ def detect_docker_host_ip(
                     "ahostsv4",
                     "opscontent-hdi",
                 ],
-                capture_output=True,
-                text=True,
                 timeout=timeout,
-                check=False,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             log(f"docker host-ip probe ({image}): {exc}")
@@ -170,7 +171,7 @@ def detect_docker_host_ip(
             if parts and _is_usable_host_ip(parts[0]):
                 return parts[0]
 
-    if sys.platform in ("win32", "darwin"):
+    if sys.platform == "darwin":
         log(f"docker host-ip detect failed — fallback {_DOCKER_DESKTOP_HOST_FALLBACK}")
         return _DOCKER_DESKTOP_HOST_FALLBACK
     return None
@@ -424,13 +425,13 @@ def clear_docker_env(
 
 def docker_dns_probe(*, log: LogFn = _noop, timeout: float = 60.0) -> int:
     """Return 0 if a bridge container can resolve pypi.org (needs TUN hijack)."""
-    docker = shutil.which("docker")
+    docker = _docker_exe()
     if not docker:
         log("docker not found")
         return 2
     log("docker-dns: getent hosts pypi.org (bridge)")
     try:
-        r = subprocess.run(
+        r = procutil.run(
             [
                 docker,
                 "run",
@@ -442,10 +443,7 @@ def docker_dns_probe(*, log: LogFn = _noop, timeout: float = 60.0) -> int:
                 "ahostsv4",
                 "pypi.org",
             ],
-            capture_output=True,
-            text=True,
             timeout=timeout,
-            check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         log(f"docker-dns failed: {exc}")
@@ -471,7 +469,7 @@ def docker_smoke_test(
     proxy_ip: str | None = None,
 ) -> int:
     """Return 0 if a container can HTTPS via the host bridge (and report DNS)."""
-    docker = shutil.which("docker")
+    docker = _docker_exe()
     if not docker:
         log("docker not found")
         return 2
@@ -484,7 +482,7 @@ def docker_smoke_test(
     proxy = f"http://{ip}:{int(http_port)}"
     log(f"docker-test: curl https://pypi.org via {proxy}")
     try:
-        r = subprocess.run(
+        r = procutil.run(
             [
                 docker,
                 "run",
@@ -504,10 +502,7 @@ def docker_smoke_test(
                 "25",
                 "https://pypi.org",
             ],
-            capture_output=True,
-            text=True,
             timeout=120,
-            check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         log(f"docker-test failed: {exc}")

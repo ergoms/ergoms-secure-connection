@@ -45,7 +45,7 @@ ApplicationWindow {
             Rectangle {
                 id: titleBar
                 Layout.fillWidth: true
-                Layout.preferredHeight: 48
+                Layout.preferredHeight: 52
                 color: "transparent"
 
                 DragHandler {
@@ -56,58 +56,41 @@ ApplicationWindow {
                 Text {
                     anchors.left: parent.left
                     anchors.leftMargin: 18
+                    anchors.right: chromeBtns.left
+                    anchors.rightMargin: 10
                     anchors.verticalCenter: parent.verticalCenter
                     text: "ERGOMS SECURE CONNECTION"
                     color: T.text
-                    font.pixelSize: 16
-                    font.bold: true
+                    elide: Text.ElideRight
+                    font.pixelSize: 13
+                    font.weight: Font.DemiBold
+                    font.letterSpacing: 0.6
                     font.family: T.fontUi
                 }
 
                 Row {
+                    id: chromeBtns
                     anchors.right: parent.right
-                    anchors.rightMargin: 10
+                    anchors.rightMargin: 12
                     anchors.verticalCenter: parent.verticalCenter
-                    spacing: 6
+                    spacing: 4
 
-                    Rectangle {
-                        width: 28
-                        height: 28
-                        radius: 8
-                        color: minMouse.containsMouse ? T.btn : "transparent"
-                        Text {
-                            anchors.centerIn: parent
-                            text: "–"
-                            color: T.muted
-                            font.pixelSize: 16
-                        }
-                        MouseArea {
-                            id: minMouse
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: win.showMinimized()
-                        }
+                    ChromeButton {
+                        kind: "min"
+                        onClicked: win.showMinimized()
                     }
-                    Rectangle {
-                        width: 28
-                        height: 28
-                        radius: 8
-                        color: closeMouse.containsMouse ? T.danger : "transparent"
-                        Text {
-                            anchors.centerIn: parent
-                            text: "×"
-                            color: closeMouse.containsMouse ? T.text : T.muted
-                            font.pixelSize: 16
-                        }
-                        MouseArea {
-                            id: closeMouse
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: bridge.hideWindow()
-                        }
+                    ChromeButton {
+                        kind: "close"
+                        onClicked: bridge.hideWindow()
                     }
+                }
+
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    height: 1
+                    color: Qt.rgba(1, 1, 1, 0.05)
                 }
             }
 

@@ -82,7 +82,7 @@ def run_gui() -> None:
     window = engine.rootObjects()[0]
     _round_corners(window)
 
-    tray = _setup_tray(app, icon, bridge)
+    tray = _setup_tray(app, icon, bridge, window)
     bridge.closingUi.connect(tray.hide)
     bridge.quitRequested.connect(app.quit)
     app.aboutToQuit.connect(bridge.teardownNow)
@@ -148,7 +148,15 @@ def _round_corners(window: object) -> None:
         pass
 
 
-def _setup_tray(app: QApplication, icon: QIcon, bridge: object) -> QSystemTrayIcon:
+def _window_is_open(window: object) -> bool:
+    from PySide6.QtGui import QWindow
+
+    if not bool(window.isVisible()):  # type: ignore[attr-defined]
+        return False
+    return window.visibility() != QWindow.Visibility.Minimized  # type: ignore[attr-defined]
+
+
+def _setup_tray(app: QApplication, icon: QIcon, bridge: object, window: object) -> QSystemTrayIcon:
     from PySide6.QtGui import QAction
     from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
@@ -199,10 +207,12 @@ def _setup_tray(app: QApplication, icon: QIcon, bridge: object) -> QSystemTrayIc
     tray.setContextMenu(menu)
 
     def _activated(reason: QSystemTrayIcon.ActivationReason) -> None:
-        if reason in (
-            QSystemTrayIcon.ActivationReason.Trigger,
-            QSystemTrayIcon.ActivationReason.DoubleClick,
-        ):
+        if reason != QSystemTrayIcon.ActivationReason.Trigger:
+            return
+        # Не смотрим isActive(): клик по трею уже снимает фокус с окна.
+        if _window_is_open(window):
+            bridge.hideWindow()  # type: ignore[attr-defined]
+        else:
             bridge.showWindow()  # type: ignore[attr-defined]
 
     tray.activated.connect(_activated)

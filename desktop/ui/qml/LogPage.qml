@@ -1,9 +1,45 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Layouts
 import "Theme.js" as T
 
 Item {
     id: root
+
+    function timeOf(line) {
+        return line.length >= 8 ? line.substring(0, 8) : ""
+    }
+
+    function msgOf(line) {
+        return line.length > 10 ? line.substring(10) : line
+    }
+
+    function tone(msg) {
+        var s = String(msg).toLowerCase()
+        if (/ошибка|error|fail|не ок|не остановил|deadline|не удалось/.test(s))
+            return T.danger
+        if (/warn|не видны|пропал/.test(s))
+            return T.warn
+        if (/\bok\b|готов|слушает|сохранен|скопирован/.test(s))
+            return T.accent
+        return "#c9d0dc"
+    }
+
+    function reloadAll() {
+        logModel.clear()
+        var raw = bridge.logText
+        if (!raw || !raw.length)
+            return
+        var lines = raw.split("\n")
+        for (var i = 0; i < lines.length; ++i) {
+            if (lines[i].length)
+                logModel.append({ line: lines[i] })
+        }
+        Qt.callLater(function () {
+            if (logList.count)
+                logList.positionViewAtEnd()
+        })
+    }
 
     Rectangle {
         anchors.fill: parent
@@ -14,78 +50,134 @@ Item {
         border.width: 1
         clip: true
 
-        Rectangle {
-            id: toolbar
-            anchors.top: parent.top
-            anchors.left: parent.left
-            anchors.right: parent.right
-            height: 40
-            color: "transparent"
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 0
 
             Rectangle {
-                id: copyBtn
-                anchors.right: parent.right
-                anchors.rightMargin: 10
-                anchors.verticalCenter: parent.verticalCenter
-                width: copyLabel.implicitWidth + 20
-                height: 28
-                radius: 8
-                color: copyMouse.containsMouse ? T.btnHover : T.btn
+                Layout.fillWidth: true
+                Layout.preferredHeight: 44
+                color: "transparent"
+
                 Text {
-                    id: copyLabel
-                    anchors.centerIn: parent
-                    text: "Копировать всё"
+                    anchors.left: parent.left
+                    anchors.leftMargin: 14
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "Журнал"
                     color: T.text
-                    font.pixelSize: 12
+                    font.pixelSize: 13
+                    font.weight: Font.DemiBold
+                    font.letterSpacing: 0.2
                     font.family: T.fontUi
                 }
-                MouseArea {
-                    id: copyMouse
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: bridge.copyLog()
+
+                Rectangle {
+                    id: copyBtn
+                    anchors.right: parent.right
+                    anchors.rightMargin: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: copyLabel.implicitWidth + 18
+                    height: 28
+                    radius: 8
+                    color: copyMouse.containsMouse ? T.btn : "transparent"
+                    border.width: 1
+                    border.color: Qt.rgba(1, 1, 1, 0.08)
+                    Text {
+                        id: copyLabel
+                        anchors.centerIn: parent
+                        text: "Копировать"
+                        color: copyMouse.containsMouse ? T.text : T.muted
+                        font.pixelSize: 12
+                        font.weight: Font.DemiBold
+                        font.family: T.fontUi
+                    }
+                    MouseArea {
+                        id: copyMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: bridge.copyLog()
+                    }
                 }
             }
-        }
 
-        Flickable {
-            id: flick
-            anchors.top: toolbar.bottom
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.bottom: parent.bottom
-            anchors.leftMargin: 12
-            anchors.rightMargin: 12
-            anchors.bottomMargin: 12
-            clip: true
-            contentWidth: width
-            contentHeight: logText.implicitHeight
-            boundsBehavior: Flickable.StopAtBounds
-            ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 1
+                color: Qt.rgba(1, 1, 1, 0.04)
+            }
 
-            TextEdit {
-                id: logText
-                width: flick.width
-                readOnly: true
-                wrapMode: TextEdit.Wrap
-                color: T.text
-                selectedTextColor: T.text
-                selectionColor: T.select
-                font.family: T.fontMono
-                font.pixelSize: 11
-                text: bridge.logText
-                textFormat: TextEdit.PlainText
+            ListView {
+                id: logList
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                boundsBehavior: Flickable.StopAtBounds
+                spacing: 0
+                model: ListModel { id: logModel }
+                ScrollBar.vertical: AppScrollBar {}
+
+                header: Item { height: 8; width: 1 }
+                footer: Item { height: 10; width: 1 }
+
+                delegate: Item {
+                    id: rowWrap
+                    width: logList.width
+                    height: row.implicitHeight + 8
+                    readonly property string lineText: model.line
+
+                    Row {
+                        id: row
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.leftMargin: 12
+                        anchors.rightMargin: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: 10
+
+                        Text {
+                            width: 54
+                            text: root.timeOf(rowWrap.lineText)
+                            color: T.muted
+                            font.pixelSize: 11
+                            font.family: T.fontMono
+                        }
+
+                        Text {
+                            width: parent.width - 64
+                            text: root.msgOf(rowWrap.lineText)
+                            color: root.tone(root.msgOf(rowWrap.lineText))
+                            wrapMode: Text.Wrap
+                            font.pixelSize: 12
+                            font.family: T.fontUi
+                            lineHeight: 1.25
+                        }
+                    }
+                }
+
+                Text {
+                    visible: logModel.count === 0
+                    anchors.centerIn: parent
+                    text: "Пока пусто"
+                    color: T.muted
+                    font.pixelSize: 13
+                    font.family: T.fontUi
+                }
             }
         }
     }
 
+    Component.onCompleted: reloadAll()
+
     Connections {
         target: bridge
-        function onLogAppended(_line) {
-            Qt.callLater(function () {
-                flick.contentY = Math.max(0, logText.implicitHeight - flick.height)
-            })
+        function onLogAppended(line) {
+            if (logModel.count > 1800)
+                root.reloadAll()
+            else if (line && line.length)
+                logModel.append({ line: line })
+            if (logList.atYEnd || logList.contentHeight <= logList.height)
+                Qt.callLater(function () { logList.positionViewAtEnd() })
         }
     }
 }
