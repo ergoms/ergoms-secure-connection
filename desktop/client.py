@@ -669,6 +669,12 @@ class OpsClient:
             f"sing-box готов: scope={get_socks_scope()} tun={int(enable_tun)} "
             f"socks=127.0.0.1:{socks_port} http=127.0.0.1:{http_port}"
         )
+        try:
+            sock = socket.create_connection((host, port), timeout=3)
+            sock.close()
+            self.log(f"диагностика: TCP {host}:{port} с этой NIC — OK")
+        except OSError as exc:
+            self.log(f"диагностика: TCP {host}:{port} с этой NIC — FAIL ({exc})")
         self._log_singbox_tail("после запуска")
         threading.Thread(
             target=self._probe_exit, args=(socks_port,), daemon=True

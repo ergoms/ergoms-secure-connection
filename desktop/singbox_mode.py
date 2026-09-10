@@ -121,7 +121,10 @@ class SingboxModeManager:
         bind_target = exclude_ips[0] if exclude_ips else (squid_host or server_host)
         bind_iface = detect_bind_interface(bind_target) if bind_target else ""
         if bind_iface:
-            self.log(f"underlay NIC: {bind_iface} (VPS/direct)")
+            self.log(
+                f"underlay NIC: {bind_iface} — VLESS и direct сидят на ней, "
+                f"auto_detect выкл, exclude={', '.join(exclude_ips) or 'нет'}"
+            )
         elif enable_tun:
             self.log("underlay NIC: не определён — VLESS может уйти в TUN")
 
@@ -142,6 +145,7 @@ class SingboxModeManager:
         proc_names = [
             "sing-box",
             "sing-box.exe",
+            "ergoms-tun.exe",
             f"{APP_EXE}.exe",
             *[f"{name}.exe" for name in APP_EXE_LEGACY],
         ]
@@ -325,6 +329,11 @@ class SingboxModeManager:
                         },
                     },
                     **({"detour": "squid"} if use_office_proxy else {}),
+                    **(
+                        {"bind_interface": bind_iface}
+                        if bind_iface and not use_office_proxy
+                        else {}
+                    ),
                 },
                 {
                     "type": "direct",
@@ -334,7 +343,7 @@ class SingboxModeManager:
                 {"type": "block", "tag": "block"},
             ],
             "route": {
-                "auto_detect_interface": True,
+                "auto_detect_interface": not bool(bind_iface),
                 **({"default_interface": bind_iface} if bind_iface else {}),
                 "final": "proxy",
                 "rules": [
@@ -448,6 +457,11 @@ class SingboxModeManager:
             self.log("TUN: нужен один запрос прав — дальше без окон Windows")
         self._ensure_win_firewall(exe)
 
+        stale = procutil.tun_bin_pids()
+        if stale:
+            self.log(f"старый tun ещё жив pid={','.join(str(p) for p in stale)} — останавливаю")
+            self.stop()
+
         self._rotate_log()
         pid = self._launch(exe, elevate=need_admin, prelude_cmds=prelude_cmds or [])
         if pid:
@@ -492,13 +506,15 @@ class SingboxModeManager:
         return [ln.rstrip() for ln in lines[-n:] if ln.strip()]
 
     def _rotate_log(self) -> None:
+        """New session = empty log, so the UI does not dump the previous run."""
         path = self.log_path
         try:
-            if not path.is_file() or path.stat().st_size <= 5 * 1024 * 1024:
-                return
-            backup = path.with_name(path.name + ".1")
-            backup.unlink(missing_ok=True)
-            path.replace(backup)
+            if path.is_file() and path.stat().st_size > 0:
+                backup = path.with_name(path.name + ".1")
+                backup.unlink(missing_ok=True)
+                path.replace(backup)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("", encoding="utf-8")
         except OSError:
             pass
 
@@ -548,7 +564,9 @@ class SingboxModeManager:
         pid = self.pid()
         if pid:
             targets.append(pid)
-        for orphan in procutil.pids_named("sing-box.exe", "sing-box"):
+        for orphan in procutil.pids_named(
+            "sing-box.exe", "sing-box", "ergoms-tun.exe", "ergoms-tun"
+        ):
             if orphan not in targets:
                 targets.append(orphan)
         if not targets:
@@ -558,24 +576,23 @@ class SingboxModeManager:
 
         self.log(f"остановка sing-box pid={','.join(str(p) for p in targets)}")
         died = procutil.kill_pids(targets)
-        leftover = [p for p in targets if procutil.pid_alive(p)]
+        leftover = procutil.tun_bin_pids()
         if leftover:
-            self.log(
-                f"обычный taskkill не сработал (pid={','.join(str(p) for p in leftover)}) "
-                "— процесс от администратора, запрашиваю UAC"
-            )
-            if not procutil.elevate_kill_pids(leftover):
-                leftover = [p for p in leftover if procutil.pid_alive(p)]
+            if procutil.is_admin():
+                self.log("добиваю ergoms-tun / sing-box от администратора")
+            else:
+                self.log("процесс с повышенными правами — один запрос UAC на остановку")
+            if not procutil.kill_tun_binaries(elevate_if_needed=True):
+                leftover = procutil.tun_bin_pids()
                 self.pid_path.unlink(missing_ok=True)
                 raise RuntimeError(
-                    f"Не удалось остановить sing-box pid={','.join(str(p) for p in leftover)}. "
-                    "Подтвердите UAC или завершите sing-box.exe в диспетчере задач."
+                    f"Не удалось остановить tun pid={','.join(str(p) for p in leftover)}"
                 )
-            leftover = [p for p in leftover if procutil.pid_alive(p)]
+            leftover = procutil.tun_bin_pids()
             if leftover:
                 self.pid_path.unlink(missing_ok=True)
                 raise RuntimeError(
-                    f"sing-box pid={','.join(str(p) for p in leftover)} всё ещё работает"
+                    f"tun pid={','.join(str(p) for p in leftover)} всё ещё работает"
                 )
         self.log(f"sing-box остановлен (pid={','.join(str(p) for p in died or targets)})")
         self._pid_scan_at = 0.0
@@ -680,7 +697,9 @@ class SingboxModeManager:
         )
 
     def _find_pid(self) -> int | None:
-        for pid in procutil.pids_named("sing-box.exe", "sing-box"):
+        for pid in procutil.pids_named(
+            "sing-box.exe", "sing-box", "ergoms-tun.exe", "ergoms-tun"
+        ):
             return pid
         return None
 

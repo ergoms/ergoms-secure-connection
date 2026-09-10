@@ -191,7 +191,7 @@ class TunManager:
         self._pid_scan_result: int | None = None
 
     def _bin_name(self) -> str:
-        return "sing-box.exe" if sys.platform == "win32" else "sing-box"
+        return "ergoms-tun.exe" if sys.platform == "win32" else "sing-box"
 
     @staticmethod
     def _is_native_sing_box(path: Path) -> bool:
@@ -224,7 +224,15 @@ class TunManager:
         candidates.append(self.tools_dir / name)
         candidates.append(self.tools_dir / "sing-box" / name)
         if sys.platform == "win32":
-            candidates.append(self.tools_dir / "sing-box.exe")
+            legacy = self.tools_dir / "sing-box.exe"
+            branded = self.tools_dir / "ergoms-tun.exe"
+            if legacy.is_file() and not branded.is_file():
+                try:
+                    shutil.copy2(legacy, branded)
+                except OSError:
+                    candidates.append(legacy)
+            candidates.append(branded)
+            candidates.append(legacy)
         else:
             candidates.append(self.tools_dir / "sing-box")
         which = shutil.which(name)
@@ -248,9 +256,10 @@ class TunManager:
         return None
 
     def _bundled_sing_box(self) -> Path | None:
-        packed = bundle_dir() / "tools" / self._bin_name()
-        if self._is_native_sing_box(packed):
-            return packed
+        for name in (self._bin_name(), "sing-box.exe", "sing-box"):
+            packed = bundle_dir() / "tools" / name
+            if self._is_native_sing_box(packed):
+                return packed
         return None
 
     def _materialize_bundled(self) -> Path | None:
@@ -258,9 +267,15 @@ class TunManager:
         src = self._bundled_sing_box()
         if src is None:
             return None
+        dest = self.tools_dir / self._bin_name()
         if not is_frozen():
-            return src
-        dest = self.tools_dir / src.name
+            if dest != src and src.is_file() and not dest.is_file():
+                try:
+                    shutil.copy2(src, dest)
+                    return dest
+                except OSError:
+                    return src
+            return dest if dest.is_file() else src
         try:
             self.tools_dir.mkdir(parents=True, exist_ok=True)
             if dest.is_file() and dest.stat().st_size == src.stat().st_size:
@@ -302,7 +317,9 @@ class TunManager:
         targets: list[int] = []
         if pid:
             targets.append(pid)
-        for orphan in procutil.pids_named("sing-box.exe", "sing-box"):
+        for orphan in procutil.pids_named(
+            "sing-box.exe", "sing-box", "ergoms-tun.exe", "ergoms-tun"
+        ):
             if orphan not in targets:
                 targets.append(orphan)
         died = procutil.kill_pids(targets)
@@ -321,7 +338,9 @@ class TunManager:
             self.log("TUN выключен")
 
     def _find_sing_box_pid(self) -> int | None:
-        for pid in procutil.pids_named("sing-box.exe", "sing-box"):
+        for pid in procutil.pids_named(
+            "sing-box.exe", "sing-box", "ergoms-tun.exe", "ergoms-tun"
+        ):
             return pid
         return None
 
@@ -340,12 +359,12 @@ class TunManager:
             asset = f"sing-box-{ver}-windows-{arch}.zip"
             url = f"https://github.com/SagerNet/sing-box/releases/download/v{ver}/{asset}"
             archive = self.tools_dir / asset
-            target = self.tools_dir / "sing-box.exe"
+            target = self.tools_dir / self._bin_name()
             self.log(f"Downloading {asset}…")
             self._download_file(url, archive, proxy_url=proxy_url)
             with zipfile.ZipFile(archive, "r") as zf:
                 for name in zf.namelist():
-                    if name.endswith("sing-box.exe"):
+                    if name.endswith("sing-box.exe") or name.endswith("ergoms-tun.exe"):
                         with zf.open(name) as src, open(target, "wb") as dst:
                             shutil.copyfileobj(src, dst)
                         break

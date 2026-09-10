@@ -162,7 +162,12 @@ def process_basename(pid: int) -> str:
 
 
 def is_sing_box_pid(pid: int) -> bool:
-    return process_basename(pid) in {"sing-box", "sing-box.exe"}
+    return process_basename(pid) in {
+        "sing-box",
+        "sing-box.exe",
+        "ergoms-tun.exe",
+        "ergoms-tun",
+    }
 
 
 def pids_named(*names: str) -> list[int]:
@@ -267,11 +272,49 @@ def _wait_pid_dead(pid: int, timeout: float = 2.0) -> bool:
     return not pid_alive(pid)
 
 
+def _enable_debug_privilege() -> None:
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        advapi = ctypes.windll.advapi32  # type: ignore[attr-defined]
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        token = wintypes.HANDLE()
+        if not advapi.OpenProcessToken(
+            kernel32.GetCurrentProcess(), 0x20 | 0x8, ctypes.byref(token)
+        ):
+            return
+        class LUID(ctypes.Structure):
+            _fields_ = [("LowPart", wintypes.DWORD), ("HighPart", wintypes.LONG)]
+
+        class LUID_AND_ATTRIBUTES(ctypes.Structure):
+            _fields_ = [("Luid", LUID), ("Attributes", wintypes.DWORD)]
+
+        class TOKEN_PRIVILEGES(ctypes.Structure):
+            _fields_ = [("PrivilegeCount", wintypes.DWORD), ("Privileges", LUID_AND_ATTRIBUTES * 1)]
+
+        luid = LUID()
+        if not advapi.LookupPrivilegeValueW(None, "SeDebugPrivilege", ctypes.byref(luid)):
+            kernel32.CloseHandle(token)
+            return
+        tp = TOKEN_PRIVILEGES()
+        tp.PrivilegeCount = 1
+        tp.Privileges[0].Luid = luid
+        tp.Privileges[0].Attributes = 0x2
+        advapi.AdjustTokenPrivileges(token, False, ctypes.byref(tp), 0, None, None)
+        kernel32.CloseHandle(token)
+    except Exception:
+        pass
+
+
 def _terminate_win(pid: int) -> bool:
     """TerminateProcess; True if the call was issued (process may still be dying)."""
     try:
         import ctypes
 
+        _enable_debug_privilege()
         PROCESS_TERMINATE = 0x0001
         kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
         handle = kernel32.OpenProcess(PROCESS_TERMINATE, 0, int(pid))
@@ -328,7 +371,7 @@ def _elevate_taskkill_win(pids: Sequence[int]) -> bool:
     params = "/T /F " + " ".join(f"/PID {int(p)}" for p in pids)
     rc = int(
         ctypes.windll.shell32.ShellExecuteW(  # type: ignore[attr-defined]
-            None, "runas", "taskkill.exe", params, None, 0
+            None, "runas", "taskkill.exe", params, None, 1
         )
     )
     if rc <= 32:
@@ -672,6 +715,70 @@ def _scan_cmdline_many_win(needles: Sequence[str], me: int) -> dict[str, list[in
     return found
 
 
+_TUN_BIN_NAMES = ("ergoms-tun.exe", "ergoms-tun", "sing-box.exe", "sing-box")
+
+
+def tun_bin_pids() -> list[int]:
+    return pids_named(*_TUN_BIN_NAMES)
+
+
+def _taskkill_images() -> None:
+    if sys.platform != "win32":
+        return
+    run(["taskkill", "/F", "/IM", "ergoms-tun.exe"], timeout=8)
+    run(["taskkill", "/F", "/IM", "sing-box.exe"], timeout=8)
+
+
+def kill_tun_binaries(*, elevate_if_needed: bool = False) -> bool:
+    """Kill ergoms-tun / sing-box. Elevate once only if this process is not admin."""
+    invalidate_proc_cache()
+    if sys.platform == "win32":
+        _enable_debug_privilege()
+        _taskkill_images()
+        leftover = tun_bin_pids()
+        if leftover:
+            for pid in leftover:
+                _terminate_win(pid)
+            leftover = [p for p in leftover if pid_alive(p)]
+        if leftover and elevate_if_needed and not is_admin():
+            return _elevate_kill_tun_win()
+        return not tun_bin_pids()
+    leftover = tun_bin_pids()
+    for pid in leftover:
+        kill_pid(pid)
+    leftover = [p for p in leftover if pid_alive(p)]
+    if leftover and elevate_if_needed and not is_admin():
+        return elevate_kill_pids(leftover)
+    return not tun_bin_pids()
+
+
+def _elevate_kill_tun_win() -> bool:
+    """UAC must be visible — hidden runas often does nothing on Windows."""
+    import ctypes
+    from pathlib import Path
+
+    script = Path(os.environ.get("TEMP") or ".") / "ergoms-stop-tun.cmd"
+    script.write_text(
+        "@echo off\r\n"
+        "taskkill /F /IM ergoms-tun.exe >nul 2>&1\r\n"
+        "taskkill /F /IM sing-box.exe >nul 2>&1\r\n",
+        encoding="utf-8",
+    )
+    rc = int(
+        ctypes.windll.shell32.ShellExecuteW(  # type: ignore[attr-defined]
+            None, "runas", "cmd.exe", f'/c "{script}"', None, 1
+        )
+    )
+    if rc <= 32:
+        return False
+    deadline = time.monotonic() + 45.0
+    while time.monotonic() < deadline:
+        if not tun_bin_pids():
+            return True
+        time.sleep(0.2)
+    return not tun_bin_pids()
+
+
 def kill_pids(
     pids: Sequence[int], *, exclude: int = 0, elevate_if_needed: bool = False
 ) -> list[int]:
@@ -686,8 +793,10 @@ def kill_pids(
         if pid_alive(pid):
             targeted.append(pid)
     if sys.platform == "win32":
+        _enable_debug_privilege()
         for pid in targeted:
             _terminate_win(pid)
+            run(["taskkill", "/F", "/PID", str(pid)], timeout=8)
         deadline = time.monotonic() + 3.0
         while time.monotonic() < deadline:
             if not any(pid_alive(p) for p in targeted):

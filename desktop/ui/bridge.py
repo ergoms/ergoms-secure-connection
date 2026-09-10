@@ -29,6 +29,7 @@ from desktop.config_io import (
     apply_standard_profile,
     default_config_template,
     ensure_config_defaults,
+    get_tun_enabled,
     infer_corporate,
     load_config,
     save_config,
@@ -140,6 +141,7 @@ class GuiBridge(QObject):
         self._closing = False
         self._overrides_cleared = False
         self._await_status = False
+        self._busy_intent = ""
         self._status_pending = False
         self._status_pending_force = False
 
@@ -707,6 +709,14 @@ class GuiBridge(QObject):
     def _run_bg(self, fn: Callable[[], None], waiting: str = "Подождите…") -> None:
         if self._busy:
             return
+        wait = (waiting or "").lower()
+        if "отключ" in wait:
+            self._busy_intent = "off"
+        elif "подключ" in wait:
+            self._busy_intent = "on"
+        else:
+            self._busy_intent = ""
+        self._await_status = True
         self._set_busy(True, waiting)
 
         def work() -> None:
@@ -723,11 +733,14 @@ class GuiBridge(QObject):
     @Slot(str)
     def _on_bg_finished(self, err: str) -> None:
         waiting = self._busy_text
-        if not err:
-            self._apply_optimistic(waiting)
-        self._set_busy(False)
         if err:
+            self._await_status = False
+            self._busy_intent = ""
+            self._set_busy(False)
             self.toast.emit(err, "error")
+            self._refresh_status(force=True)
+            return
+        self._apply_optimistic(waiting)
         self._refresh_status(force=True)
 
     def _apply_optimistic(self, waiting: str) -> None:
@@ -757,7 +770,7 @@ class GuiBridge(QObject):
             self._apply_status(
                 {
                     "singbox_running": True,
-                    "tun_running": self._tun,
+                    "tun_running": True if get_tun_enabled() else self._tun,
                     "socks_up": True,
                     "http_up": True,
                     "pac_up": True,
@@ -779,6 +792,7 @@ class GuiBridge(QObject):
         if not self._await_status:
             return
         self._await_status = False
+        self._busy_intent = ""
         self._set_busy(False)
 
     @Slot()
@@ -836,7 +850,6 @@ class GuiBridge(QObject):
     def _on_status_ready(self, st: object, force: bool) -> None:
         if isinstance(st, dict):
             self._apply_status(st, force=force or self._await_status)
-        self._finish_await_status()
 
     @Slot(str)
     def _apply_status_error(self, err: str) -> None:
@@ -866,6 +879,10 @@ class GuiBridge(QObject):
             f"|{st.get('reverse_ssh_listen')}|{ks_on}"
         )
         if not force and (sig == self._last_status_sig or (self._busy and not self._await_status)):
+            return
+        if self._await_status and self._busy_intent == "on" and not (singbox or tun):
+            return
+        if self._await_status and self._busy_intent == "off" and (singbox or tun):
             return
         self._last_status_sig = sig
 
@@ -955,6 +972,13 @@ class GuiBridge(QObject):
         self.statusSubChanged.emit()
         self.statusColorChanged.emit()
         self.powerTextChanged.emit()
+        if self._await_status:
+            if self._busy_intent == "on" and (singbox or tun):
+                self._finish_await_status()
+            elif self._busy_intent == "off" and not singbox and not tun:
+                self._finish_await_status()
+            elif self._busy_intent not in ("on", "off"):
+                self._finish_await_status()
 
 
 def _settings_defaults() -> dict[str, Any]:
