@@ -31,8 +31,9 @@ Item {
             horizontalAlignment: Text.AlignHCenter
             text: bridge.busy ? bridge.busyText : bridge.statusTitle
             color: T.text
-            font.pixelSize: 24
-            font.bold: true
+            font.pixelSize: 22
+            font.weight: Font.DemiBold
+            font.letterSpacing: 0.2
             font.family: T.fontUi
             Behavior on opacity { NumberAnimation { duration: 160 } }
         }

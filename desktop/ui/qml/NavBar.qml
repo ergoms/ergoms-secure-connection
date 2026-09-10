@@ -6,6 +6,14 @@ Rectangle {
     color: T.surface
     height: 56
 
+    Rectangle {
+        anchors.top: parent.top
+        anchors.left: parent.left
+        anchors.right: parent.right
+        height: 1
+        color: Qt.rgba(1, 1, 1, 0.05)
+    }
+
     Row {
         anchors.fill: parent
         Repeater {
@@ -30,8 +38,9 @@ Rectangle {
                         anchors.centerIn: parent
                         text: modelData.label
                         color: bridge.page === modelData.key ? T.text : T.muted
-                        font.pixelSize: 13
-                        font.bold: true
+                        font.pixelSize: 12
+                        font.weight: Font.DemiBold
+                        font.letterSpacing: 0.2
                         font.family: T.fontUi
                     }
                 }

@@ -8,15 +8,15 @@ Rectangle {
     property string text: ""
     signal clicked()
 
-    radius: 14
-    implicitHeight: 48
-    readonly property color baseColor: danger ? T.danger : (primary ? T.accent : T.btn)
-    readonly property color hoverColor: danger ? T.dangerDim : (primary ? T.accentDim : T.btnHover)
+    radius: 12
+    implicitHeight: 44
+    readonly property color baseColor: danger ? T.danger : (primary ? T.accent : T.surface2)
+    readonly property color hoverColor: danger ? T.dangerDim : (primary ? T.accentDim : T.btn)
     color: mouse.containsMouse && enabled ? hoverColor : baseColor
     border.width: primary || danger ? 0 : 1
-    border.color: T.border
-    scale: mouse.pressed && enabled ? 0.98 : 1.0
-    opacity: enabled ? 1 : 0.45
+    border.color: mouse.containsMouse && enabled ? T.border : Qt.rgba(1, 1, 1, 0.06)
+    scale: mouse.pressed && enabled ? 0.985 : 1.0
+    opacity: enabled ? 1 : 0.42
     Behavior on color { ColorAnimation { duration: 140 } }
     Behavior on scale { NumberAnimation { duration: 90 } }
 
@@ -24,8 +24,9 @@ Rectangle {
         anchors.centerIn: parent
         text: root.text
         color: root.primary && !root.danger ? "#04140f" : T.text
-        font.pixelSize: 14
-        font.bold: true
+        font.pixelSize: 13
+        font.weight: Font.DemiBold
+        font.letterSpacing: 0.25
         font.family: T.fontUi
     }
 

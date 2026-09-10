@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import sys
 from pathlib import Path
 from typing import Callable
@@ -22,26 +21,68 @@ def _noop(msg: str) -> None:
 
 
 def _git_exe() -> str:
-    found = shutil.which("git")
-    if found:
-        return found
+    extra: list[Path] = []
     if sys.platform == "win32":
         pf = os.environ.get("ProgramFiles", r"C:\Program Files")
         pf86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
         local = os.environ.get("LOCALAPPDATA", "")
-        for path in (
+        extra = [
             Path(pf) / "Git" / "cmd" / "git.exe",
             Path(pf) / "Git" / "bin" / "git.exe",
             Path(pf86) / "Git" / "cmd" / "git.exe",
             Path(local) / "Programs" / "Git" / "cmd" / "git.exe",
-        ):
-            if path.is_file():
-                return str(path)
-    return "git"
+        ]
+    found = procutil.which_exe("git", extra)
+    return found or "git"
 
 
 def _git(*args: str, check: bool = False):
-    return procutil.run([_git_exe(), *args], check=check)
+    return procutil.run([_git_exe(), *args], check=check, timeout=10)
+
+
+def _global_gitconfig_paths() -> list[Path]:
+    paths: list[Path] = []
+    override = os.environ.get("GIT_CONFIG_GLOBAL")
+    if override:
+        paths.append(Path(override))
+    paths.append(Path.home() / ".gitconfig")
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    if xdg:
+        paths.append(Path(xdg) / "git" / "config")
+    else:
+        paths.append(Path.home() / ".config" / "git" / "config")
+    seen: set[str] = set()
+    out: list[Path] = []
+    for path in paths:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(path)
+    return out
+
+
+def _gitconfig_looks_dirty() -> bool:
+    """True if ~/.gitconfig still has our proxy / insteadOf leftovers."""
+    for path in _global_gitconfig_paths():
+        try:
+            text = path.read_text(encoding="utf-8-sig")
+        except OSError:
+            continue
+        if not text:
+            continue
+        low = text.lower()
+        if any(f":{port}" in low for port in _BRIDGE_PORTS) and (
+            "127.0.0.1" in low or "localhost" in low or "[::1]" in low
+        ):
+            return True
+        if re.search(
+            r"ops-content|ergoms-vpn|ergoms-secure-connection|proxy-kill|/https/github",
+            text,
+            re.I,
+        ):
+            return True
+    return False
 
 
 def git_get(key: str) -> str:
@@ -222,11 +263,14 @@ def clear_git_proxy(
     restored = False
     if backup_path is not None and backup_path.is_file():
         restored = _restore_git_proxy(backup_path)
-    pairs = _git_config_list()
-    keys = _keys_to_clear(pairs, keep_restored_proxy=restored)
+    keys: list[str] = []
+    # TUN mode never writes git http.proxy — skip git.exe unless leftovers exist.
+    if restored or _gitconfig_looks_dirty():
+        pairs = _git_config_list()
+        keys = _keys_to_clear(pairs, keep_restored_proxy=restored)
+        for key in keys:
+            _git("config", "--global", "--unset-all", key)
     had_cli = cli_env.is_file() or cli_ps1.is_file()
-    for key in keys:
-        _git("config", "--global", "--unset-all", key)
     clear_cli_env_proxy(cli_env, cli_ps1)
     if restored or keys or had_cli:
         log("git proxy restored" if restored else "git proxy cleared")
@@ -242,14 +286,10 @@ def clear_stale_git_proxy(
     """Remove our leftover git/CLI proxy when the VPN is not using it."""
     has_cli = cli_env.is_file() or cli_ps1.is_file()
     has_backup = bool(backup_path and backup_path.is_file())
-    proxy = ""
-    for key, val in _git_config_list():
-        if key.lower() in ("http.proxy", "https.proxy") and val.strip():
-            proxy = val.strip()
-            break
-    if not _is_local_bridge_proxy(proxy) and not has_cli and not has_backup:
+    dirty = _gitconfig_looks_dirty()
+    if not dirty and not has_cli and not has_backup:
         return False
     clear_git_proxy(cli_env, cli_ps1, log=log, backup_path=backup_path)
-    if _is_local_bridge_proxy(proxy):
-        log(f"снят git proxy ({proxy})")
+    if dirty:
+        log("снят git proxy")
     return True

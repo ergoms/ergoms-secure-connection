@@ -18,9 +18,7 @@ Item {
             contentWidth: width
             contentHeight: form.height
             boundsBehavior: Flickable.StopAtBounds
-            ScrollBar.vertical: ScrollBar {
-                policy: ScrollBar.AsNeeded
-            }
+            ScrollBar.vertical: AppScrollBar {}
 
             Column {
                 id: form
@@ -42,13 +40,7 @@ Item {
                     wrapMode: Text.WordWrap
                 }
 
-                Text {
-                    text: "VPN"
-                    color: T.muted
-                    font.pixelSize: 11
-                    font.bold: true
-                    font.family: T.fontUi
-                }
+                SectionLabel { text: "VPN" }
                 Card {
                     width: parent.width
                     implicitHeight: vpnCol.implicitHeight + 24
@@ -60,7 +52,7 @@ Item {
                         anchors.margins: 14
                         spacing: 10
 
-                        Text { text: "Корпоративный VPN"; color: T.muted; font.pixelSize: 11; font.family: T.fontUi }
+                        Text { text: "Корпоративный VPN"; color: T.muted; font.pixelSize: 11; font.weight: Font.Medium; font.family: T.fontUi }
                         Segmented {
                             width: parent.width
                             value: bridge.corporate ? "1" : "0"
@@ -70,7 +62,7 @@ Item {
                             ]
                             onActivated: (v) => { bridge.applyCorporateMode(v === "1") }
                         }
-                        Text { text: "TUN автоматически"; color: T.muted; font.pixelSize: 11; font.family: T.fontUi }
+                        Text { text: "TUN автоматически"; color: T.muted; font.pixelSize: 11; font.weight: Font.Medium; font.family: T.fontUi }
                         Segmented {
                             width: parent.width
                             value: bridge.settings.tunAuto ? "1" : "0"
@@ -84,7 +76,7 @@ Item {
                                     bridge.settings.killSwitch = false
                             }
                         }
-                        Text { text: "Kill switch"; color: T.muted; font.pixelSize: 11; font.family: T.fontUi }
+                        Text { text: "Kill switch"; color: T.muted; font.pixelSize: 11; font.weight: Font.Medium; font.family: T.fontUi }
                         Segmented {
                             width: parent.width
                             value: bridge.settings.killSwitch ? "1" : "0"
@@ -98,7 +90,7 @@ Item {
                                     bridge.settings.tunAuto = true
                             }
                         }
-                        Text { text: "Автозапуск с компьютером"; color: T.muted; font.pixelSize: 11; font.family: T.fontUi }
+                        Text { text: "Автозапуск с компьютером"; color: T.muted; font.pixelSize: 11; font.weight: Font.Medium; font.family: T.fontUi }
                         Segmented {
                             width: parent.width
                             value: bridge.autostart ? "1" : "0"
@@ -108,7 +100,7 @@ Item {
                             ]
                             onActivated: (v) => { bridge.setAutostart(v === "1") }
                         }
-                        Text { text: "Офисный прокси (Squid)"; color: T.muted; font.pixelSize: 11; font.family: T.fontUi }
+                        Text { text: "Офисный прокси (Squid)"; color: T.muted; font.pixelSize: 11; font.weight: Font.Medium; font.family: T.fontUi }
                         Segmented {
                             width: parent.width
                             value: bridge.settings.useProxy ? "1" : "0"
@@ -127,12 +119,8 @@ Item {
                     }
                 }
 
-                Text {
+                SectionLabel {
                     text: "ИНТЕГРАЦИИ"
-                    color: T.muted
-                    font.pixelSize: 11
-                    font.bold: true
-                    font.family: T.fontUi
                     topPadding: 8
                 }
                 Card {
@@ -146,7 +134,7 @@ Item {
                         anchors.margins: 14
                         spacing: 10
 
-                        Text { text: "Git через VPN"; color: T.muted; font.pixelSize: 11; font.family: T.fontUi }
+                        Text { text: "Git через VPN"; color: T.muted; font.pixelSize: 11; font.weight: Font.Medium; font.family: T.fontUi }
                         Segmented {
                             width: parent.width
                             value: bridge.settings.gitProxy ? "1" : "0"
@@ -156,7 +144,7 @@ Item {
                             ]
                             onActivated: (v) => { bridge.settings.gitProxy = (v === "1") }
                         }
-                        Text { text: "Docker через VPN"; color: T.muted; font.pixelSize: 11; font.family: T.fontUi }
+                        Text { text: "Docker через VPN"; color: T.muted; font.pixelSize: 11; font.weight: Font.Medium; font.family: T.fontUi }
                         Segmented {
                             width: parent.width
                             value: bridge.settings.dockerProxy ? "1" : "0"
@@ -169,12 +157,8 @@ Item {
                     }
                 }
 
-                Text {
+                SectionLabel {
                     text: "СЕРВЕР"
-                    color: T.muted
-                    font.pixelSize: 11
-                    font.bold: true
-                    font.family: T.fontUi
                     topPadding: 8
                 }
                 Card {
@@ -217,14 +201,10 @@ Item {
                     }
                 }
 
-                Text {
+                SectionLabel {
                     visible: bridge.corporate
                     height: visible ? implicitHeight : 0
                     text: "КОРПОРАТИВНАЯ СЕТЬ"
-                    color: T.muted
-                    font.pixelSize: 11
-                    font.bold: true
-                    font.family: T.fontUi
                     topPadding: 8
                 }
                 Card {
@@ -240,7 +220,7 @@ Item {
                         anchors.margins: 14
                         spacing: 10
 
-                        Text { text: "Область трафика"; color: T.muted; font.pixelSize: 11; font.family: T.fontUi }
+                        Text { text: "Область трафика"; color: T.muted; font.pixelSize: 11; font.weight: Font.Medium; font.family: T.fontUi }
                         Segmented {
                             width: parent.width
                             value: String(bridge.settings.socksScope)
@@ -254,7 +234,7 @@ Item {
                             label: "Исключения (через запятую)"
                             settingKey: "proxyBypass"
                         }
-                        Text { text: "SSH с VPS на этот ПК"; color: T.muted; font.pixelSize: 11; font.family: T.fontUi }
+                        Text { text: "SSH с VPS на этот ПК"; color: T.muted; font.pixelSize: 11; font.weight: Font.Medium; font.family: T.fontUi }
                         Segmented {
                             width: parent.width
                             value: bridge.settings.reverseSsh ? "1" : "0"
@@ -301,6 +281,15 @@ Item {
             Layout.fillWidth: true
             Layout.preferredHeight: 62
             color: T.bg
+
+            Rectangle {
+                anchors.top: parent.top
+                anchors.left: parent.left
+                anchors.right: parent.right
+                height: 1
+                color: Qt.rgba(1, 1, 1, 0.05)
+            }
+
             RowLayout {
                 anchors.fill: parent
                 anchors.leftMargin: 14

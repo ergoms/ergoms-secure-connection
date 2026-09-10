@@ -5,19 +5,65 @@ from __future__ import annotations
 import base64
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
+from pathlib import Path
 from typing import Callable, Sequence
 
 _PROC_CACHE_TTL = 1.0
 _proc_cache: dict[tuple, tuple[float, list[int]]] = {}
+_CMD_SUFFIXES = {".cmd", ".bat", ".com"}
 
 
 def creationflags() -> int:
     if sys.platform == "win32":
         return subprocess.CREATE_NO_WINDOW  # type: ignore[attr-defined]
     return 0
+
+
+def startupinfo() -> subprocess.STARTUPINFO | None:
+    """Hide console windows even when a .cmd shim slips through."""
+    if sys.platform != "win32":
+        return None
+    info = subprocess.STARTUPINFO()
+    info.dwFlags |= subprocess.STARTF_USESHOWWINDOW  # type: ignore[attr-defined]
+    info.wShowWindow = 0
+    return info
+
+
+def which_exe(name: str, extra: Sequence[str | Path] | None = None) -> str | None:
+    """Like shutil.which, but prefer a real .exe over git.cmd / docker.cmd.
+
+    CREATE_NO_WINDOW does not hide the flash from cmd.exe script wrappers.
+    """
+    found = shutil.which(name)
+    candidates: list[Path] = []
+    if found:
+        candidates.append(Path(found))
+    if extra:
+        candidates.extend(Path(p) for p in extra if p)
+    if sys.platform != "win32":
+        return found
+    seen: set[str] = set()
+    fallback: str | None = found
+    for raw in candidates:
+        paths = [raw]
+        if raw.suffix.lower() in _CMD_SUFFIXES:
+            paths.insert(0, raw.with_suffix(".exe"))
+        for cand in paths:
+            key = str(cand).lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            if not cand.is_file():
+                continue
+            if cand.suffix.lower() == ".exe":
+                return str(cand)
+            if fallback is None:
+                fallback = str(cand)
+    return fallback
 
 
 def is_admin() -> bool:
@@ -99,6 +145,7 @@ def run(
         cwd=cwd,
         timeout=timeout,
         creationflags=creationflags(),
+        startupinfo=startupinfo(),
     )
 
 
@@ -119,6 +166,7 @@ def popen(
         "env": env,
         "cwd": cwd,
         "creationflags": creationflags(),
+        "startupinfo": startupinfo(),
     }
     # Survive parent exit (CLI `on` returns immediately; bridge must keep running).
     if detached:
