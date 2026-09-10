@@ -108,7 +108,7 @@ Item {
                             ]
                             onActivated: (v) => { bridge.setAutostart(v === "1") }
                         }
-                        Text { text: "Прокси"; color: T.muted; font.pixelSize: 11; font.family: T.fontUi }
+                        Text { text: "Офисный прокси (Squid)"; color: T.muted; font.pixelSize: 11; font.family: T.fontUi }
                         Segmented {
                             width: parent.width
                             value: bridge.settings.useProxy ? "1" : "0"
