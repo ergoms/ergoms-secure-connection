@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path
 
-from desktop.branding import APP_NAME, ORG_NAME
+from desktop.branding import APP_AUMID, APP_NAME, ORG_NAME
 from desktop.paths import Paths, bundle_dir
 
 
@@ -42,8 +42,17 @@ def run_gui() -> None:
     QSurfaceFormat.setDefaultFormat(fmt)
     QQuickWindow.setDefaultAlphaBuffer(True)
 
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_AUMID)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
+    app.setApplicationDisplayName(APP_NAME)
     app.setOrganizationName(ORG_NAME)
     app.setQuitOnLastWindowClosed(False)
 

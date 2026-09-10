@@ -106,7 +106,7 @@ def _direct_python_paths() -> list[str]:
         siblings = [exe.with_name(n) for n in ("pythonw.exe", "python.exe", "python3.exe")]
         for sib in siblings:
             add(sib)
-        # Frozen ErgomsSecureConnection.exe: ProxyCommand falls back to PATH pythonw
+        # Frozen ERGOMS SECURE CONNECTION.exe: ProxyCommand falls back to PATH pythonw
         if not any(s.is_file() for s in siblings):
             for name in ("pythonw.exe", "python.exe", "python3.exe"):
                 w = shutil.which(name)

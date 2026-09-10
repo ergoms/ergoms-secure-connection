@@ -166,10 +166,10 @@ function Invoke-PyInstaller {
         Install-SingBox
     }
     $py = Get-VenvPython
-    Write-Host 'PyInstaller: ErgomsSecureConnection.spec -> dist/ErgomsSecureConnection/'
+    Write-Host 'PyInstaller: ErgomsSecureConnection.spec -> dist/ERGOMS SECURE CONNECTION/'
     & $py -m PyInstaller --noconfirm --clean ErgomsSecureConnection.spec
     if ($LASTEXITCODE -ne 0) { throw "pyinstaller failed: $LASTEXITCODE" }
-    $exe = Join-Path $Root 'dist\ErgomsSecureConnection\ErgomsSecureConnection.exe'
+    $exe = Join-Path $Root 'dist\ERGOMS SECURE CONNECTION\ERGOMS SECURE CONNECTION.exe'
     if (-not (Test-Path -LiteralPath $exe)) { throw "missing $exe" }
     Write-Host "OK: $exe"
 }
@@ -220,9 +220,9 @@ function Install-InnoSetup {
 }
 
 function Invoke-Installer {
-    $exe = Join-Path $Root 'dist\ErgomsSecureConnection\ErgomsSecureConnection.exe'
+    $exe = Join-Path $Root 'dist\ERGOMS SECURE CONNECTION\ERGOMS SECURE CONNECTION.exe'
     if (-not (Test-Path -LiteralPath $exe)) {
-        throw 'missing dist/ErgomsSecureConnection/ErgomsSecureConnection.exe — run build first'
+        throw 'missing dist/ERGOMS SECURE CONNECTION/ERGOMS SECURE CONNECTION.exe — run build first'
     }
     $iscc = Get-IsccExe
     if (-not $iscc) {
@@ -235,7 +235,7 @@ function Invoke-Installer {
     Write-Host "Inno Setup: $iscc /DAppVersion=$ver"
     & $iscc "/DAppVersion=$ver" $iss
     if ($LASTEXITCODE -ne 0) { throw "ISCC failed: $LASTEXITCODE" }
-    $setup = Join-Path $Root "dist\ErgomsSecureConnection-Setup-$ver.exe"
+    $setup = Join-Path $Root "dist\ERGOMS SECURE CONNECTION-Setup-$ver.exe"
     if (-not (Test-Path -LiteralPath $setup)) { throw "missing $setup" }
     Write-Host "OK: $setup"
 }
