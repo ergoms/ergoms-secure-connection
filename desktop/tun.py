@@ -81,6 +81,84 @@ def _is_tun_iface(name: str) -> bool:
     return low.startswith(("ops-content", "ergoms-secure-connection", "ergoms"))
 
 
+_FOREIGN_VPN = (
+    "amnezia",
+    "amn0",
+    "outline",
+    "wireguard",
+    "nordlynx",
+    "openvpn",
+    "proton",
+    "surfshark",
+)
+_FOREIGN_PROCS = (
+    "AmneziaVPN.exe",
+    "AmneziaVPN-service.exe",
+    "outline.exe",
+    "wireguard.exe",
+)
+
+
+def foreign_vpn_adapters() -> list[str]:
+    """Other VPN NICs/processes that will fight TUN routes (Amnezia, …)."""
+    found: list[str] = []
+    if sys.platform == "win32":
+        try:
+            r = subprocess.run(
+                ["netsh", "interface", "show", "interface"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            r = None
+        if r:
+            for line in (r.stdout or "").splitlines():
+                low = line.lower()
+                if "disconnected" in low or "connected" not in low:
+                    continue
+                if _is_tun_iface(line):
+                    continue
+                hit = next((tag for tag in _FOREIGN_VPN if tag in low), None)
+                if hit and hit not in found:
+                    found.append(hit)
+        for proc in _FOREIGN_PROCS:
+            try:
+                r = subprocess.run(
+                    ["tasklist", "/FI", f"IMAGENAME eq {proc}", "/NH"],
+                    capture_output=True,
+                    text=True,
+                    timeout=4,
+                    check=False,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+            if proc.lower() in (r.stdout or "").lower():
+                tag = proc.replace(".exe", "")
+                if tag not in found:
+                    found.append(tag)
+        return found
+    try:
+        r = subprocess.run(
+            ["ip", "-o", "link", "show"],
+            capture_output=True,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    for line in (r.stdout or "").splitlines():
+        low = line.lower()
+        hit = next((tag for tag in _FOREIGN_VPN if tag in low), None)
+        if hit and hit not in found:
+            found.append(hit)
+    return found
+
+
 def _detect_bind_win(dest: str) -> str | None:
     """Windows NIC alias (e.g. Wi-Fi) used to reach dest before TUN is up."""
     ip = _resolve_host(dest)

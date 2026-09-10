@@ -288,7 +288,85 @@ def _is_applied_uncached() -> bool:
 
 def remember_plan(var_dir: Path, allow: list[str], *, gw: str | None = None) -> None:
     hop = gw or (underlay_gateway(allow[0]) if allow else "") or ""
-    _save_state(var_dir, {"allow": list(allow), "gw": hop, "applied": is_applied()})
+    idx = _iface_index_win(allow[0]) if sys.platform == "win32" and allow else None
+    _save_state(
+        var_dir,
+        {
+            "allow": list(allow),
+            "gw": hop,
+            "if_idx": idx,
+            "applied": is_applied(),
+        },
+    )
+
+
+def planned_pin_commands(var_dir: Path, allow: list[str] | None = None) -> list[str]:
+    """Host /32 commands using gw/if captured before TUN auto_route."""
+    st = _load_state(var_dir)
+    unique = list(
+        dict.fromkeys(
+            allow or [str(x) for x in (st.get("allow") or []) if x]
+        )
+    )
+    hop = str(st.get("gw") or "") or None
+    raw_idx = st.get("if_idx")
+    try:
+        idx = int(raw_idx) if raw_idx not in (None, "") else None
+    except (TypeError, ValueError):
+        idx = None
+    return pin_commands(unique, gw=hop, if_idx=idx)
+
+
+def pin_commands(
+    allow: list[str], *, gw: str | None = None, if_idx: int | None = None
+) -> list[str]:
+    """Re-add host /32 routes so TUN auto_route cannot steal VPS/Squid."""
+    unique = list(dict.fromkeys(ip for ip in allow if ip))
+    hop = gw or (underlay_gateway(unique[0]) if unique else None)
+    if not hop or not unique:
+        return []
+    if sys.platform == "win32":
+        idx = if_idx if if_idx else _iface_index_win(unique[0])
+        cmds: list[str] = []
+        for ip in unique:
+            cmds.append(f"route delete {ip} mask 255.255.255.255")
+            line = f"route add {ip} mask 255.255.255.255 {hop} metric 1"
+            if idx:
+                line += f" if {idx}"
+            cmds.append(line)
+        return cmds
+    return [f"ip route replace {ip}/32 via {hop}" for ip in unique]
+
+
+def pin_underlay(
+    allow: list[str],
+    *,
+    var_dir: Path,
+    log: LogFn = _noop,
+    elevate: bool = False,
+) -> bool:
+    """Restore VPS/Squid /32 after TUN is up. Uses gw/if saved before auto_route."""
+    st = _load_state(var_dir)
+    unique = list(dict.fromkeys(allow or [str(x) for x in (st.get("allow") or []) if x]))
+    hop = str(st.get("gw") or "") or (underlay_gateway(unique[0]) if unique else "")
+    raw_idx = st.get("if_idx")
+    try:
+        idx = int(raw_idx) if raw_idx not in (None, "") else None
+    except (TypeError, ValueError):
+        idx = None
+    cmds = pin_commands(unique, gw=hop or None, if_idx=idx)
+    if not cmds:
+        log("underlay pin: нет gw/allow — /32 к VPS не закрепляю")
+        return False
+    log(f"underlay pin: gw={hop} if={idx or '?'} allow={', '.join(unique)}")
+    if procutil.is_admin():
+        ok = _run_lines_now(cmds, ignore_fail=True)
+    elif elevate:
+        ok = _run_privileged_lines(cmds, log=log, ignore_fail=True)
+    else:
+        return False
+    invalidate_applied_cache()
+    return ok
 
 
 def apply(allow: list[str], *, var_dir: Path, log: LogFn = _noop) -> bool:
@@ -296,13 +374,20 @@ def apply(allow: list[str], *, var_dir: Path, log: LogFn = _noop) -> bool:
     unique = list(dict.fromkeys(allow))
     if is_applied():
         hop = underlay_gateway(unique[0]) if unique else underlay_gateway("")
-        _save_state(var_dir, {"allow": unique, "gw": hop or "", "applied": True})
+        idx = _iface_index_win(unique[0]) if sys.platform == "win32" and unique else None
+        _save_state(
+            var_dir,
+            {"allow": unique, "gw": hop or "", "if_idx": idx, "applied": True},
+        )
         log("kill switch: маршруты уже стоят")
         return True
     gw = underlay_gateway(unique[0]) if unique else underlay_gateway("")
+    idx = _iface_index_win(unique[0]) if sys.platform == "win32" and unique else None
     if not gw:
         log("kill switch: нет default gateway — OS-маршруты не ставлю (останется strict_route)")
-        _save_state(var_dir, {"allow": unique, "gw": "", "applied": False})
+        _save_state(
+            var_dir, {"allow": unique, "gw": "", "if_idx": idx, "applied": False}
+        )
         return False
     reachable_before = _host_open(unique[0], 443) if unique else False
     cmds = install_commands(unique, gw=gw)
@@ -310,7 +395,9 @@ def apply(allow: list[str], *, var_dir: Path, log: LogFn = _noop) -> bool:
     _run_privileged_lines(cmds, log=log, expect_applied=True)
     invalidate_applied_cache()
     present = is_applied(force=True)
-    _save_state(var_dir, {"allow": unique, "gw": gw, "applied": present})
+    _save_state(
+        var_dir, {"allow": unique, "gw": gw, "if_idx": idx, "applied": present}
+    )
     text = _route_print_win(force=True) if sys.platform == "win32" else ""
     for ip in unique:
         hit = [ln.strip() for ln in text.splitlines() if ip in ln]
@@ -328,7 +415,9 @@ def apply(allow: list[str], *, var_dir: Path, log: LogFn = _noop) -> bool:
             "kill switch: OK — VPS в таблице"
             + ("" if present else " (чёрные 0.0.0.0/1 Windows не показывает, это нормально)")
         )
-        _save_state(var_dir, {"allow": unique, "gw": gw, "applied": True})
+        _save_state(
+            var_dir, {"allow": unique, "gw": gw, "if_idx": idx, "applied": True}
+        )
         return True
     if procutil.is_admin():
         log("kill switch: команды выполнены, но маршруты не видны")

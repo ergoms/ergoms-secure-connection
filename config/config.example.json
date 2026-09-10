@@ -53,7 +53,7 @@
     "enabled": true,
     "elevate": true,
     "sing_box_path": "",
-    "mtu": 1500
+    "mtu": 1400
   },
   "transport": {
     "type": "vless-reality",
