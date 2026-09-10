@@ -235,7 +235,7 @@ function Invoke-Installer {
     Write-Host "Inno Setup: $iscc /DAppVersion=$ver"
     & $iscc "/DAppVersion=$ver" $iss
     if ($LASTEXITCODE -ne 0) { throw "ISCC failed: $LASTEXITCODE" }
-    $setup = Join-Path $Root "dist\ERGOMS SECURE CONNECTION-Setup-$ver.exe"
+    $setup = Join-Path $Root "dist\ERGOMS SECURE CONNECTION-Setup.exe"
     if (-not (Test-Path -LiteralPath $setup)) { throw "missing $setup" }
     Write-Host "OK: $setup"
 }

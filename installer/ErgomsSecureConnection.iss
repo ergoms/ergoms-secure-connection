@@ -8,13 +8,17 @@
 [Setup]
 AppId={{8C3E2A71-9B54-4F0E-9D6A-1E7C4B8F2D90}
 AppName={#AppName}
+AppVerName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher=ERGOMS
+VersionInfoVersion={#AppVersion}
+VersionInfoProductName={#AppName}
+VersionInfoProductVersion={#AppVersion}
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 OutputDir=..\dist
-OutputBaseFilename=ERGOMS SECURE CONNECTION-Setup-{#AppVersion}
+OutputBaseFilename=ERGOMS SECURE CONNECTION-Setup
 SetupIconFile=..\desktop\app_icon.ico
 Compression=lzma2
 SolidCompression=yes
