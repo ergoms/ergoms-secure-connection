@@ -6,7 +6,9 @@ import os
 
 APP_NAME = "ERGOMS SECURE CONNECTION"
 APP_ID = "ergoms-secure-connection"
-APP_EXE = "ErgomsSecureConnection"
+APP_EXE = "ERGOMS SECURE CONNECTION"
+APP_EXE_LEGACY = ("ErgomsSecureConnection", "ErgomsVPN", "OpsContent")
+APP_AUMID = "ERGOMS.SECURE.CONNECTION"
 ORG_NAME = "ERGOMS"
 
 ENV_DATA = "ERGOMS_SC_DATA"

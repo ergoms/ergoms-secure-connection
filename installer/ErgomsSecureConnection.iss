@@ -3,7 +3,7 @@
 #endif
 
 #define AppName "ERGOMS SECURE CONNECTION"
-#define AppExeName "ErgomsSecureConnection.exe"
+#define AppExeName "ERGOMS SECURE CONNECTION.exe"
 
 [Setup]
 AppId={{8C3E2A71-9B54-4F0E-9D6A-1E7C4B8F2D90}
@@ -14,7 +14,7 @@ DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 OutputDir=..\dist
-OutputBaseFilename=ErgomsSecureConnection-Setup-{#AppVersion}
+OutputBaseFilename=ERGOMS SECURE CONNECTION-Setup-{#AppVersion}
 SetupIconFile=..\desktop\app_icon.ico
 Compression=lzma2
 SolidCompression=yes
@@ -35,7 +35,7 @@ Name: "desktopicon"; Description: "Ярлык на рабочем столе"; G
 Name: "autostart"; Description: "Автозапуск при входе в Windows"; GroupDescription: "Дополнительно:"; Flags: unchecked
 
 [Files]
-Source: "..\dist\ErgomsSecureConnection\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\ERGOMS SECURE CONNECTION\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExeName}"

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from desktop import procutil
+from desktop.branding import APP_EXE, APP_EXE_LEGACY
 from desktop.tun import (
     RUSTDESK_PORTS,
     TunManager,
@@ -131,9 +132,8 @@ class SingboxModeManager:
         proc_names = [
             "sing-box",
             "sing-box.exe",
-            "ErgomsSecureConnection.exe",
-            "ErgomsVPN.exe",
-            "OpsContent.exe",
+            f"{APP_EXE}.exe",
+            *[f"{name}.exe" for name in APP_EXE_LEGACY],
         ]
         docker_wsl_procs = [
             "vmmem",

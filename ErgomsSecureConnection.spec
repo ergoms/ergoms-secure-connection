@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""One-dir GUI/CLI build → dist/ErgomsSecureConnection/ (exe + _internal)."""
+"""One-dir GUI/CLI build → dist/ERGOMS SECURE CONNECTION/ (exe + _internal)."""
 
 import sys
 from pathlib import Path
@@ -77,12 +77,18 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 
+_exe_kw = {}
+if sys.platform == "win32":
+    _ver = root / "installer" / "file_version_info.txt"
+    if _ver.is_file():
+        _exe_kw["version"] = str(_ver)
+
 exe = EXE(
     pyz,
     a.scripts,
     [],
     exclude_binaries=True,
-    name="ErgomsSecureConnection",
+    name="ERGOMS SECURE CONNECTION",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -94,10 +100,11 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=str(ico) if ico.is_file() else None,
+    **_exe_kw,
 )
 coll = COLLECT(
     exe,
     a.binaries,
     a.datas,
-    name="ErgomsSecureConnection",
+    name="ERGOMS SECURE CONNECTION",
 )

@@ -32,7 +32,7 @@
     },
     {
       "label": "ERGOMS SECURE CONNECTION: build",
-      "detail": "Собрать one-dir + установщик: dist/ErgomsSecureConnection/ и Setup.exe",
+      "detail": "Собрать one-dir + установщик: dist/ERGOMS SECURE CONNECTION/ и Setup.exe",
       "type": "process",
       "command": "bash",
       "args": ["${workspaceFolder}/.vscode/setup.sh", "build"],
