@@ -8,22 +8,36 @@ $ErrorActionPreference = 'Stop'
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 Set-Location $Root
 
+function Test-PythonExe {
+    param([string]$Exe, [string[]]$Prefix = @())
+    if (-not $Exe -or -not (Test-Path -LiteralPath $Exe)) { return $false }
+    & $Exe @($Prefix + @('-c', 'import sys')) 2>$null | Out-Null
+    return $LASTEXITCODE -eq 0
+}
+
 function Get-SystemPython {
     foreach ($name in @('python', 'py')) {
         $cmd = Get-Command $name -ErrorAction SilentlyContinue
         if (-not $cmd) { continue }
         if ($cmd.Source -match 'WindowsApps') { continue }
-        if ($name -eq 'py') {
-            & $cmd.Source -3 -c 'import sys' 2>$null | Out-Null
-            if ($LASTEXITCODE -eq 0) {
-                return @{ Exe = $cmd.Source; Prefix = @('-3') }
-            }
+        $prefix = if ($name -eq 'py') { @('-3') } else { @() }
+        if (Test-PythonExe $cmd.Source $prefix) {
+            return @{ Exe = $cmd.Source; Prefix = $prefix }
         }
-        else {
-            & $cmd.Source -c 'import sys' 2>$null | Out-Null
-            if ($LASTEXITCODE -eq 0) {
-                return @{ Exe = $cmd.Source; Prefix = @() }
-            }
+    }
+    # Python install manager: aliases live in WindowsApps, the real exe is here.
+    $localCandidates = @(
+        (Join-Path $env:LOCALAPPDATA 'Python\bin\python.exe')
+    )
+    $coreRoot = Join-Path $env:LOCALAPPDATA 'Python'
+    if (Test-Path -LiteralPath $coreRoot) {
+        $localCandidates += Get-ChildItem -LiteralPath $coreRoot -Directory -Filter 'pythoncore-*' -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending |
+            ForEach-Object { Join-Path $_.FullName 'python.exe' }
+    }
+    foreach ($exe in $localCandidates) {
+        if (Test-PythonExe $exe) {
+            return @{ Exe = $exe; Prefix = @() }
         }
     }
     throw 'Python 3 not found (need 3.10-3.14)'
