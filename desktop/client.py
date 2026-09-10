@@ -638,10 +638,9 @@ class OpsClient:
             self.log("kill switch: поднимаю TUN")
         others = foreign_vpn_adapters()
         if others:
-            self.log(
-                "другой VPN уже активен ("
-                + ", ".join(others)
-                + ") — выключите Amnezia/прочий клиент, иначе маршруты конфликтуют"
+            raise RuntimeError(
+                "выключите Amnezia (или другой VPN) и подключитесь снова — "
+                "сейчас активны: " + ", ".join(others)
             )
         prelude: list[str] = []
         allow = self._kill_switch_hosts(cfg)
@@ -649,7 +648,9 @@ class OpsClient:
             prelude = self._ensure_kill_switch(cfg)
         elif enable_tun:
             remember_kill_switch_plan(self.paths.var_dir, allow)
-        postlude = kill_switch_pin_cmds(allow) if enable_tun else []
+        postlude = (
+            kill_switch_pin_cmds(self.paths.var_dir, allow) if enable_tun else []
+        )
         self.singbox.start(
             server_host=host,
             transport=transport,
@@ -1053,27 +1054,33 @@ class OpsClient:
     def _probe_exit(self, socks_port: int, delay: float = 0.0) -> None:
         """SOCKS5 CONNECT after TUN routes settle — first-second OK is a false green."""
         try:
-            from desktop.watchdog import socks_probe
+            from desktop.watchdog import socks_https_probe, socks_probe
         except Exception as exc:  # noqa: BLE001
             self.log(f"проверка выхода: не удалось импортировать probe ({exc})")
             return
         if delay > 0:
             time.sleep(delay)
         self.log(f"проверка выхода через SOCKS :{socks_port} → 1.1.1.1:443…")
-        err = socks_probe(socks_port, timeout=8.0)
+        err = socks_https_probe(socks_port, timeout=10.0)
         if err:
-            self.log(f"проверка выхода: НЕ ОК — {err}")
+            connect_err = socks_probe(socks_port, timeout=6.0)
+            if connect_err:
+                self.log(f"проверка выхода: НЕ ОК — {connect_err}")
+            else:
+                self.log(
+                    f"проверка выхода: НЕ ОК — CONNECT есть, HTTPS нет ({err})"
+                )
             self._log_singbox_tail("после неудачной проверки")
             return
-        tail = "\n".join(self.singbox.tail_log(30)).lower()
+        tail = "\n".join(self.singbox.tail_log(40)).lower()
         if "i/o timeout" in tail or "deadline exceeded" in tail:
             self.log(
-                "проверка выхода: SOCKS ответил, но VLESS уже сыплет timeout — "
-                "TUN перехватил путь к VPS (см. журнал sing-box)"
+                "проверка выхода: HTTPS прошёл, но DNS/VLESS сыплет timeout — "
+                "сайты могут не открываться (см. журнал sing-box)"
             )
-            self._log_singbox_tail("после ложного OK")
+            self._log_singbox_tail("после частичного OK")
             return
-        self.log("проверка выхода: OK (SOCKS CONNECT прошёл)")
+        self.log("проверка выхода: OK (HTTPS через SOCKS)")
 
     def _kill_switch_hosts(self, cfg: dict[str, Any]) -> list[str]:
         hosts = [get_server_host(cfg)]
