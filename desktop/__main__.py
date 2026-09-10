@@ -21,6 +21,7 @@ COMMANDS = (
     "status",
     "probe",
     "test",
+    "sandbox",
     "tun-on",
     "tun-off",
     "reverse-on",
@@ -68,6 +69,7 @@ def _show_help() -> int:
   status               состояние
   probe HOST [PORT]    CONNECT через Squid
   test                 проверка обхода
+  sandbox              песочница VLESS (без TUN; рядом с Amnezia — через реле)
   tun-on / tun-off     TUN в процессе sing-box
   reverse-on / reverse-off  SSH с VPS на этот ПК (через SOCKS, не :22 офиса)
   download-sing-box    скачать sing-box в tools/
@@ -233,6 +235,10 @@ def _run_cli(cmd: str, rest: list[str]) -> int:
             return client.probe(host, port)
         elif cmd == "test":
             client.test_bypass()
+        elif cmd == "sandbox":
+            from desktop.sandbox import run_sandbox
+
+            return run_sandbox(client, log=log)
         elif cmd == "tun-on":
             if _elevate_cli_if_needed(client, "tun-on", rest):
                 return 0
