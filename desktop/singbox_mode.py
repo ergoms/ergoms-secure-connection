@@ -262,12 +262,12 @@ class SingboxModeManager:
                 "servers": [
                     {
                         "tag": "dns-proxy",
-                        "address": "tls://1.1.1.1",
+                        "address": "https://1.1.1.1/dns-query",
                         "detour": "proxy",
                     },
                     {
-                        "tag": "dns-proxy-doh",
-                        "address": "https://1.1.1.1/dns-query",
+                        "tag": "dns-proxy-dot",
+                        "address": "tls://1.1.1.1",
                         "detour": "proxy",
                     },
                     {"tag": "dns-local", "address": "local", "detour": "direct"},

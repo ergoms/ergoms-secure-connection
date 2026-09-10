@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import socket
+import ssl
 import struct
 import threading
 import time
@@ -96,6 +97,87 @@ def socks_probe(
         return None
     except OSError as exc:
         return f"SOCKS probe: {exc}"
+    finally:
+        if s is not None:
+            try:
+                s.close()
+            except OSError:
+                pass
+
+
+def socks_https_probe(
+    socks_port: int,
+    *,
+    host: str = _PROBE_HOST,
+    port: int = _PROBE_PORT,
+    timeout: float = _PROBE_TIMEOUT,
+    sni: str = "1.1.1.1",
+    path: str = "/cdn-cgi/trace",
+) -> str | None:
+    """CONNECT + TLS + HTTP GET. CONNECT-only can pass while sites stay dead."""
+    s: socket.socket | None = None
+    try:
+        s = socket.create_connection(("127.0.0.1", socks_port), timeout=timeout)
+        s.settimeout(timeout)
+        s.sendall(b"\x05\x01\x00")
+        resp = s.recv(2)
+        if len(resp) != 2 or resp[0] != 5 or resp[1] != 0:
+            return f"SOCKS5 greeting failed: {resp!r}"
+        try:
+            ip_bytes = socket.inet_aton(host)
+            req = b"\x05\x01\x00\x01" + ip_bytes + struct.pack("!H", port)
+        except OSError:
+            host_b = host.encode("ascii")
+            req = (
+                b"\x05\x01\x00\x03"
+                + bytes([len(host_b)])
+                + host_b
+                + struct.pack("!H", port)
+            )
+        s.sendall(req)
+        hdr = s.recv(4)
+        if len(hdr) != 4:
+            return "SOCKS5 CONNECT truncated"
+        if hdr[0] != 5 or hdr[1] != 0:
+            return f"SOCKS5 CONNECT rejected: rep={hdr[1]}"
+        atyp = hdr[3]
+        if atyp == 1:
+            s.recv(4 + 2)
+        elif atyp == 3:
+            ln = s.recv(1)
+            if not ln:
+                return "SOCKS5 CONNECT bnd truncated"
+            s.recv(ln[0] + 2)
+        elif atyp == 4:
+            s.recv(16 + 2)
+        else:
+            return f"SOCKS5 bad atyp={atyp}"
+        ctx = ssl.create_default_context()
+        tls = ctx.wrap_socket(s, server_hostname=sni)
+        s = None
+        host_hdr = host if ":" not in host else f"[{host}]"
+        tls.sendall(
+            f"GET {path} HTTP/1.1\r\nHost: {host_hdr}\r\nConnection: close\r\n\r\n".encode(
+                "ascii"
+            )
+        )
+        body = b""
+        while True:
+            chunk = tls.recv(4096)
+            if not chunk:
+                break
+            body += chunk
+            if len(body) > 8192:
+                break
+        tls.close()
+        if b"HTTP/1." not in body[:32] and b"HTTP/2" not in body[:32]:
+            return f"HTTPS empty/garbled: {body[:80]!r}"
+        if body.startswith(b"HTTP/1.") and b" 200" not in body.split(b"\r\n", 1)[0]:
+            status = body.split(b"\r\n", 1)[0].decode("ascii", "replace")
+            return f"HTTPS {status}"
+        return None
+    except OSError as exc:
+        return f"HTTPS probe: {exc}"
     finally:
         if s is not None:
             try:
