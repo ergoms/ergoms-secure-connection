@@ -139,15 +139,16 @@ function Install-Libraries {
     $pyExe = Use-RealPythonPath
     Write-Host "Poetry: $poetry"
     Write-Host "Python: $pyExe"
-    & $poetry env use -- $pyExe
+    & $poetry env use -- $pyExe | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "poetry env use failed: $LASTEXITCODE" }
-    & $poetry install --extras gui
+    Write-Host 'poetry install --extras gui'
+    & $poetry install --extras gui | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "poetry install failed: $LASTEXITCODE" }
 }
 
 function Install-SingBox {
     $py = Get-VenvPython
-    & $py -m desktop download-sing-box
+    & $py -m desktop download-sing-box | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "download-sing-box failed: $LASTEXITCODE" }
 }
 
@@ -244,6 +245,6 @@ switch ($Target) {
     'sing-box' { Install-SingBox }
     'pyinstaller' { Invoke-PyInstaller }
     'installer' { Invoke-Installer }
-    { $_ -in @('setup', 'all') } { Install-Libraries; Install-SingBox }
+    { $_ -in @('setup', 'all') } { Install-Libraries; Install-SingBox; Write-Host 'Setup OK' }
     { $_ -in @('build', 'exe') } { Install-Libraries; Install-SingBox; Invoke-PyInstaller; Invoke-Installer }
 }

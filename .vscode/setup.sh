@@ -115,6 +115,7 @@ case "${1:-setup}" in
   setup|all)
     install_libraries
     install_singbox
+    echo 'Setup OK'
     ;;
   build|exe)
     install_libraries
