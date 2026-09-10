@@ -120,6 +120,10 @@ class SingboxModeManager:
         # Prefer underlay NIC toward office proxy (or VPS) so TUN cannot steal dials.
         bind_target = exclude_ips[0] if exclude_ips else (squid_host or server_host)
         bind_iface = detect_bind_interface(bind_target) if bind_target else ""
+        if bind_iface:
+            self.log(f"underlay NIC: {bind_iface} (VPS/direct)")
+        elif enable_tun:
+            self.log("underlay NIC: не определён — VLESS может уйти в TUN")
 
         route_exclude = [
             "10.0.0.0/8",
@@ -129,6 +133,12 @@ class SingboxModeManager:
             "169.254.0.0/16",
             "224.0.0.0/4",
         ]
+        # Public VPS (and office Squid) must stay on the underlay NIC.
+        # Without this, Windows auto_route steals VLESS and DNS dies.
+        for ip in exclude_ips:
+            cidr = f"{ip}/32"
+            if cidr not in route_exclude:
+                route_exclude.append(cidr)
         proc_names = [
             "sing-box",
             "sing-box.exe",
@@ -248,6 +258,11 @@ class SingboxModeManager:
                 "servers": [
                     {
                         "tag": "dns-proxy",
+                        "address": "1.1.1.1",
+                        "detour": "proxy",
+                    },
+                    {
+                        "tag": "dns-proxy-doh",
                         "address": "https://1.1.1.1/dns-query",
                         "detour": "proxy",
                     },

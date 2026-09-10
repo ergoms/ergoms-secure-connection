@@ -113,7 +113,7 @@ class GuiBridge(QObject):
         self._busy = False
         self._busy_text = ""
         self._status_title = "Отключено"
-        self._status_sub = "Нажмите «Подключить»"
+        self._status_sub = ""
         self._status_color = _C_MUTED
         self._server_target = "—"
         self._scope = "—"
@@ -723,11 +723,11 @@ class GuiBridge(QObject):
     @Slot(str)
     def _on_bg_finished(self, err: str) -> None:
         waiting = self._busy_text
+        if not err:
+            self._apply_optimistic(waiting)
         self._set_busy(False)
         if err:
             self.toast.emit(err, "error")
-        else:
-            self._apply_optimistic(waiting)
         self._refresh_status(force=True)
 
     def _apply_optimistic(self, waiting: str) -> None:

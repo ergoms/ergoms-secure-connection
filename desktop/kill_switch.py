@@ -32,7 +32,7 @@ _ROUTE_PRINT_TTL = 0.8
 _applied_cache: tuple[float, bool] | None = None
 _route_print_cache: tuple[float, str] | None = None
 _WIN_BLACKHOLE = re.compile(
-    r"0\.0\.0\.0\s+128\.0\.0\.0\s+(On-link|127\.0\.0\.1)\s+127\.0\.0\.1",
+    r"0\.0\.0\.0\s+128\.0\.0\.0\s+\S+\s+127\.0\.0\.1",
     re.IGNORECASE,
 )
 

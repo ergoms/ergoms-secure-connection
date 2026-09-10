@@ -60,9 +60,11 @@ def run_gui() -> None:
     icon = QIcon(str(ico_path)) if ico_path else _fallback_icon()
     app.setWindowIcon(icon)
 
+    from desktop.instance import listen
     from desktop.ui.bridge import GuiBridge, qml_dir
 
     bridge = GuiBridge()
+    app._ergoms_ipc = listen(bridge.showWindow)  # noqa: SLF001 — keep server alive
     engine = QQmlApplicationEngine()
     qml_root = qml_dir()
     engine.addImportPath(str(qml_root))

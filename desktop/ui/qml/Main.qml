@@ -136,7 +136,11 @@ ApplicationWindow {
         function onToast(message, kind) { toasts.show(message, kind) }
         function onHideRequested() { win.hide() }
         function onShowRequested() {
-            win.show()
+            win.visible = true
+            if (win.visibility === Window.Minimized)
+                win.showNormal()
+            else
+                win.show()
             win.raise()
             win.requestActivate()
         }
