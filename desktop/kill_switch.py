@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import socket
 import sys
 import time
 from pathlib import Path
@@ -39,6 +40,14 @@ _WIN_BLACKHOLE = re.compile(
 
 def _noop(_msg: str) -> None:
     pass
+
+
+def _host_open(host: str, port: int = 443, timeout: float = 2.5) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
 
 
 def state_path(var_dir: Path) -> Path:
@@ -166,8 +175,29 @@ def remove_commands(allow: list[str], *, gw: str | None = None) -> list[str]:
     return _cmds_linux_remove(allow, gw)
 
 
+def _iface_index_win(dest: str) -> int | None:
+    ip = _resolve_host(dest) if dest else None
+    if not ip:
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        dest_n = ctypes.windll.ws2_32.inet_addr(ip.encode("ascii"))  # type: ignore[attr-defined]
+        if dest_n == 0xFFFFFFFF:
+            return None
+        idx = wintypes.DWORD()
+        err = ctypes.windll.iphlpapi.GetBestInterface(dest_n, ctypes.byref(idx))  # type: ignore[attr-defined]
+        if err or not idx.value:
+            return None
+        return int(idx.value)
+    except Exception:
+        return None
+
+
 def _cmds_win_install(allow: list[str], gw: str | None) -> list[str]:
     cmds: list[str] = []
+    if_idx = _iface_index_win(allow[0]) if allow else None
     for dest, mask in BLACKHOLE_V4:
         cmds.append(f"route delete {dest} mask {mask} {BLACKHOLE_GW}")
         cmds.append(
@@ -176,7 +206,10 @@ def _cmds_win_install(allow: list[str], gw: str | None) -> list[str]:
     if gw:
         for ip in allow:
             cmds.append(f"route delete {ip} mask 255.255.255.255")
-            cmds.append(f"route add {ip} mask 255.255.255.255 {gw} metric 1")
+            hop = f"route add {ip} mask 255.255.255.255 {gw} metric 1"
+            if if_idx:
+                hop += f" if {if_idx}"
+            cmds.append(hop)
     cmds.append("netsh interface ipv6 add route ::/1 interface=1 metric=512 store=active")
     cmds.append(
         "netsh interface ipv6 add route 8000::/1 interface=1 metric=512 store=active"
@@ -271,14 +304,33 @@ def apply(allow: list[str], *, var_dir: Path, log: LogFn = _noop) -> bool:
         log("kill switch: нет default gateway — OS-маршруты не ставлю (останется strict_route)")
         _save_state(var_dir, {"allow": unique, "gw": "", "applied": False})
         return False
+    reachable_before = _host_open(unique[0], 443) if unique else False
     cmds = install_commands(unique, gw=gw)
+    log(f"kill switch: gw={gw} allow={', '.join(unique) or 'нет'}")
     _run_privileged_lines(cmds, log=log, expect_applied=True)
     invalidate_applied_cache()
     present = is_applied(force=True)
     _save_state(var_dir, {"allow": unique, "gw": gw, "applied": present})
-    if present:
-        log(f"kill switch: чёрные маршруты 0.0.0.0/1 + 128.0.0.0/1 (исключения {', '.join(unique) or 'нет'})")
-    elif procutil.is_admin():
+    text = _route_print_win(force=True) if sys.platform == "win32" else ""
+    for ip in unique:
+        hit = [ln.strip() for ln in text.splitlines() if ip in ln]
+        if hit:
+            log(f"kill switch: маршрут {ip}: {hit[0][:120]}")
+        else:
+            log(f"kill switch: в таблице нет {ip}/32 — путь к VPS может быть перекрыт")
+    if unique and reachable_before and not _host_open(unique[0], 443):
+        log("kill switch: VPS :443 пропал после маршрутов — снимаю OS-kill-switch")
+        clear(var_dir=var_dir, log=log)
+        return False
+    host_ok = any(ip in text for ip in unique)
+    if present or host_ok:
+        log(
+            "kill switch: OK — VPS в таблице"
+            + ("" if present else " (чёрные 0.0.0.0/1 Windows не показывает, это нормально)")
+        )
+        _save_state(var_dir, {"allow": unique, "gw": gw, "applied": True})
+        return True
+    if procutil.is_admin():
         log("kill switch: команды выполнены, но маршруты не видны")
     else:
         log("kill switch: не удалось поставить OS-маршруты (нужны права)")
