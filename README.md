@@ -50,7 +50,7 @@ bash modes/vps/bootstrap_singbox_443.sh
 # снять: ./ergoms-secure-connection.sh uninstall-service
 ```
 
-В `config.json` по умолчанию `tun.enabled` и `kill_switch` включены: TUN поднимается вместе с `on`, при обрыве интернет блокируется. Для окна: `poetry install --extras gui`, затем `python -m desktop gui` (или `poetry run python -m desktop gui`). Сборка Windows: `.\.vscode\setup.ps1 -Target build` → папка `dist/ERGOMS SECURE CONNECTION/` и установщик `dist/ERGOMS SECURE CONNECTION-Setup-<ver>.exe`.
+В `config.json` по умолчанию `tun.enabled` и `kill_switch` включены: TUN поднимается вместе с `on`, при обрыве интернет блокируется. Для окна: `poetry install --extras gui`, затем `python -m desktop gui` (или `poetry run python -m desktop gui`). Сборка Windows: `.\.vscode\setup.ps1 -Target build` → папка `dist/ERGOMS SECURE CONNECTION/` и установщик `dist/ERGOMS SECURE CONNECTION-Setup.exe`.
 
 Локально после `on`: SOCKS `:1080`, HTTP `:1088`, PAC `:1089`.
 
@@ -180,7 +180,7 @@ ERGOMS SECURE CONNECTION/
 | Путь | Что это |
 |------|---------|
 | `dist/ERGOMS SECURE CONNECTION/ERGOMS SECURE CONNECTION.exe` | one-dir клиент (рядом `_internal/`) |
-| `dist/ERGOMS SECURE CONNECTION-Setup-<версия>.exe` | установщик Inno Setup |
+| `dist/ERGOMS SECURE CONNECTION-Setup.exe` | установщик Inno Setup |
 
 Установщик кладёт программу в `Program Files\ERGOMS SECURE CONNECTION` (или per-user), ярлыки, опциональный автозапуск (`--autostart`). Данные остаются в `%LOCALAPPDATA%\ERGOMS SECURE CONNECTION`. При удалении вызывается `off` (kill switch / PAC / git), каталог данных не трогается.
 
