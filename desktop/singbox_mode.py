@@ -262,7 +262,7 @@ class SingboxModeManager:
                 "servers": [
                     {
                         "tag": "dns-proxy",
-                        "address": "1.1.1.1",
+                        "address": "tls://1.1.1.1",
                         "detour": "proxy",
                     },
                     {
@@ -410,6 +410,7 @@ class SingboxModeManager:
         force_restart: bool = False,
         kill_switch: bool = False,
         prelude_cmds: list[str] | None = None,
+        postlude_cmds: list[str] | None = None,
     ) -> None:
         exe = self.find_sing_box(sing_box_path)
         if not exe:
@@ -463,7 +464,12 @@ class SingboxModeManager:
             self.stop()
 
         self._rotate_log()
-        pid = self._launch(exe, elevate=need_admin, prelude_cmds=prelude_cmds or [])
+        fw = self._firewall_cmds(exe) if need_admin and not procutil.is_admin() else []
+        prelude = [*(prelude_cmds or []), *fw]
+        postlude = [c for c in (postlude_cmds or []) if c]
+        pid = self._launch(
+            exe, elevate=need_admin, prelude_cmds=prelude, postlude_cmds=postlude
+        )
         if pid:
             self.pid_path.write_text(str(pid), encoding="utf-8")
             self.log(f"sing-box pid={pid}")
@@ -478,7 +484,9 @@ class SingboxModeManager:
             leftover = self.pid() or pid
             if leftover and procutil.pid_alive(leftover):
                 procutil.kill_pids([leftover])
-            pid = self._launch(exe, elevate=need_admin, prelude_cmds=prelude_cmds or [])
+            pid = self._launch(
+                exe, elevate=need_admin, prelude_cmds=prelude, postlude_cmds=postlude
+            )
             if pid:
                 self.pid_path.write_text(str(pid), encoding="utf-8")
                 self.log(f"sing-box pid={pid} (повтор)")
@@ -600,12 +608,20 @@ class SingboxModeManager:
         self.pid_path.unlink(missing_ok=True)
 
     def _launch(
-        self, exe: Path, *, elevate: bool, prelude_cmds: list[str] | None = None
+        self,
+        exe: Path,
+        *,
+        elevate: bool,
+        prelude_cmds: list[str] | None = None,
+        postlude_cmds: list[str] | None = None,
     ) -> int | None:
         args = [str(exe), "run", "-c", str(self.config_path)]
         prelude = [c for c in (prelude_cmds or []) if c]
+        postlude = [c for c in (postlude_cmds or []) if c]
         if sys.platform == "win32" and elevate and not procutil.is_admin():
-            return self._start_elevated_win(exe, self.config_path, prelude)
+            return self._start_elevated_win(
+                exe, self.config_path, prelude, postlude
+            )
 
         if (
             sys.platform != "win32"
@@ -627,15 +643,26 @@ class SingboxModeManager:
         return proc.pid
 
     def _start_elevated_win(
-        self, exe: Path, config: Path, prelude: list[str] | None = None
+        self,
+        exe: Path,
+        config: Path,
+        prelude: list[str] | None = None,
+        postlude: list[str] | None = None,
     ) -> int | None:
         import ctypes
 
-        if prelude:
+        pre = [c for c in (prelude or []) if c]
+        post = [c for c in (postlude or []) if c]
+        if pre or post:
             wrapper = self.var_dir / "sing-box-elevated.cmd"
             lines = ["@echo off"]
-            for cmd in prelude:
+            for cmd in pre:
                 lines.append(f"{cmd} 2>nul")
+            if post:
+                delayed = "timeout /t 2 /nobreak >nul"
+                for cmd in post:
+                    delayed += f" & {cmd} 2>nul"
+                lines.append(f'start "ergoms-pin" /b cmd /c "{delayed}"')
             lines.append(f'"{exe}" run -c "{config}"')
             wrapper.write_text("\r\n".join(lines) + "\r\n", encoding="utf-8")
             file, params, cwd = str(wrapper), "", str(self.var_dir)
@@ -702,6 +729,17 @@ class SingboxModeManager:
         ):
             return pid
         return None
+
+    def _firewall_cmds(self, exe: Path) -> list[str]:
+        name = "ERGOMS SECURE CONNECTION (sing-box)"
+        return [
+            (
+                "netsh advfirewall firewall add rule "
+                f'name="{name}" dir={direction} action=allow '
+                f'program="{exe}" enable=yes profile=any'
+            )
+            for direction in ("in", "out")
+        ]
 
     def _ensure_win_firewall(self, exe: Path) -> None:
         """Allow sing-box once so Windows does not show the firewall popup."""

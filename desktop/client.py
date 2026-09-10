@@ -53,10 +53,12 @@ from desktop.kill_switch import apply as apply_kill_switch
 from desktop.kill_switch import clear as clear_kill_switch
 from desktop.kill_switch import install_commands as kill_switch_install_cmds
 from desktop.kill_switch import is_applied as kill_switch_is_applied
+from desktop.kill_switch import planned_pin_commands as kill_switch_pin_cmds
+from desktop.kill_switch import pin_underlay as pin_kill_switch_underlay
 from desktop.kill_switch import remember_plan as remember_kill_switch_plan
 from desktop.kill_switch import state_path as kill_switch_state_path
 from desktop.singbox_mode import SingboxModeManager, require_transport
-from desktop.tun import TunManager
+from desktop.tun import TunManager, foreign_vpn_adapters
 from desktop.sys_proxy import (
     disable_browser_proxy,
     disable_linux_env_proxy,
@@ -634,9 +636,20 @@ class OpsClient:
         enable_tun = get_tun_enabled() or kill_switch
         if kill_switch and not get_tun_enabled():
             self.log("kill switch: поднимаю TUN")
+        others = foreign_vpn_adapters()
+        if others:
+            self.log(
+                "другой VPN уже активен ("
+                + ", ".join(others)
+                + ") — выключите Amnezia/прочий клиент, иначе маршруты конфликтуют"
+            )
         prelude: list[str] = []
+        allow = self._kill_switch_hosts(cfg)
         if kill_switch:
             prelude = self._ensure_kill_switch(cfg)
+        elif enable_tun:
+            remember_kill_switch_plan(self.paths.var_dir, allow)
+        postlude = kill_switch_pin_cmds(allow) if enable_tun else []
         self.singbox.start(
             server_host=host,
             transport=transport,
@@ -652,6 +665,7 @@ class OpsClient:
             force_restart=True,
             kill_switch=kill_switch,
             prelude_cmds=prelude,
+            postlude_cmds=postlude,
         )
         self.set_git_singbox(cfg, http_port)
         self._maybe_start_reverse_ssh(cfg)
@@ -683,8 +697,16 @@ class OpsClient:
             except OSError as exc:
                 self.log(f"диагностика: TCP {host}:{port} с этой NIC — FAIL ({exc})")
         self._log_singbox_tail("после запуска")
+        if enable_tun and procutil.is_admin() and allow:
+            threading.Thread(
+                target=self._pin_underlay_later,
+                args=(allow,),
+                daemon=True,
+            ).start()
         threading.Thread(
-            target=self._probe_exit, args=(socks_port,), daemon=True
+            target=self._probe_exit,
+            args=(socks_port, 3.2 if enable_tun else 0.0),
+            daemon=True,
         ).start()
 
     def stop_singbox_mode(self, *, teardown: bool = True) -> None:
@@ -1022,20 +1044,36 @@ class OpsClient:
             self.log("reverse_ssh.enabled=false в config.json")
         self.reverse_ssh.stop()
 
-    def _probe_exit(self, socks_port: int) -> None:
-        """Best-effort SOCKS5 CONNECT so the log shows if VLESS actually works."""
+    def _pin_underlay_later(self, allow: list[str]) -> None:
+        time.sleep(2.0)
+        pin_kill_switch_underlay(
+            allow, var_dir=self.paths.var_dir, log=self.log, elevate=False
+        )
+
+    def _probe_exit(self, socks_port: int, delay: float = 0.0) -> None:
+        """SOCKS5 CONNECT after TUN routes settle — first-second OK is a false green."""
         try:
             from desktop.watchdog import socks_probe
         except Exception as exc:  # noqa: BLE001
             self.log(f"проверка выхода: не удалось импортировать probe ({exc})")
             return
+        if delay > 0:
+            time.sleep(delay)
         self.log(f"проверка выхода через SOCKS :{socks_port} → 1.1.1.1:443…")
         err = socks_probe(socks_port, timeout=8.0)
         if err:
             self.log(f"проверка выхода: НЕ ОК — {err}")
             self._log_singbox_tail("после неудачной проверки")
-        else:
-            self.log("проверка выхода: OK (SOCKS CONNECT прошёл)")
+            return
+        tail = "\n".join(self.singbox.tail_log(30)).lower()
+        if "i/o timeout" in tail or "deadline exceeded" in tail:
+            self.log(
+                "проверка выхода: SOCKS ответил, но VLESS уже сыплет timeout — "
+                "TUN перехватил путь к VPS (см. журнал sing-box)"
+            )
+            self._log_singbox_tail("после ложного OK")
+            return
+        self.log("проверка выхода: OK (SOCKS CONNECT прошёл)")
 
     def _kill_switch_hosts(self, cfg: dict[str, Any]) -> list[str]:
         hosts = [get_server_host(cfg)]

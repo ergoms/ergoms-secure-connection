@@ -700,8 +700,8 @@ def get_tun_mtu(cfg: dict[str, Any] | None = None) -> int:
     if src:
         tun = src.get("tun") or {}
         if isinstance(tun, dict):
-            return max(1280, min(1500, _as_int(tun.get("mtu"), 1500)))
-    return 1500
+            return max(1280, min(1500, _as_int(tun.get("mtu"), 1400)))
+    return 1400
 
 
 def invoke_init(paths: Paths, log: LogFn = _noop) -> None:
