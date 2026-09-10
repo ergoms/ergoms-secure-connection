@@ -568,6 +568,20 @@ class OpsClient:
             except Exception as exc:  # noqa: BLE001
                 self.log(f"docker proxy off: {exc}")
 
+        # TUN already carries browser/CLI traffic. PAC + Windows Internet
+        # Settings look like a system proxy and fight the tunnel.
+        if get_tun_enabled(cfg):
+            self.stop_pac_server()
+            try:
+                disable_browser_proxy(self.paths.proxy_backup, log=self.log)
+            except Exception as exc:  # noqa: BLE001
+                self.log(f"PAC off (TUN): {exc}")
+            try:
+                disable_linux_env_proxy(self.paths.env_proxy_backup, log=self.log)
+            except Exception as exc:  # noqa: BLE001
+                self.log(f"env proxy off (TUN): {exc}")
+            self.log("системный прокси не ставится — трафик через TUN")
+            return
         pac_url = self.start_pac_server(cfg, proxy_port=http_port)
         self._enable_browser_pac(cfg, http_port, pac_url=pac_url)
         enable_linux_env_proxy(
