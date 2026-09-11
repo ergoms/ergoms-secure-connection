@@ -141,6 +141,7 @@ def default_config_template() -> dict[str, Any]:
         },
         "transport": {
             "type": "vless-reality",
+            "dial": "auto",
             "uuid": "",
             "public_key": "",
             "short_id": "",
@@ -305,6 +306,15 @@ def ensure_config_defaults(cfg: dict[str, Any]) -> dict[str, Any]:
         transport = {}
         out["transport"] = transport
     transport.setdefault("type", "vless-reality")
+    transport.setdefault("dial", "auto")
+    raw_dial = str(transport.get("dial") or "auto").strip().lower()
+    if raw_dial in ("vless", "reality"):
+        raw_dial = "vless-reality"
+    if raw_dial in ("hy2",):
+        raw_dial = "hysteria2"
+    if raw_dial not in ("auto", "vless-reality", "hysteria2"):
+        raw_dial = "auto"
+    transport["dial"] = raw_dial
     transport.setdefault("uuid", "")
     transport.setdefault("public_key", "")
     transport.setdefault("short_id", "")
