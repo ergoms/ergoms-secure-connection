@@ -180,6 +180,18 @@ Item {
                             label: "Порт"
                             settingKey: "serverPort"
                         }
+                        Text { text: "Протокол"; color: T.muted; font.pixelSize: 11; font.weight: Font.Medium; font.family: T.fontUi }
+                        Segmented {
+                            width: parent.width
+                            enabled: !bridge.corporate
+                            value: String(bridge.settings.trDial || "auto")
+                            model: [
+                                { label: "Авто", value: "auto" },
+                                { label: "Reality", value: "vless-reality" },
+                                { label: "Hysteria2", value: "hysteria2" }
+                            ]
+                            onActivated: (v) => { bridge.settings.trDial = v }
+                        }
                         SettingField {
                             label: "UUID"
                             password: true
@@ -198,44 +210,21 @@ Item {
                             label: "Server name (SNI)"
                             settingKey: "trServerName"
                         }
-                    }
-                }
-
-                SectionLabel {
-                    visible: !bridge.corporate
-                    height: visible ? implicitHeight : 0
-                    text: "ДОМ — HYSTERIA2"
-                    topPadding: 8
-                }
-                Card {
-                    visible: !bridge.corporate
-                    height: visible ? implicitHeight : 0
-                    width: parent.width
-                    implicitHeight: hy2Col.implicitHeight + 24
-                    Column {
-                        id: hy2Col
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.top: parent.top
-                        anchors.margins: 14
-                        spacing: 10
-
-                        Text {
+                        Column {
+                            visible: !bridge.corporate && String(bridge.settings.trDial || "auto") !== "vless-reality"
                             width: parent.width
-                            text: "Домашний провайдер часто глотает VLESS+Reality. Пароль печатает скрипт на VPS: bash modes/vps/enable_hysteria2.sh"
-                            color: T.muted
-                            font.pixelSize: 11
-                            font.family: T.fontUi
-                            wrapMode: Text.WordWrap
-                        }
-                        SettingField {
-                            label: "Пароль Hysteria2"
-                            password: true
-                            settingKey: "hy2Password"
-                        }
-                        SettingField {
-                            label: "UDP порт"
-                            settingKey: "hy2Port"
+                            spacing: 10
+                            height: visible ? implicitHeight : 0
+
+                            SettingField {
+                                label: "Пароль Hysteria2"
+                                password: true
+                                settingKey: "hy2Password"
+                            }
+                            SettingField {
+                                label: "UDP порт"
+                                settingKey: "hy2Port"
+                            }
                         }
                     }
                 }

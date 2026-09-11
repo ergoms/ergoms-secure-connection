@@ -625,12 +625,10 @@ class OpsClient:
         office_proxy = resolve_corporate_proxy(cfg)
         dial = choose_dial(transport, office=bool(office_proxy))
         hy = hysteria2_opts(transport) if dial == "hysteria2" else None
-        if not office_proxy and not hy:
-            self.log(
-                "дом: Hysteria2 не задан — иду через Reality. "
-                "На VPS: bash modes/vps/enable_hysteria2.sh, затем вставьте "
-                "transport.hysteria2 в config.json"
-            )
+        if dial == "hysteria2" and not hy:
+            raise RuntimeError("Hysteria2: укажите пароль в Настройках")
+        if not office_proxy and not hy and str(transport.get("dial") or "auto") == "auto":
+            self.log("дом: протокол Авто — Hysteria2 без пароля, иду через Reality")
         if office_proxy:
             self.log(f"Probing CONNECT {host}:{port} via proxy...")
             if self.probe(host, port) != 0:

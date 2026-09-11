@@ -62,8 +62,17 @@ def hysteria2_opts(tr: dict[str, Any] | None) -> dict[str, Any] | None:
 
 
 def choose_dial(transport: dict[str, Any], *, office: bool) -> str:
-    """Office: VLESS through Squid. Home: Hysteria2 when configured."""
+    """Office always Reality (Squid has no UDP). Home: transport.dial or auto."""
+    prefer = str((transport or {}).get("dial") or "auto").strip().lower()
+    if prefer in ("vless", "reality"):
+        prefer = "vless-reality"
+    if prefer in ("hy2",):
+        prefer = "hysteria2"
     if office:
+        return "vless-reality"
+    if prefer == "hysteria2":
+        return "hysteria2"
+    if prefer == "vless-reality":
         return "vless-reality"
     if hysteria2_opts(transport):
         return "hysteria2"
@@ -89,6 +98,13 @@ def require_transport(cfg: dict[str, Any]) -> dict[str, Any]:
     if not pub or "REPLACE" in pub.upper():
         raise RuntimeError("transport.public_key missing — paste from VPS bootstrap")
     port = int(tr.get("port") or 443)
+    dial = str(tr.get("dial") or "auto").strip().lower()
+    if dial in ("vless", "reality"):
+        dial = "vless-reality"
+    if dial in ("hy2",):
+        dial = "hysteria2"
+    if dial not in ("auto", "vless-reality", "hysteria2"):
+        dial = "auto"
     out = {
         "uuid": uuid,
         "public_key": pub,
@@ -96,6 +112,7 @@ def require_transport(cfg: dict[str, Any]) -> dict[str, Any]:
         "server_name": sni,
         "port": port,
         "type": "vless-reality",
+        "dial": dial,
     }
     hy = hysteria2_opts(tr)
     if hy:

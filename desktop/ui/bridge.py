@@ -443,6 +443,14 @@ class GuiBridge(QObject):
             "trServerName", str(tr.get("server_name") or "www.cloudflare.com")
         )
         self._settings.insert("trPort", str(tr.get("port") or 443))
+        dial = str(tr.get("dial") or "auto").strip().lower()
+        if dial in ("vless", "reality"):
+            dial = "vless-reality"
+        if dial in ("hy2",):
+            dial = "hysteria2"
+        if dial not in ("auto", "vless-reality", "hysteria2"):
+            dial = "auto"
+        self._settings.insert("trDial", dial)
         hy = tr.get("hysteria2") if isinstance(tr.get("hysteria2"), dict) else {}
         self._settings.insert("hy2Password", str(hy.get("password") or ""))
         self._settings.insert("hy2Port", str(hy.get("port") or 8443))
@@ -611,6 +619,14 @@ class GuiBridge(QObject):
             cfg["tun"]["sing_box_path"] = ""
             cfg.setdefault("transport", {})
             cfg["transport"]["type"] = "vless-reality"
+            dial = str(s.value("trDial") or "auto").strip().lower()
+            if dial in ("vless", "reality"):
+                dial = "vless-reality"
+            if dial in ("hy2",):
+                dial = "hysteria2"
+            if dial not in ("auto", "vless-reality", "hysteria2"):
+                dial = "auto"
+            cfg["transport"]["dial"] = dial
             cfg["transport"]["uuid"] = str(s.value("trUuid") or "").strip()
             cfg["transport"]["public_key"] = str(s.value("trPublicKey") or "").strip()
             cfg["transport"]["short_id"] = str(s.value("trShortId") or "").strip()
@@ -935,8 +951,7 @@ class GuiBridge(QObject):
             if probe_hint == "need-hy2":
                 title, sub, color = (
                     "Нет выхода",
-                    "Домашний провайдер режет Reality. Нужен Hysteria2: "
-                    "на VPS enable_hysteria2.sh, пароль — в Настройки",
+                    "Нет выхода через Reality — в Настройках выберите Hysteria2",
                     _C_DANGER,
                 )
             elif probe_hint == "hy2-udp":
@@ -1043,6 +1058,7 @@ def _settings_defaults() -> dict[str, Any]:
         "trShortId": "",
         "trServerName": "www.cloudflare.com",
         "trPort": "443",
+        "trDial": "auto",
         "hy2Password": "",
         "hy2Port": "8443",
         "reverseSsh": False,

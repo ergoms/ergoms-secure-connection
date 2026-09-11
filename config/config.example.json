@@ -57,6 +57,7 @@
   },
   "transport": {
     "type": "vless-reality",
+    "dial": "auto",
     "uuid": "",
     "public_key": "",
     "short_id": "",
