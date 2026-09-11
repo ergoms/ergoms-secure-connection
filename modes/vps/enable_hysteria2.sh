@@ -16,7 +16,7 @@ CERT="$CONF_DIR/hy2.crt"
 KEY="$CONF_DIR/hy2.key"
 # UDP 443 looks like HTTP/3 and home DPI often blackholes it.
 # TCP 443 stays VLESS; this is a different protocol on 8443.
-HY2_PORT="${HY2_PORT:-8443}"
+HY2_PORT_OVERRIDE="${HY2_PORT:-}"
 
 if [[ ! -f "$CONF_DIR/config.json" ]]; then
   echo "ERROR: $CONF_DIR/config.json missing — run bootstrap_singbox_443.sh first" >&2
@@ -35,6 +35,15 @@ chmod 600 "$CREDS"
 
 # shellcheck disable=SC1090
 source "$CREDS"
+# Env wins, then credentials.env, then 8443. Never 443 — that is VLESS TCP / DPI-blackholed UDP.
+if [[ -n "$HY2_PORT_OVERRIDE" ]]; then
+  HY2_PORT="$HY2_PORT_OVERRIDE"
+fi
+HY2_PORT="${HY2_PORT:-8443}"
+if [[ "$HY2_PORT" == "443" ]]; then
+  echo "WARN: HY2_PORT=443 is Reality TCP; using UDP 8443"
+  HY2_PORT=8443
+fi
 SERVER_NAME="${REALITY_SERVER_NAME:-${SERVER_NAME:-www.cloudflare.com}}"
 
 if [[ -z "${HY2_PASSWORD:-}" ]]; then
