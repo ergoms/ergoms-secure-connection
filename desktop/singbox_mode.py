@@ -35,6 +35,39 @@ def parse_corporate_proxy(proxy: str) -> tuple[str, int]:
     return host.strip(), int(port_s or "3128")
 
 
+def hysteria2_opts(tr: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Home UDP transport. Empty/missing password means Hysteria2 is off."""
+    if not isinstance(tr, dict):
+        return None
+    raw = tr.get("hysteria2")
+    if not isinstance(raw, dict):
+        password = str(tr.get("hy2_password") or "").strip()
+        raw = {"password": password} if password else None
+    if not isinstance(raw, dict):
+        return None
+    password = str(raw.get("password") or "").strip()
+    if not password or "REPLACE" in password.upper():
+        return None
+    sni = str(
+        raw.get("server_name") or tr.get("server_name") or "www.cloudflare.com"
+    ).strip()
+    return {
+        "password": password,
+        "port": int(raw.get("port") or 443),
+        "server_name": sni or "www.cloudflare.com",
+        "insecure": bool(raw.get("insecure", True)),
+    }
+
+
+def choose_dial(transport: dict[str, Any], *, office: bool) -> str:
+    """Office: VLESS through Squid. Home: Hysteria2 when configured."""
+    if office:
+        return "vless-reality"
+    if hysteria2_opts(transport):
+        return "hysteria2"
+    return "vless-reality"
+
+
 def require_transport(cfg: dict[str, Any]) -> dict[str, Any]:
     tr = cfg.get("transport")
     if not isinstance(tr, dict):
@@ -47,14 +80,14 @@ def require_transport(cfg: dict[str, Any]) -> dict[str, Any]:
     short_id = str(tr.get("short_id") or "").strip()
     sni = str(tr.get("server_name") or "www.cloudflare.com").strip()
     typ = str(tr.get("type") or "vless-reality").strip().lower()
-    if typ not in ("vless-reality", "vless", "reality"):
+    if typ not in ("vless-reality", "vless", "reality", "hysteria2", "auto"):
         raise RuntimeError(f"Unsupported transport.type={typ} (use vless-reality)")
     if not uuid or "REPLACE" in uuid.upper() or len(uuid) < 8:
         raise RuntimeError("transport.uuid missing — paste from VPS bootstrap output")
     if not pub or "REPLACE" in pub.upper():
         raise RuntimeError("transport.public_key missing — paste from VPS bootstrap")
     port = int(tr.get("port") or 443)
-    return {
+    out = {
         "uuid": uuid,
         "public_key": pub,
         "short_id": short_id,
@@ -62,6 +95,10 @@ def require_transport(cfg: dict[str, Any]) -> dict[str, Any]:
         "port": port,
         "type": "vless-reality",
     }
+    hy = hysteria2_opts(tr)
+    if hy:
+        out["hysteria2"] = hy
+    return out
 
 
 class SingboxModeManager:
@@ -122,11 +159,11 @@ class SingboxModeManager:
         bind_iface = detect_bind_interface(bind_target) if bind_target else ""
         if bind_iface:
             self.log(
-                f"underlay NIC: {bind_iface} — VLESS и direct сидят на ней, "
+                f"underlay NIC: {bind_iface} — outbound и direct сидят на ней, "
                 f"auto_detect выкл, exclude={', '.join(exclude_ips) or 'нет'}"
             )
         elif enable_tun:
-            self.log("underlay NIC: не определён — VLESS может уйти в TUN")
+            self.log("underlay NIC: не определён — outbound может уйти в TUN")
 
         route_exclude = [
             "10.0.0.0/8",
@@ -174,7 +211,14 @@ class SingboxModeManager:
         rules: list[dict[str, Any]] = []
         # Dial Squid / avoid looping VPS:443 through TUN.
         # Office RST-kills :21114/:21116 on the VPS IP — send those via VLESS :443.
-        vpn_port = int(transport.get("port") or 443)
+        office = bool(squid_host)
+        dial = choose_dial(transport, office=office)
+        hy = hysteria2_opts(transport) if dial == "hysteria2" else None
+        vpn_port = int((hy or {}).get("port") or transport.get("port") or 443)
+        if dial == "hysteria2" and hy:
+            self.log(f"дом: Hysteria2 UDP :{hy['port']} (Reality на этом Wi-Fi режет DPI)")
+        elif office:
+            self.log("офис: VLESS+Reality через Squid")
         vps_ip = _resolve_host(server_host)
         if vps_ip:
             rules.append(
@@ -312,31 +356,48 @@ class SingboxModeManager:
                     if use_office_proxy
                     else []
                 ),
-                {
-                    "type": "vless",
-                    "tag": "proxy",
-                    "server": server_host,
-                    "server_port": vless_port,
-                    "uuid": transport["uuid"],
-                    "flow": "xtls-rprx-vision",
-                    "packet_encoding": "xudp",
-                    "tls": {
-                        "enabled": True,
-                        "server_name": sni,
-                        "utls": {"enabled": True, "fingerprint": "chrome"},
-                        "reality": {
+                (
+                    {
+                        "type": "hysteria2",
+                        "tag": "proxy",
+                        "server": server_host,
+                        "server_port": int(hy["port"]),
+                        "password": hy["password"],
+                        "tls": {
                             "enabled": True,
-                            "public_key": transport["public_key"],
-                            "short_id": transport["short_id"],
+                            "server_name": hy["server_name"],
+                            "insecure": bool(hy.get("insecure", True)),
+                            "alpn": ["h3"],
                         },
-                    },
-                    **({"detour": "squid"} if use_office_proxy else {}),
-                    **(
-                        {"bind_interface": bind_iface}
-                        if bind_iface and not use_office_proxy
-                        else {}
-                    ),
-                },
+                        **({"bind_interface": bind_iface} if bind_iface else {}),
+                    }
+                    if hy
+                    else {
+                        "type": "vless",
+                        "tag": "proxy",
+                        "server": server_host,
+                        "server_port": vless_port,
+                        "uuid": transport["uuid"],
+                        "flow": "xtls-rprx-vision",
+                        "packet_encoding": "xudp",
+                        "tls": {
+                            "enabled": True,
+                            "server_name": sni,
+                            "utls": {"enabled": True, "fingerprint": "chrome"},
+                            "reality": {
+                                "enabled": True,
+                                "public_key": transport["public_key"],
+                                "short_id": transport["short_id"],
+                            },
+                        },
+                        **({"detour": "squid"} if use_office_proxy else {}),
+                        **(
+                            {"bind_interface": bind_iface}
+                            if bind_iface and not use_office_proxy
+                            else {}
+                        ),
+                    }
+                ),
                 {
                     "type": "direct",
                     "tag": "direct",
@@ -450,9 +511,16 @@ class SingboxModeManager:
         self.config_path.write_text(config_text, encoding="utf-8")
 
         need_admin = bool(enable_tun and elevate)
+        office = bool((corporate_proxy or "").strip())
+        dial = choose_dial(transport, office=office)
+        hy = hysteria2_opts(transport) if dial == "hysteria2" else None
+        if hy:
+            dest = f"Hysteria2 {server_host}:{hy['port']}/udp"
+        else:
+            dest = f"VLESS {server_host}:{transport['port']}"
         self.log(
-            f"Starting MODE=singbox → VLESS {server_host}:{transport['port']}"
-            f"{' via proxy' if (corporate_proxy or '').strip() else ''}"
+            f"Starting MODE=singbox → {dest}"
+            f"{' via proxy' if office else ''}"
             f"; socks=:{socks_port} http=:{http_port} tun={int(enable_tun)}"
             f" kill_switch={int(kill_switch)}"
         )

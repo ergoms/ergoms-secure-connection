@@ -15,7 +15,7 @@ from desktop import procutil
 from desktop.client import OpsClient
 from desktop.config_io import get_server, get_server_host, get_sing_box_path
 from desktop.kill_switch import underlay_gateway
-from desktop.singbox_mode import require_transport
+from desktop.singbox_mode import hysteria2_opts, require_transport
 from desktop.tun import (
     default_route_lines,
     detect_bind_interface,
@@ -284,6 +284,69 @@ def _vless_cfg(
     }
 
 
+def _hy2_cfg(
+    transport: dict,
+    *,
+    server: str,
+    port: int,
+    password: str,
+    sni: str,
+    log_path: Path,
+) -> dict:
+    return {
+        "log": {
+            "level": "info",
+            "timestamp": True,
+            "output": str(log_path).replace("\\", "/"),
+        },
+        "dns": {
+            "servers": [
+                {
+                    "tag": "dns-proxy",
+                    "address": "https://1.1.1.1/dns-query",
+                    "detour": "proxy",
+                }
+            ],
+            "final": "dns-proxy",
+            "strategy": "prefer_ipv4",
+        },
+        "inbounds": [
+            {
+                "type": "socks",
+                "tag": "socks-in",
+                "listen": "127.0.0.1",
+                "listen_port": SANDBOX_SOCKS,
+            },
+            {
+                "type": "http",
+                "tag": "http-in",
+                "listen": "127.0.0.1",
+                "listen_port": SANDBOX_HTTP,
+            },
+        ],
+        "outbounds": [
+            {
+                "type": "hysteria2",
+                "tag": "proxy",
+                "server": server,
+                "server_port": int(port),
+                "password": password,
+                "tls": {
+                    "enabled": True,
+                    "server_name": sni,
+                    "insecure": True,
+                    "alpn": ["h3"],
+                },
+            },
+            {"type": "direct", "tag": "direct"},
+        ],
+        "route": {
+            "auto_detect_interface": False,
+            "final": "proxy",
+        },
+    }
+
+
 def _start_box(exe: Path, cfg_path: Path) -> subprocess.Popen:
     return subprocess.Popen(
         [str(exe), "run", "-c", str(cfg_path)],
@@ -425,6 +488,37 @@ def run_sandbox(client: OpsClient, *, log: LogFn = _noop) -> int:
     finally:
         _stop_box(proc)
         time.sleep(0.4)
+
+    hy = hysteria2_opts(transport)
+    hy2_ok = False
+    if hy:
+        log(f"— 4 Hysteria2 UDP :{hy['port']} (дом, в обход DPI на TLS)")
+        _write_box(
+            cfg_path,
+            log_path,
+            _hy2_cfg(
+                transport,
+                server=host,
+                port=int(hy["port"]),
+                password=hy["password"],
+                sni=str(hy["server_name"]),
+                log_path=log_path,
+            ),
+        )
+        proc = _start_box(exe, cfg_path)
+        try:
+            if not procutil.wait_port_open("127.0.0.1", SANDBOX_SOCKS, timeout=6.0):
+                note(False, "hy2 SOCKS", f"не открылся :{SANDBOX_SOCKS}")
+            else:
+                err = socks_https_probe(SANDBOX_SOCKS, timeout=12.0)
+                hy2_ok = not err
+                note(hy2_ok, "4 Hysteria2", err or "QUIC до VPS прошёл, HTTPS есть")
+        finally:
+            _stop_box(proc)
+            time.sleep(0.4)
+        if hy2_ok:
+            log("итог: Hysteria2 живой — с дома берите его, Reality оставьте офису")
+            return 0
 
     if active:
         log("— слои (чужой туннель поднят, мы его не трогали):")

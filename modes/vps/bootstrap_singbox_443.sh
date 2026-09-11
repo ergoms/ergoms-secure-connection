@@ -181,6 +181,11 @@ EOF
 systemctl daemon-reload
 systemctl enable --now sing-box.service
 
+if [[ -f "$ROOT/modes/vps/enable_hysteria2.sh" ]]; then
+  echo "==> Hysteria2 (UDP :443) for home Wi-Fi"
+  bash "$ROOT/modes/vps/enable_hysteria2.sh" || true
+fi
+
 if command -v ufw >/dev/null 2>&1; then
   ufw allow 443/tcp || true
 fi
@@ -195,6 +200,8 @@ sleep 1
 systemctl --no-pager --full status sing-box.service || true
 ss -lntp 2>/dev/null | grep -E ':443' || true
 
+# shellcheck disable=SC1090
+source "$CREDS"
 PUBLIC_IP="$(curl -4 -fsS --max-time 8 ifconfig.me 2>/dev/null || true)"
 if [[ -z "$PUBLIC_IP" ]]; then
   PUBLIC_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
@@ -219,7 +226,13 @@ On the office PC — config.json (merge into existing file):
     "public_key": "$PUBLIC_KEY",
     "short_id": "$SHORT_ID",
     "server_name": "$SERVER_NAME",
-    "port": 443
+    "port": 443,
+    "hysteria2": {
+      "password": "${HY2_PASSWORD:-}",
+      "port": ${HY2_PORT:-443},
+      "server_name": "$SERVER_NAME",
+      "insecure": true
+    }
   }
 
 On the office PC — merge server + transport into config.json, then:
