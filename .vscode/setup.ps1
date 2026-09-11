@@ -15,6 +15,14 @@ function Test-PythonExe {
     return $LASTEXITCODE -eq 0
 }
 
+# PS 5.1 unwraps a 1-element array (if/hashtable/return) to a string.
+# Then string + @('-c', ...) becomes one argv: "-3-c import sys; ..."
+function Get-PyPrefix {
+    param($Py)
+    # Leading comma: function output would otherwise unwrap @('-3') back to a string.
+    return , @($Py.Prefix | Where-Object { $_ })
+}
+
 function Get-SystemPython {
     foreach ($name in @('python', 'py')) {
         $cmd = Get-Command $name -ErrorAction SilentlyContinue
@@ -73,7 +81,7 @@ function Install-Poetry {
     }
     # Native stdout must not enter the function success stream - callers
     # assign the return value to $poetry.
-    & $py.Exe @($py.Prefix + @($installer)) | Out-Host
+    & $py.Exe @((Get-PyPrefix $py) + @($installer)) | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "Poetry installer failed: $LASTEXITCODE" }
     $poetry = Get-PoetryExe
     if (-not $poetry) { throw 'Poetry install failed' }
@@ -82,7 +90,7 @@ function Install-Poetry {
 
 function Get-SystemPythonExe {
     $py = Get-SystemPython
-    $out = & $py.Exe @($py.Prefix + @('-c', 'import sys; print(sys.executable)')) 2>$null
+    $out = & $py.Exe @((Get-PyPrefix $py) + @('-c', 'import sys; print(sys.executable)')) 2>$null
     $exe = @($out) | Where-Object { $_ } | Select-Object -Last 1
     if (-not $exe -or $exe -match 'WindowsApps' -or -not (Test-Path -LiteralPath $exe)) {
         throw 'Python 3 not found (need 3.10-3.14, not the Microsoft Store stub)'
