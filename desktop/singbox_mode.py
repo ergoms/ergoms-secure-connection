@@ -53,7 +53,7 @@ def hysteria2_opts(tr: dict[str, Any] | None) -> dict[str, Any] | None:
     ).strip()
     return {
         "password": password,
-        "port": int(raw.get("port") or 443),
+        "port": int(raw.get("port") or 8443),
         "server_name": sni or "www.cloudflare.com",
         "insecure": bool(raw.get("insecure", True)),
     }

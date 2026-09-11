@@ -148,7 +148,7 @@ def default_config_template() -> dict[str, Any]:
             "port": 443,
             "hysteria2": {
                 "password": "",
-                "port": 443,
+                "port": 8443,
                 "server_name": "www.cloudflare.com",
                 "insecure": True,
             },
