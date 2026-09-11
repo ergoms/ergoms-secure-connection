@@ -217,11 +217,13 @@ def _cmds_win_install(allow: list[str], gw: str | None) -> list[str]:
         )
     if gw:
         for ip in allow:
-            cmds.append(f"route delete {ip} mask 255.255.255.255")
-            hop = f"route add {ip} mask 255.255.255.255 {gw} metric 1"
+            line_change = f"route change {ip} mask 255.255.255.255 {gw} metric 1"
+            line_add = f"route add {ip} mask 255.255.255.255 {gw} metric 1"
             if if_idx:
-                hop += f" if {if_idx}"
-            cmds.append(hop)
+                line_change += f" if {if_idx}"
+                line_add += f" if {if_idx}"
+            cmds.append(line_change)
+            cmds.append(line_add)
     cmds.append("netsh interface ipv6 add route ::/1 interface=1 metric=512 store=active")
     cmds.append(
         "netsh interface ipv6 add route 8000::/1 interface=1 metric=512 store=active"
