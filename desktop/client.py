@@ -188,6 +188,8 @@ class OpsClient:
         self.reverse_ssh = ReverseSshManager(self.paths, log=self.log)
         self._atexit_done = False
         self._teardown_lock = threading.Lock()
+        self._exit_probe_error: str | None = None
+        self._exit_probe_hint: str | None = None
         atexit.register(self._atexit_teardown)
         if startup_cleanup:
             try:
@@ -1108,6 +1110,7 @@ class OpsClient:
             return
         if err:
             connect_err = socks_probe(socks_port, timeout=6.0)
+            self._exit_probe_error = connect_err or err
             if connect_err:
                 self.log(f"проверка выхода: НЕ ОК — {connect_err}")
             else:
@@ -1116,20 +1119,40 @@ class OpsClient:
                 )
             tail = "\n".join(self.singbox.tail_log(40)).lower()
             if "no recent network activity" in tail:
+                self._exit_probe_hint = "hy2-udp"
                 self.log(
                     "Hysteria2 не дошёл до VPS (QUIC timeout). "
                     "UDP :443 часто режет домашний DPI — нужен порт 8443"
                 )
+            else:
+                try:
+                    cfg = self.config()
+                    office = bool(resolve_corporate_proxy(cfg))
+                    hy = hysteria2_opts(require_transport(cfg))
+                except Exception:  # noqa: BLE001
+                    office, hy = False, None
+                if not office and not hy:
+                    self._exit_probe_hint = "need-hy2"
+                    self.log(
+                        "домашний DPI съел Reality: TCP до VPS живой, "
+                        "внутри туннеля — тишина. Без Hysteria2 дома интернет "
+                        "не заработает. На VPS: bash modes/vps/enable_hysteria2.sh "
+                        "— пароль вставьте в Настройки → Hysteria2 (или "
+                        "transport.hysteria2.password в config.json)"
+                    )
             self._log_singbox_tail("после неудачной проверки")
             return
         tail = "\n".join(self.singbox.tail_log(40)).lower()
         if "i/o timeout" in tail or "deadline exceeded" in tail:
+            self._exit_probe_error = "dns-timeout"
             self.log(
                 "проверка выхода: HTTPS прошёл, но DNS/VLESS сыплет timeout — "
                 "сайты могут не открываться (см. журнал sing-box)"
             )
             self._log_singbox_tail("после частичного OK")
             return
+        self._exit_probe_error = None
+        self._exit_probe_hint = None
         self.log("проверка выхода: OK (HTTPS через SOCKS)")
 
     def _kill_switch_hosts(self, cfg: dict[str, Any]) -> list[str]:
@@ -1183,6 +1206,8 @@ class OpsClient:
             f"подключение: {label}, TUN={'вкл' if tun else 'выкл'}"
             f", kill switch={'вкл' if ks else 'выкл'}"
         )
+        self._exit_probe_error = None
+        self._exit_probe_hint = None
         self.start_singbox_mode()
         if spawn_watchdog:
             if procutil.is_admin() and not self._inprocess_helpers:
@@ -1203,6 +1228,8 @@ class OpsClient:
     def disable(self) -> None:
         self.reload_env()
         self.log("отключение VPN…")
+        self._exit_probe_error = None
+        self._exit_probe_hint = None
         self._stop_watchdog_inprocess()
         stop_err: Exception | None = None
         try:
@@ -1287,6 +1314,10 @@ class OpsClient:
             f"kill_switch       = {1 if info['kill_switch'] else 0}"
             + (" applied" if info["kill_switch_applied"] else "")
         )
+        info["exit_probe_error"] = self._exit_probe_error or ""
+        info["exit_probe_hint"] = self._exit_probe_hint or ""
+        if info["exit_probe_error"]:
+            lines.append(f"exit_probe       = FAIL {info['exit_probe_error']}")
         if include_git:
             info["git_http_proxy"] = git_get("http.proxy")
             info["git_https_proxy"] = git_get("https.proxy")

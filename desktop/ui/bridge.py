@@ -443,6 +443,9 @@ class GuiBridge(QObject):
             "trServerName", str(tr.get("server_name") or "www.cloudflare.com")
         )
         self._settings.insert("trPort", str(tr.get("port") or 443))
+        hy = tr.get("hysteria2") if isinstance(tr.get("hysteria2"), dict) else {}
+        self._settings.insert("hy2Password", str(hy.get("password") or ""))
+        self._settings.insert("hy2Port", str(hy.get("port") or 8443))
         rev = cfg.get("reverse_ssh") or {}
         self._settings.insert("reverseSsh", bool(rev.get("enabled")))
         self._settings.insert("reverseSshListen", str(rev.get("listen_port") or 2222))
@@ -617,6 +620,17 @@ class GuiBridge(QObject):
             cfg["transport"]["port"] = int(
                 str(s.value("serverPort") or s.value("trPort") or "443").strip() or "443"
             )
+            hy = cfg["transport"].setdefault("hysteria2", {})
+            if not isinstance(hy, dict):
+                hy = {}
+                cfg["transport"]["hysteria2"] = hy
+            hy["password"] = str(s.value("hy2Password") or "").strip()
+            hy["port"] = int(str(s.value("hy2Port") or "8443").strip() or "8443")
+            hy["server_name"] = (
+                str(hy.get("server_name") or s.value("trServerName") or "").strip()
+                or "www.cloudflare.com"
+            )
+            hy["insecure"] = bool(hy.get("insecure", True))
             cfg.setdefault("reverse_ssh", {})
             if corporate:
                 cfg["reverse_ssh"]["enabled"] = bool(s.value("reverseSsh"))
@@ -873,10 +887,12 @@ class GuiBridge(QObject):
         scope = _scope_label(str(st.get("socks_scope") or ""))
         target = str(st.get("server_target") or st.get("ssh_target") or "—")
         ks_on = bool(st.get("kill_switch_applied") or (active and st.get("kill_switch")))
+        probe_err = str(st.get("exit_probe_error") or "")
+        probe_hint = str(st.get("exit_probe_hint") or "")
         sig = (
             f"{singbox}|{tun}|{active}|{socks_up}|{http_up}|{pac_up}|{scope}|{target}"
             f"|{st.get('watchdog_running')}|{st.get('reverse_ssh_running')}"
-            f"|{st.get('reverse_ssh_listen')}|{ks_on}"
+            f"|{st.get('reverse_ssh_listen')}|{ks_on}|{probe_err}|{probe_hint}"
         )
         if not force and (sig == self._last_status_sig or (self._busy and not self._await_status)):
             return
@@ -915,9 +931,34 @@ class GuiBridge(QObject):
                 pass
 
         socks_s = f"SOCKS :{self._socks_port}"
-        if singbox and tun and socks_up:
+        if singbox and tun and socks_up and probe_err:
+            if probe_hint == "need-hy2":
+                title, sub, color = (
+                    "Нет выхода",
+                    "Домашний провайдер режет Reality. Нужен Hysteria2: "
+                    "на VPS enable_hysteria2.sh, пароль — в Настройки",
+                    _C_DANGER,
+                )
+            elif probe_hint == "hy2-udp":
+                title, sub, color = (
+                    "Нет выхода",
+                    "Hysteria2 не дошёл по UDP — проверьте порт 8443 на VPS",
+                    _C_DANGER,
+                )
+            else:
+                title, sub, color = (
+                    "Нет выхода",
+                    "Туннель поднялся, интернет через него не идёт — смотрите журнал",
+                    _C_DANGER,
+                )
+            power = "Отключить"
+            if probe_err != getattr(self, "_last_probe_toast", None):
+                self._last_probe_toast = probe_err
+                self.toast.emit(sub, "error")
+        elif singbox and tun and socks_up:
             title, sub, color = "Защищено", "", _C_ACCENT
             power = "Отключить"
+            self._last_probe_toast = None
         elif singbox and not socks_up:
             title, sub, color = (
                 "Сбой",
@@ -1002,6 +1043,8 @@ def _settings_defaults() -> dict[str, Any]:
         "trShortId": "",
         "trServerName": "www.cloudflare.com",
         "trPort": "443",
+        "hy2Password": "",
+        "hy2Port": "8443",
         "reverseSsh": False,
         "reverseSshListen": "2222",
         "reverseSshVpsUser": "root",
