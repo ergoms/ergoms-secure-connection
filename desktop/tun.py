@@ -81,20 +81,27 @@ def _is_tun_iface(name: str) -> bool:
     return low.startswith(("ops-content", "ergoms-secure-connection", "ergoms"))
 
 
+TUN_IFACE_NAME = "ergoms-secure-connection-tun"
+TUN_ADDR_PREFIX = "172.19."
+
 _FOREIGN_VPN = (
     "amnezia",
     "amn0",
+    "awg",
+    "amneziawg",
     "outline",
     "wireguard",
+    "wintun",
     "nordlynx",
     "openvpn",
     "proton",
     "surfshark",
+    "tun2socks",
 )
-# GUI/daemon binaries only. AmneziaVPN-service is a resident Windows service
-# that keeps running while the tunnel is down, so it never means "VPN is on".
+# GUI/tunnel binaries. AmneziaVPN-service stays up while the tunnel is down.
 _FOREIGN_PROCS = (
     "AmneziaVPN.exe",
+    "AmneziaWGTunnel.exe",
     "outline.exe",
     "wireguard.exe",
 )
@@ -163,11 +170,105 @@ def leftover_vpn_ifaces() -> list[tuple[int, str]]:
 
 
 def leftover_vpn_default_cmds() -> list[str]:
-    """Remove leftover 0.0.0.0/0 on Amnezia/etc so Wi-Fi default can win."""
+    """Remove leftover 0.0.0.0/0 and 0.0.0.0/1 on Amnezia/etc.
+
+    AmneziaWG usually installs split defaults (0.0.0.0/1 + 128.0.0.0/1),
+    not a single 0.0.0.0/0 — deleting only /0 leaves QUIC inside their TUN.
+    """
     cmds: list[str] = []
     for idx, _name in leftover_vpn_ifaces():
         cmds.append(f"route delete 0.0.0.0 mask 0.0.0.0 if {idx}")
+        cmds.append(f"route delete 0.0.0.0 mask 128.0.0.0 if {idx}")
+        cmds.append(f"route delete 128.0.0.0 mask 128.0.0.0 if {idx}")
+    cmds.extend(foreign_split_default_cmds())
+    return list(dict.fromkeys(cmds))
+
+
+def foreign_split_default_cmds() -> list[str]:
+    """Drop 0.0.0.0/1 and 128.0.0.0/1 that are not ours (KS lo / this TUN)."""
+    cmds: list[str] = []
+    if sys.platform != "win32":
+        return cmds
+    try:
+        r = subprocess.run(
+            ["route", "print", "-4"],
+            capture_output=True,
+            text=True,
+            timeout=8,
+            check=False,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return cmds
+    seen: set[str] = set()
+    for raw in (r.stdout or "").splitlines():
+        m = re.match(
+            r"^\s*(0\.0\.0\.0|128\.0\.0\.0)\s+128\.0\.0\.0\s+(\S+)\s+(\S+)\s+(\d+)\s*$",
+            raw,
+        )
+        if not m:
+            continue
+        dest, hop, iface = m.group(1), m.group(2), m.group(3)
+        if hop.startswith("127.") or iface.startswith("127."):
+            continue
+        if iface.startswith(TUN_ADDR_PREFIX) or hop.startswith(TUN_ADDR_PREFIX):
+            continue
+        if hop.lower() in {"on-link", "onlink"}:
+            continue
+        key = f"{dest}|{hop}"
+        if key in seen:
+            continue
+        seen.add(key)
+        cmds.append(f"route delete {dest} mask 128.0.0.0 {hop}")
     return cmds
+
+
+def wait_tun_iface(*, timeout: float = 20.0) -> int | None:
+    """Interface index of this app's TUN, or None if it never appeared."""
+    if sys.platform != "win32":
+        return None
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        idx = _win_if_index_by_alias(TUN_IFACE_NAME)
+        if idx:
+            return idx
+        time.sleep(0.25)
+    return None
+
+
+def _win_if_index_by_alias(alias: str) -> int | None:
+    want = (alias or "").strip().lower()
+    if not want:
+        return None
+    try:
+        r = subprocess.run(
+            ["netsh", "interface", "ipv4", "show", "interfaces"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    for line in (r.stdout or "").splitlines():
+        m = re.match(r"^\s*(\d+)\s+\d+\s+\d+\s+(\S+)\s+(.+?)\s*$", line)
+        if not m:
+            continue
+        if m.group(2).lower() not in _IFACE_UP:
+            continue
+        if m.group(3).strip().lower() == want:
+            return int(m.group(1))
+    return None
+
+
+def install_tun_split_default(if_idx: int, *, metric: int = 5) -> list[str]:
+    """Send 0.0.0.0/1 + 128.0.0.0/1 into our TUN without auto_route."""
+    hop = "172.19.0.1"
+    return [
+        f"route add 0.0.0.0 mask 128.0.0.0 {hop} metric {metric} if {if_idx}",
+        f"route add 128.0.0.0 mask 128.0.0.0 {hop} metric {metric} if {if_idx}",
+    ]
 
 
 def iface_ipv4s(alias: str) -> list[str]:
@@ -217,7 +318,8 @@ def stale_default_cmds(keep_gw: str) -> list[str]:
     """Drop IPv4 defaults that are not the current underlay gateway.
 
     Office Ethernet / old TAP often leave 10.x defaults with metric 0.
-    On home Wi-Fi they blackhole the internet even after Amnezia is off.
+    Tailscale/Amnezia leave 100.x (CGNAT) persistent rows with 'Default'
+    instead of a metric — those used to be ignored and ate Hysteria2 UDP.
     """
     keep = (keep_gw or "").strip()
     cmds: list[str] = []
@@ -236,9 +338,8 @@ def stale_default_cmds(keep_gw: str) -> list[str]:
     except (OSError, subprocess.TimeoutExpired):
         return cmds
     for raw in (r.stdout or "").splitlines():
-        # Active Routes only: persistent rows carry "Default" instead of a metric.
         m = re.match(
-            r"^\s*0\.0\.0\.0\s+0\.0\.0\.0\s+(\S+)\s+(\S+)\s+(\d+)\s*$",
+            r"^\s*0\.0\.0\.0\s+0\.0\.0\.0\s+(\S+)\s+(\S+)(?:\s+(\d+|Default))?\s*$",
             raw,
         )
         if not m:
@@ -247,16 +348,15 @@ def stale_default_cmds(keep_gw: str) -> list[str]:
         iface = m.group(2).strip()
         if hop == keep:
             continue
-        if iface.startswith("127.") or iface.startswith("172.19."):
+        if iface.startswith("127.") or iface.startswith(TUN_ADDR_PREFIX):
             continue
-        # On-link default belongs to a tunnel NIC; drop it by index, never by
-        # gateway 0.0.0.0 (that pattern can match unrelated routes).
         if hop.lower() in {"on-link", "onlink", "0.0.0.0"}:
             continue
         if hop in seen:
             continue
         seen.add(hop)
         cmds.append(f"route delete 0.0.0.0 mask 0.0.0.0 {hop}")
+        cmds.append(f"route -p delete 0.0.0.0 mask 0.0.0.0 {hop}")
     return cmds
 
 

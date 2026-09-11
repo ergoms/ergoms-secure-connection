@@ -341,11 +341,14 @@ def pin_commands(
         idx = if_idx if if_idx else _iface_index_win(unique[0])
         cmds: list[str] = []
         for ip in unique:
-            cmds.append(f"route delete {ip} mask 255.255.255.255")
-            line = f"route add {ip} mask 255.255.255.255 {hop} metric 1"
+            line_change = f"route change {ip} mask 255.255.255.255 {hop} metric 1"
+            line_add = f"route add {ip} mask 255.255.255.255 {hop} metric 1"
             if idx:
-                line += f" if {idx}"
-            cmds.append(line)
+                line_change += f" if {idx}"
+                line_add += f" if {idx}"
+            # change-if-exists then add-if-missing — no delete gap that kills QUIC
+            cmds.append(line_change)
+            cmds.append(line_add)
         return cmds
     return [f"ip route replace {ip}/32 via {hop}" for ip in unique]
 

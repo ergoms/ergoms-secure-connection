@@ -7,6 +7,7 @@ import os
 import socket
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -15,6 +16,7 @@ from desktop import procutil
 from desktop.branding import APP_EXE, APP_EXE_LEGACY
 from desktop.tun import (
     RUSTDESK_PORTS,
+    TUN_IFACE_NAME,
     TunManager,
     _direct_python_paths,
     _resolve_host,
@@ -286,14 +288,15 @@ class SingboxModeManager:
                 {
                     "type": "tun",
                     "tag": "tun-in",
-                    "interface_name": "ergoms-secure-connection-tun",
+                    "interface_name": TUN_IFACE_NAME,
                     "address": ["172.19.0.1/30"],
                     "mtu": mtu_val,
-                    "auto_route": True,
-                    # Windows strict_route deletes the Wi-Fi default and often
-                    # steals VLESS. OS kill switch already blackholes leaks.
+                    # Windows auto_route steals VPS UDP (Hysteria2 QUIC dies)
+                    # while SOCKS CONNECT still looks fine. We add 0.0.0.0/1
+                    # ourselves after the adapter is up, with VPS /32 pinned.
+                    "auto_route": sys.platform != "win32",
                     "strict_route": bool(kill_switch) and sys.platform != "win32",
-                    "stack": "gvisor" if sys.platform == "win32" else "system",
+                    "stack": "mixed" if sys.platform == "win32" else "system",
                     "route_exclude_address": route_exclude,
                 }
             )
@@ -710,7 +713,21 @@ class SingboxModeManager:
             stderr=subprocess.STDOUT,
             creationflags=procutil.creationflags(),
         )
+        if postlude:
+            threading.Thread(
+                target=self._run_postlude,
+                args=(list(postlude),),
+                daemon=True,
+            ).start()
         return proc.pid
+
+    def _run_postlude(self, cmds: list[str]) -> None:
+        """Re-pin underlay /32 after TUN auto_route (already-admin path)."""
+        for wait in (0.2, 0.6, 1.2, 2.5):
+            time.sleep(wait)
+            for line in cmds:
+                args = [p for p in line.split(" ") if p]
+                procutil.run(args, timeout=8)
 
     def _start_elevated_win(
         self,

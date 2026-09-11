@@ -65,10 +65,14 @@ from desktop.singbox_mode import (
 )
 from desktop.tun import (
     TunManager,
+    default_route_lines,
+    foreign_vpn_processes,
     gateway_via_dest,
+    install_tun_split_default,
     leftover_vpn_default_cmds,
     leftover_vpn_ifaces,
     stale_default_cmds,
+    wait_tun_iface,
 )
 from desktop.sys_proxy import (
     disable_browser_proxy,
@@ -190,6 +194,8 @@ class OpsClient:
         self._teardown_lock = threading.Lock()
         self._exit_probe_error: str | None = None
         self._exit_probe_hint: str | None = None
+        self._pending_win_tun = False
+        self._pending_allow: list[str] = []
         atexit.register(self._atexit_teardown)
         if startup_cleanup:
             try:
@@ -662,16 +668,25 @@ class OpsClient:
         keep_gw = gateway_via_dest(host) or ""
         stale = stale_default_cmds(keep_gw) if keep_gw else []
         leftover_cmds = list(dict.fromkeys(leftover_cmds + stale))
+        others = leftover or foreign_vpn_processes()
         if leftover:
             names = ", ".join(name for _idx, name in leftover)
             self.log(
-                f"чужой туннель ещё поднят ({names}) — сниму его default, "
-                f"выход оставлю через {keep_gw or 'underlay'}"
+                f"чужой туннель ещё поднят ({names}) — сниму его 0.0.0.0/0 и "
+                f"0.0.0.0/1, выход оставлю через {keep_gw or 'underlay'}"
             )
-        if stale:
+        elif others:
             self.log(
-                f"лишние default (не {keep_gw}) сниму — иначе интернет уйдёт "
-                "в мёртвый офисный/VPN шлюз"
+                "второй VPN ("
+                + ", ".join(str(x) for x in others)
+                + ") запущен — если туннель поднят, QUIC уйдёт в него"
+            )
+        for row in default_route_lines():
+            self.log(f"default: {row}")
+        if stale:
+            shown = [c for c in stale if "-p" not in c]
+            self.log(
+                "лишний default второго VPN сниму: " + "; ".join(shown)
             )
         if leftover_cmds and procutil.is_admin():
             for line in leftover_cmds:
@@ -741,14 +756,21 @@ class OpsClient:
                 self.log(f"диагностика: TCP {host}:{port} с этой NIC — FAIL ({exc})")
         self._log_singbox_tail("после запуска")
         if enable_tun and procutil.is_admin() and allow:
+            pin_kill_switch_underlay(
+                allow, var_dir=self.paths.var_dir, log=self.log, elevate=False
+            )
             threading.Thread(
                 target=self._pin_underlay_later,
                 args=(allow,),
                 daemon=True,
             ).start()
+        self._pending_win_tun = bool(
+            enable_tun and procutil.is_admin() and sys.platform == "win32"
+        )
+        self._pending_allow = allow
         threading.Thread(
             target=self._probe_exit,
-            args=(socks_port, 3.2 if enable_tun else 0.0),
+            args=(socks_port, 1.0 if enable_tun else 0.0),
             daemon=True,
         ).start()
 
@@ -1087,11 +1109,35 @@ class OpsClient:
             self.log("reverse_ssh.enabled=false в config.json")
         self.reverse_ssh.stop()
 
-    def _pin_underlay_later(self, allow: list[str]) -> None:
-        time.sleep(2.0)
+    def _install_win_tun_routes(self, allow: list[str]) -> None:
+        """After TUN adapter exists: steal traffic without auto_route."""
+        idx = wait_tun_iface(timeout=20.0)
+        if not idx:
+            self.log("TUN-адаптер так и не появился — split default не ставлю")
+            return
         pin_kill_switch_underlay(
             allow, var_dir=self.paths.var_dir, log=self.log, elevate=False
         )
+        for line in leftover_vpn_default_cmds():
+            args = [p for p in line.split(" ") if p]
+            procutil.run(args, timeout=8)
+        for line in install_tun_split_default(idx):
+            args = [p for p in line.split(" ") if p]
+            procutil.run(args, timeout=8)
+        self.log(f"TUN split default: 0.0.0.0/1 через if {idx} (auto_route выкл)")
+        pin_kill_switch_underlay(
+            allow, var_dir=self.paths.var_dir, log=self.log, elevate=False
+        )
+
+    def _pin_underlay_later(self, allow: list[str]) -> None:
+        for i, wait in enumerate((0.2, 0.6, 1.5, 3.0)):
+            time.sleep(wait)
+            pin_kill_switch_underlay(
+                allow,
+                var_dir=self.paths.var_dir,
+                log=self.log if i in (0, 3) else (lambda _m: None),
+                elevate=False,
+            )
 
     def _probe_exit(self, socks_port: int, delay: float = 0.0) -> None:
         """SOCKS5 CONNECT after TUN routes settle — first-second OK is a false green."""
@@ -1120,10 +1166,22 @@ class OpsClient:
             tail = "\n".join(self.singbox.tail_log(40)).lower()
             if "no recent network activity" in tail:
                 self._exit_probe_hint = "hy2-udp"
-                self.log(
-                    "Hysteria2 не дошёл до VPS (QUIC timeout). "
-                    "UDP :443 часто режет домашний DPI — нужен порт 8443"
-                )
+                try:
+                    hy_now = hysteria2_opts(require_transport(self.config()))
+                    hy_port = int((hy_now or {}).get("port") or 0)
+                except Exception:  # noqa: BLE001
+                    hy_port = 0
+                if hy_port and hy_port != 443:
+                    self.log(
+                        f"Hysteria2 UDP :{hy_port} не дошёл до VPS (QUIC timeout). "
+                        "Часто TUN украл маршрут к VPS — либо в панели хостинга "
+                        f"закрыт UDP {hy_port}. На VPS: tcpdump -n udp port {hy_port}"
+                    )
+                else:
+                    self.log(
+                        "Hysteria2 не дошёл до VPS (QUIC timeout). "
+                        "UDP :443 часто режет домашний DPI — нужен порт 8443"
+                    )
             else:
                 try:
                     cfg = self.config()
@@ -1154,6 +1212,11 @@ class OpsClient:
         self._exit_probe_error = None
         self._exit_probe_hint = None
         self.log("проверка выхода: OK (HTTPS через SOCKS)")
+        if getattr(self, "_pending_win_tun", False):
+            self._pending_win_tun = False
+            allow = list(getattr(self, "_pending_allow", []) or [])
+            self.log("Hysteria2 живой — ставлю TUN split default")
+            self._install_win_tun_routes(allow)
 
     def _kill_switch_hosts(self, cfg: dict[str, Any]) -> list[str]:
         hosts = [get_server_host(cfg)]
