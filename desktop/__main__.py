@@ -83,7 +83,7 @@ def _show_help() -> int:
   gui                  окно Qt Quick (нужен дисплей, poetry install --extras gui)
   help
 
-Транспорт: офис — VLESS+Reality через Squid; дом — Hysteria2 UDP :443
+Транспорт: офис — VLESS+Reality через Squid; дом — Hysteria2 UDP :8443
 
 Запуск:
   python -m desktop <cmd> …

@@ -613,7 +613,7 @@ class SingboxModeManager:
         interval = 0.05
         while time.monotonic() < deadline:
             if _port_open("127.0.0.1", socks_port):
-                kind = "mixed + TUN → VLESS" if enable_tun else "mixed → VLESS"
+                kind = "mixed + TUN" if enable_tun else "mixed"
                 self.log(
                     f"sing-box слушает SOCKS :{socks_port} и HTTP :{http_port} ({kind})"
                 )

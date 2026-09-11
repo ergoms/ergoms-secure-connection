@@ -14,7 +14,9 @@ STATE_DIR=/var/lib/ops-content-singbox
 CREDS="$STATE_DIR/credentials.env"
 CERT="$CONF_DIR/hy2.crt"
 KEY="$CONF_DIR/hy2.key"
-HY2_PORT="${HY2_PORT:-443}"
+# UDP 443 looks like HTTP/3 and home DPI often blackholes it.
+# TCP 443 stays VLESS; this is a different protocol on 8443.
+HY2_PORT="${HY2_PORT:-8443}"
 
 if [[ ! -f "$CONF_DIR/config.json" ]]; then
   echo "ERROR: $CONF_DIR/config.json missing — run bootstrap_singbox_443.sh first" >&2
@@ -63,8 +65,16 @@ import json, sys
 path, password, port, sni, cert, key = sys.argv[1:]
 cfg = json.load(open(path, encoding="utf-8"))
 ins = cfg.setdefault("inbounds", [])
-if any(str(x.get("type") or "") == "hysteria2" for x in ins):
-    print("hysteria2 inbound already present")
+hy = next((x for x in ins if str(x.get("type") or "") == "hysteria2"), None)
+if hy is not None:
+    hy["listen_port"] = int(port)
+    users = hy.get("users") or [{"name": "ergoms", "password": password}]
+    if users and isinstance(users[0], dict):
+        users[0]["password"] = password
+    hy["users"] = users
+    json.dump(cfg, open(path, "w", encoding="utf-8"), indent=2)
+    open(path, "a", encoding="utf-8").write("\n")
+    print(f"hysteria2 inbound moved to UDP :{port}")
 else:
     ins.append({
         "type": "hysteria2",

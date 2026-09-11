@@ -229,7 +229,7 @@ On the office PC — config.json (merge into existing file):
     "port": 443,
     "hysteria2": {
       "password": "${HY2_PASSWORD:-}",
-      "port": ${HY2_PORT:-443},
+      "port": ${HY2_PORT:-8443},
       "server_name": "$SERVER_NAME",
       "insecure": true
     }
