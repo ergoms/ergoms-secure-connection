@@ -61,7 +61,13 @@
     "public_key": "",
     "short_id": "",
     "server_name": "www.cloudflare.com",
-    "port": 443
+    "port": 443,
+    "hysteria2": {
+      "password": "",
+      "port": 443,
+      "server_name": "www.cloudflare.com",
+      "insecure": true
+    }
   },
   "reverse_ssh": {
     "enabled": false,

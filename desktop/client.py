@@ -57,7 +57,12 @@ from desktop.kill_switch import planned_pin_commands as kill_switch_pin_cmds
 from desktop.kill_switch import pin_underlay as pin_kill_switch_underlay
 from desktop.kill_switch import remember_plan as remember_kill_switch_plan
 from desktop.kill_switch import state_path as kill_switch_state_path
-from desktop.singbox_mode import SingboxModeManager, require_transport
+from desktop.singbox_mode import (
+    SingboxModeManager,
+    choose_dial,
+    hysteria2_opts,
+    require_transport,
+)
 from desktop.tun import (
     TunManager,
     gateway_via_dest,
@@ -610,6 +615,14 @@ class OpsClient:
         transport = require_transport(cfg)
         port = int(transport.get("port") or server.get("port") or 443)
         office_proxy = resolve_corporate_proxy(cfg)
+        dial = choose_dial(transport, office=bool(office_proxy))
+        hy = hysteria2_opts(transport) if dial == "hysteria2" else None
+        if not office_proxy and not hy:
+            self.log(
+                "дом: Hysteria2 не задан — иду через Reality. "
+                "На VPS: bash modes/vps/enable_hysteria2.sh, затем вставьте "
+                "transport.hysteria2 в config.json"
+            )
         if office_proxy:
             self.log(f"Probing CONNECT {host}:{port} via proxy...")
             if self.probe(host, port) != 0:
@@ -711,6 +724,11 @@ class OpsClient:
             self.log(
                 f"диагностика: прямой TCP {host}:{port} не проверяем — "
                 "VLESS идёт через корпоративный прокси"
+            )
+        elif hy:
+            self.log(
+                f"диагностика: Hysteria2 UDP {host}:{hy['port']} — "
+                "TCP Reality не проверяем, домашний DPI его глотает"
             )
         else:
             try:
@@ -1144,8 +1162,15 @@ class OpsClient:
         self.reload_env()
         tun = get_tun_enabled() or get_kill_switch()
         ks = get_kill_switch()
+        cfg = self.config()
+        office = bool(resolve_corporate_proxy(cfg))
+        try:
+            dial = choose_dial(require_transport(cfg), office=office)
+        except Exception:  # noqa: BLE001
+            dial = "vless-reality"
+        label = "Hysteria2" if dial == "hysteria2" else "VLESS+Reality"
         self.log(
-            f"подключение: VLESS+Reality, TUN={'вкл' if tun else 'выкл'}"
+            f"подключение: {label}, TUN={'вкл' if tun else 'выкл'}"
             f", kill switch={'вкл' if ks else 'выкл'}"
         )
         self.start_singbox_mode()
@@ -1371,10 +1396,18 @@ class OpsClient:
             lines.append(f"server          = {info['server_target']}")
             uuid = str(tr.get("uuid") or "")
             uuid_show = (uuid[:8] + "…") if len(uuid) > 8 else (uuid or "(empty)")
+            hy = hysteria2_opts(tr)
+            office = bool(info["corporate_proxy"])
+            dial = choose_dial(tr if isinstance(tr, dict) else {}, office=office)
             lines.append(
                 f"transport       = {info['transport_type'] or 'vless-reality'} "
                 f"uuid={uuid_show} sni={tr.get('server_name') or ''}"
             )
+            if hy:
+                lines.append(
+                    f"hysteria2       = udp :{hy['port']} "
+                    f"(дом={'вкл' if dial == 'hysteria2' else 'офис → Reality'})"
+                )
             lines.append(f"proxy_bypass    = {info['proxy_bypass_n']} entries")
             if info["sing_box_path"]:
                 lines.append(f"sing_box_path   = {info['sing_box_path']}")

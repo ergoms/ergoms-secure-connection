@@ -146,6 +146,12 @@ def default_config_template() -> dict[str, Any]:
             "short_id": "",
             "server_name": "www.cloudflare.com",
             "port": 443,
+            "hysteria2": {
+                "password": "",
+                "port": 443,
+                "server_name": "www.cloudflare.com",
+                "insecure": True,
+            },
         },
         "reverse_ssh": {
             "enabled": False,
@@ -304,6 +310,16 @@ def ensure_config_defaults(cfg: dict[str, Any]) -> dict[str, Any]:
     transport.setdefault("short_id", "")
     transport.setdefault("server_name", "www.cloudflare.com")
     transport.setdefault("port", 443)
+    hy = transport.get("hysteria2")
+    if not isinstance(hy, dict):
+        hy = {}
+        transport["hysteria2"] = hy
+    hy.setdefault("password", "")
+    hy.setdefault("port", 443)
+    hy.setdefault("server_name", str(transport.get("server_name") or "www.cloudflare.com"))
+    hy.setdefault("insecure", True)
+    hy["insecure"] = _as_bool(hy.get("insecure"), True)
+    hy["port"] = max(1, min(65535, _as_int(hy.get("port"), 443)))
 
     rev = out.setdefault("reverse_ssh", {})
     if not isinstance(rev, dict):

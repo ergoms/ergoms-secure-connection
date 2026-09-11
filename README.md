@@ -4,7 +4,11 @@
 
 Цепочка:
 
-**программа → локальный sing-box (SOCKS/HTTP/TUN) → Squid CONNECT → VPS :443 (VLESS+Reality) → интернет**
+**офис:** программа → sing-box → Squid CONNECT → VPS TCP :443 (VLESS+Reality) → интернет
+
+**дом:** программа → sing-box → VPS UDP :443 (Hysteria2) → интернет
+
+Домашний провайдер часто глотает TLS Reality; Hysteria2 — QUIC, как у Amnezia. Офисный Squid UDP не проводит, поэтому Reality там остаётся. На уже установленном VPS: `bash modes/vps/enable_hysteria2.sh`, пароль вставить в `transport.hysteria2`.
 
 ---
 
@@ -65,7 +69,7 @@ bash modes/vps/bootstrap_singbox_443.sh
 | Ключ | Назначение |
 |------|------------|
 | `server.host` | IP/hostname VPS |
-| `transport` | uuid, public_key, short_id, server_name |
+| `transport` | VLESS: uuid, public_key, short_id, server_name. Дом: `hysteria2.password` |
 | `socks_scope` | `full` или `github` (область PAC) |
 | `tun.enabled` / `tun.elevate` | TUN вместе с `on` (по умолчанию вкл.), запрос прав |
 | `kill_switch` | при обрыве резать интернет (по умолчанию вкл.; нужен TUN) |
