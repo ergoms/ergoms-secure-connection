@@ -1100,8 +1100,12 @@ class OpsClient:
             return
         if delay > 0:
             time.sleep(delay)
+        if not self.singbox.running():
+            return
         self.log(f"проверка выхода через SOCKS :{socks_port} → 1.1.1.1:443…")
         err = socks_https_probe(socks_port, timeout=10.0)
+        if not self.singbox.running():
+            return
         if err:
             connect_err = socks_probe(socks_port, timeout=6.0)
             if connect_err:
@@ -1109,6 +1113,12 @@ class OpsClient:
             else:
                 self.log(
                     f"проверка выхода: НЕ ОК — CONNECT есть, HTTPS нет ({err})"
+                )
+            tail = "\n".join(self.singbox.tail_log(40)).lower()
+            if "no recent network activity" in tail:
+                self.log(
+                    "Hysteria2 не дошёл до VPS (QUIC timeout). "
+                    "UDP :443 часто режет домашний DPI — нужен порт 8443"
                 )
             self._log_singbox_tail("после неудачной проверки")
             return

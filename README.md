@@ -6,7 +6,7 @@
 
 **офис:** программа → sing-box → Squid CONNECT → VPS TCP :443 (VLESS+Reality) → интернет
 
-**дом:** программа → sing-box → VPS UDP :443 (Hysteria2) → интернет
+**дом:** программа → sing-box → VPS UDP :8443 (Hysteria2) → интернет
 
 Домашний провайдер часто глотает TLS Reality; Hysteria2 — QUIC, как у Amnezia. Офисный Squid UDP не проводит, поэтому Reality там остаётся. На уже установленном VPS: `bash modes/vps/enable_hysteria2.sh`, пароль вставить в `transport.hysteria2`.
 
