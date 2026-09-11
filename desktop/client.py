@@ -195,6 +195,10 @@ class OpsClient:
         self._exit_probe_error: str | None = None
         self._exit_probe_hint: str | None = None
         self._pending_win_tun = False
+        self._defer_win_tun = False
+        self._defer_win_ks = False
+        self._hold_watchdog = False
+        self._box_boot: dict[str, Any] = {}
         self._pending_allow: list[str] = []
         atexit.register(self._atexit_teardown)
         if startup_cleanup:
@@ -693,13 +697,44 @@ class OpsClient:
             leftover_cmds = []
         prelude: list[str] = []
         allow = self._kill_switch_hosts(cfg)
-        if kill_switch:
+        # Home Windows: kill-switch /1 via 127.0.0.1 and TUN inbound both
+        # kill Hysteria2 QUIC (CONNECT still looks fine). Bring Hy2 up on
+        # the underlay first, then TUN + blackholes after HTTPS works.
+        defer_win = sys.platform == "win32" and not bool(office_proxy)
+        self._defer_win_tun = bool(defer_win and enable_tun)
+        self._defer_win_ks = bool(defer_win and kill_switch)
+        self._hold_watchdog = True
+        self._box_boot = {
+            "server_host": host,
+            "transport": transport,
+            "corporate_proxy": office_proxy or "",
+            "socks_port": socks_port,
+            "http_port": http_port,
+            "sing_box_path": get_sing_box_path(cfg),
+            "bypass_hosts": bypass,
+            "mtu": get_tun_mtu(cfg),
+            "vps_proxy_ports": get_vps_proxy_ports(cfg),
+        }
+        start_tun = enable_tun and not self._defer_win_tun
+        start_ks = kill_switch and not self._defer_win_ks
+        if self._defer_win_ks and kill_switch_is_applied():
+            self.log(
+                "kill switch: снимаю до проверки выхода — иначе UDP до VPS не проходит"
+            )
+            clear_kill_switch(var_dir=self.paths.var_dir, log=self.log)
+        if start_ks:
             prelude = leftover_cmds + self._ensure_kill_switch(cfg)
-        elif enable_tun:
+        elif enable_tun or start_tun:
             remember_kill_switch_plan(self.paths.var_dir, allow)
             prelude = leftover_cmds
+        else:
+            prelude = leftover_cmds
+            if allow:
+                remember_kill_switch_plan(self.paths.var_dir, allow)
+        if self._defer_win_tun:
+            self.log("дом: сначала Hysteria2 без TUN, маршруты поставлю после проверки")
         postlude = (
-            kill_switch_pin_cmds(self.paths.var_dir, allow) if enable_tun else []
+            kill_switch_pin_cmds(self.paths.var_dir, allow) if start_tun else []
         )
         self.singbox.start(
             server_host=host,
@@ -707,14 +742,14 @@ class OpsClient:
             corporate_proxy=office_proxy,
             socks_port=socks_port,
             http_port=http_port,
-            enable_tun=enable_tun,
+            enable_tun=start_tun,
             sing_box_path=get_sing_box_path(cfg),
-            elevate=get_tun_elevate() if enable_tun else False,
+            elevate=get_tun_elevate() if start_tun else False,
             bypass_hosts=bypass,
             mtu=get_tun_mtu(cfg),
             vps_proxy_ports=get_vps_proxy_ports(cfg),
             force_restart=True,
-            kill_switch=kill_switch,
+            kill_switch=start_ks,
             prelude_cmds=prelude,
             postlude_cmds=postlude,
         )
@@ -723,7 +758,7 @@ class OpsClient:
         state = {
             "mode": "singbox",
             "scope": get_socks_scope(),
-            "tun": enable_tun,
+            "tun": start_tun,
             "socks": f"socks5h://127.0.0.1:{socks_port}",
             "http": f"http://127.0.0.1:{http_port}",
             "pac": f"http://127.0.0.1:{get_pac_listen_port()}/proxy.pac",
@@ -731,7 +766,7 @@ class OpsClient:
         }
         self.paths.state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
         self.log(
-            f"sing-box готов: scope={get_socks_scope()} tun={int(enable_tun)} "
+            f"sing-box готов: scope={get_socks_scope()} tun={int(start_tun)} "
             f"socks=127.0.0.1:{socks_port} http=127.0.0.1:{http_port}"
         )
         if office_proxy:
@@ -753,7 +788,7 @@ class OpsClient:
             except OSError as exc:
                 self.log(f"диагностика: TCP {host}:{port} с этой NIC — FAIL ({exc})")
         self._log_singbox_tail("после запуска")
-        if enable_tun and procutil.is_admin() and allow:
+        if start_tun and procutil.is_admin() and allow:
             pin_kill_switch_underlay(
                 allow, var_dir=self.paths.var_dir, log=self.log, elevate=False
             )
@@ -763,12 +798,12 @@ class OpsClient:
                 daemon=True,
             ).start()
         self._pending_win_tun = bool(
-            enable_tun and procutil.is_admin() and sys.platform == "win32"
+            start_tun and procutil.is_admin() and sys.platform == "win32"
         )
         self._pending_allow = allow
         threading.Thread(
             target=self._probe_exit,
-            args=(socks_port, 1.0 if enable_tun else 0.0),
+            args=(socks_port, 0.4 if start_tun or self._defer_win_tun else 0.0),
             daemon=True,
         ).start()
 
@@ -1004,7 +1039,11 @@ class OpsClient:
         from desktop.watchdog import TunnelWatchdog
 
         if self._watchdog is None:
-            self._watchdog = TunnelWatchdog(self, log=self.log)
+            self._watchdog = TunnelWatchdog(
+                self,
+                log=self.log,
+                should_skip=lambda: bool(getattr(self, "_hold_watchdog", False)),
+            )
         self._watchdog.set_desired(True)
         self._watchdog.start()
 
@@ -1127,6 +1166,72 @@ class OpsClient:
             allow, var_dir=self.paths.var_dir, log=self.log, elevate=False
         )
 
+    def _bring_up_win_tun(self) -> None:
+        """Restart sing-box with TUN only after Hysteria2 HTTPS already works."""
+        boot = dict(getattr(self, "_box_boot", None) or {})
+        allow = list(getattr(self, "_pending_allow", []) or [])
+        want_ks = bool(getattr(self, "_defer_win_ks", False))
+        if not boot:
+            self.log("TUN: нет параметров запуска — оставляю SOCKS")
+            return
+        self.log("Hysteria2 живой — поднимаю TUN")
+        remember_kill_switch_plan(self.paths.var_dir, allow)
+        try:
+            self.singbox.start(
+                **boot,
+                enable_tun=True,
+                elevate=True,
+                force_restart=True,
+                kill_switch=False,
+                prelude_cmds=[],
+                postlude_cmds=(
+                    kill_switch_pin_cmds(self.paths.var_dir, allow) if allow else []
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"TUN не поднялся ({exc}) — трафик через SOCKS")
+            return
+        if procutil.is_admin() and allow:
+            pin_kill_switch_underlay(
+                allow, var_dir=self.paths.var_dir, log=self.log, elevate=False
+            )
+        socks_port = int(boot.get("socks_port") or 1080)
+        time.sleep(0.8)
+        from desktop.watchdog import socks_https_probe
+
+        err = socks_https_probe(socks_port, timeout=10.0)
+        if err:
+            self.log(
+                f"TUN снова оборвал Hysteria2 ({err}) — возвращаю SOCKS без TUN"
+            )
+            try:
+                self.singbox.start(
+                    **boot,
+                    enable_tun=False,
+                    elevate=False,
+                    force_restart=True,
+                    kill_switch=False,
+                    prelude_cmds=[],
+                    postlude_cmds=[],
+                )
+            except Exception as exc:  # noqa: BLE001
+                self.log(f"откат на SOCKS: {exc}")
+            return
+        self._install_win_tun_routes(allow)
+        if want_ks:
+            apply_kill_switch(allow, var_dir=self.paths.var_dir, log=self.log)
+        try:
+            raw = self.paths.state_path.read_text(encoding="utf-8")
+            st = json.loads(raw) if raw else {}
+            if isinstance(st, dict):
+                st["tun"] = True
+                self.paths.state_path.write_text(
+                    json.dumps(st, indent=2), encoding="utf-8"
+                )
+        except (OSError, json.JSONDecodeError):
+            pass
+        self.log("TUN готов (split default после живого Hysteria2)")
+
     def _pin_underlay_later(self, allow: list[str]) -> None:
         for i, wait in enumerate((0.2, 0.6, 1.5, 3.0)):
             time.sleep(wait)
@@ -1139,6 +1244,12 @@ class OpsClient:
 
     def _probe_exit(self, socks_port: int, delay: float = 0.0) -> None:
         """SOCKS5 CONNECT after TUN routes settle — first-second OK is a false green."""
+        try:
+            self._probe_exit_body(socks_port, delay)
+        finally:
+            self._hold_watchdog = False
+
+    def _probe_exit_body(self, socks_port: int, delay: float = 0.0) -> None:
         try:
             from desktop.watchdog import socks_https_probe, socks_probe
         except Exception as exc:  # noqa: BLE001
@@ -1210,7 +1321,10 @@ class OpsClient:
         self._exit_probe_error = None
         self._exit_probe_hint = None
         self.log("проверка выхода: OK (HTTPS через SOCKS)")
-        if getattr(self, "_pending_win_tun", False):
+        if getattr(self, "_defer_win_tun", False):
+            self._defer_win_tun = False
+            self._bring_up_win_tun()
+        elif getattr(self, "_pending_win_tun", False):
             self._pending_win_tun = False
             allow = list(getattr(self, "_pending_allow", []) or [])
             self.log("Hysteria2 живой — ставлю TUN split default")
