@@ -139,19 +139,16 @@ bash modes/vps/bootstrap_singbox_443.sh
 
 ## SSH на клиент без публичного IP
 
-Офисный Squid рвёт прямые соединения на VPS `:22`. Клиент сам открывает обратный туннель **через уже поднятый SOCKS/VLESS**.
+По умолчанию включено (дом и офис): пока VPN поднят, с VPS можно зайти на этот ПК. Офисный Squid рвёт прямые соединения на VPS `:22`, поэтому клиент открывает обратный туннель **через SOCKS** (Hy2 или Reality).
 
-После обновления клиента один раз `off` / `on` — в sing-box добавлен маршрут «VPS :22 через VLESS» (иначе офис снова даст `connection reset`).
+На клиенте нужны OpenSSH Server и ключ в `creds/` (тот же, что в `authorized_keys` на VPS). В настройках: **SSH с сервера**.
 
-На клиенте (OpenSSH Server + ключ в `creds/`, тот же что в `authorized_keys` на VPS):
+После обновления один раз `off` / `on`.
 
 ```powershell
 .\ergoms-secure-connection.ps1 on
-.\ergoms-secure-connection.ps1 reverse-on
 .\ergoms-secure-connection.ps1 status
 ```
-
-Или в `config.json`: `"reverse_ssh": { "enabled": true }` — тогда `on` поднимает проброс сам.
 
 С этого VPS:
 

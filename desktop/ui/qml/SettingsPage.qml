@@ -6,6 +6,9 @@ import "Theme.js" as T
 Item {
     id: root
 
+    readonly property bool tunOn: Boolean(bridge.settings.tunAuto) || Boolean(bridge.settings.killSwitch)
+    readonly property bool hy2Dial: !bridge.corporate && String(bridge.settings.trDial) === "hysteria2"
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 0
@@ -64,7 +67,7 @@ Item {
                             ]
                             onActivated: (v) => { bridge.applyCorporateMode(v === "1") }
                         }
-                        Text { text: "TUN автоматически"; color: T.muted; font.pixelSize: 11; font.weight: Font.Medium; font.family: T.fontUi }
+                        Text { text: "TUN (весь трафик)"; color: T.muted; font.pixelSize: 11; font.weight: Font.Medium; font.family: T.fontUi }
                         Segmented {
                             width: parent.width
                             value: bridge.settings.tunAuto ? "1" : "0"
@@ -78,7 +81,37 @@ Item {
                                     bridge.settings.killSwitch = false
                             }
                         }
-                        Text { text: "Kill switch"; color: T.muted; font.pixelSize: 11; font.weight: Font.Medium; font.family: T.fontUi }
+                        Text {
+                            width: parent.width
+                            text: root.tunOn
+                                  ? "Весь интернет идёт через виртуальный адаптер. Системный прокси Windows не ставится — PAC ломает Hysteria2."
+                                  : "Без TUN браузеры сами в VPN не попадут. При подключении ставится PAC на 127.0.0.1:1088."
+                            color: T.muted
+                            font.pixelSize: 11
+                            font.family: T.fontUi
+                            wrapMode: Text.WordWrap
+                        }
+                        Text { text: "Системный прокси Windows"; color: T.muted; font.pixelSize: 11; font.weight: Font.Medium; font.family: T.fontUi }
+                        Segmented {
+                            width: parent.width
+                            enabled: false
+                            value: root.tunOn ? "0" : "1"
+                            model: [
+                                { label: "Выкл", value: "0" },
+                                { label: "PAC", value: "1" }
+                            ]
+                        }
+                        Text {
+                            width: parent.width
+                            text: root.tunOn
+                                  ? "Заблокировано, пока TUN включён. Это не прокси офиса."
+                                  : "PAC — это наш локальный прокси, не Squid офиса. Включается сам при Подключить."
+                            color: T.muted
+                            font.pixelSize: 11
+                            font.family: T.fontUi
+                            wrapMode: Text.WordWrap
+                        }
+                        Text { text: "Защита при обрыве"; color: T.muted; font.pixelSize: 11; font.weight: Font.Medium; font.family: T.fontUi }
                         Segmented {
                             width: parent.width
                             value: bridge.settings.killSwitch ? "1" : "0"
@@ -92,6 +125,14 @@ Item {
                                     bridge.settings.tunAuto = true
                             }
                         }
+                        Text {
+                            width: parent.width
+                            text: "Если туннель упадёт, интернет закроется, пока не нажмёте Отключить. Утечки мимо VPN не будет."
+                            color: T.muted
+                            font.pixelSize: 11
+                            font.family: T.fontUi
+                            wrapMode: Text.WordWrap
+                        }
                         Text { text: "Автозапуск с компьютером"; color: T.muted; font.pixelSize: 11; font.weight: Font.Medium; font.family: T.fontUi }
                         Segmented {
                             width: parent.width
@@ -102,20 +143,19 @@ Item {
                             ]
                             onActivated: (v) => { bridge.setAutostart(v === "1") }
                         }
-                        Text { text: "Офисный прокси (Squid)"; color: T.muted; font.pixelSize: 11; font.weight: Font.Medium; font.family: T.fontUi }
-                        Segmented {
-                            width: parent.width
-                            value: bridge.settings.useProxy ? "1" : "0"
-                            model: [
-                                { label: "Выкл", value: "0" },
-                                { label: "Вкл", value: "1" }
-                            ]
-                            onActivated: (v) => { bridge.settings.useProxy = (v === "1") }
+                        Text {
+                            visible: bridge.corporate
+                            height: visible ? implicitHeight : 0
+                            text: "Прокси офиса (выход на VPS)"
+                            color: T.muted
+                            font.pixelSize: 11
+                            font.weight: Font.Medium
+                            font.family: T.fontUi
                         }
                         SettingField {
-                            visible: Boolean(bridge.settings.useProxy) || bridge.corporate
+                            visible: bridge.corporate
                             height: visible ? implicitHeight : 0
-                            label: "Адрес прокси"
+                            label: "Адрес (не системный прокси Windows)"
                             settingKey: "corporateProxy"
                         }
                     }
@@ -186,13 +226,44 @@ Item {
                         Segmented {
                             width: parent.width
                             enabled: !bridge.corporate
-                            value: String(bridge.settings.trDial || "auto")
+                            value: bridge.corporate ? "vless-reality" : String(bridge.settings.trDial || "hysteria2")
                             model: [
-                                { label: "Авто", value: "auto" },
                                 { label: "Reality", value: "vless-reality" },
                                 { label: "Hysteria2", value: "hysteria2" }
                             ]
                             onActivated: (v) => { bridge.settings.trDial = v }
+                        }
+                    }
+                }
+
+                SectionLabel {
+                    visible: !root.hy2Dial
+                    height: visible ? implicitHeight : 0
+                    text: "VLESS + REALITY"
+                    topPadding: 8
+                }
+                Card {
+                    visible: !root.hy2Dial
+                    height: visible ? implicitHeight : 0
+                    width: parent.width
+                    implicitHeight: visible ? realityCol.implicitHeight + 24 : 0
+                    Column {
+                        id: realityCol
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.margins: 14
+                        spacing: 10
+
+                        Text {
+                            visible: bridge.corporate
+                            width: parent.width
+                            height: visible ? implicitHeight : 0
+                            text: "В офисе только Reality: Squid не проводит UDP Hysteria2."
+                            color: T.muted
+                            font.pixelSize: 11
+                            font.family: T.fontUi
+                            wrapMode: Text.WordWrap
                         }
                         SettingField {
                             label: "UUID"
@@ -209,33 +280,56 @@ Item {
                             settingKey: "trShortId"
                         }
                         SettingField {
-                            label: "Reality SNI (dest)"
+                            label: "SNI (dest)"
                             settingKey: "trServerName"
                         }
-                        Column {
-                            visible: !bridge.corporate && String(bridge.settings.trDial || "auto") !== "vless-reality"
-                            width: parent.width
-                            spacing: 10
-                            height: visible ? implicitHeight : 0
+                    }
+                }
 
-                            SettingField {
-                                label: "Пароль Hysteria2"
-                                password: true
-                                settingKey: "hy2Password"
-                            }
-                            SettingField {
-                                label: "UDP порт"
-                                settingKey: "hy2Port"
-                            }
-                            SettingField {
-                                label: "Hysteria2 SNI"
-                                settingKey: "hy2ServerName"
-                            }
-                            SettingField {
-                                label: "Hysteria2 obfuscation"
-                                password: true
-                                settingKey: "hy2Obfs"
-                            }
+                SectionLabel {
+                    visible: root.hy2Dial
+                    height: visible ? implicitHeight : 0
+                    text: "HYSTERIA2"
+                    topPadding: 8
+                }
+                Card {
+                    visible: root.hy2Dial
+                    height: visible ? implicitHeight : 0
+                    width: parent.width
+                    implicitHeight: visible ? hy2Col.implicitHeight + 24 : 0
+                    Column {
+                        id: hy2Col
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.margins: 14
+                        spacing: 10
+
+                        Text {
+                            width: parent.width
+                            text: "Дом: UDP + salamander. Reality SNI сюда не подставляется."
+                            color: T.muted
+                            font.pixelSize: 11
+                            font.family: T.fontUi
+                            wrapMode: Text.WordWrap
+                        }
+                        SettingField {
+                            label: "Пароль"
+                            password: true
+                            settingKey: "hy2Password"
+                        }
+                        SettingField {
+                            label: "UDP порт"
+                            settingKey: "hy2Port"
+                        }
+                        SettingField {
+                            label: "SNI"
+                            settingKey: "hy2ServerName"
+                        }
+                        SettingField {
+                            label: "Obfuscation (salamander)"
+                            password: true
+                            settingKey: "hy2Obfs"
                         }
                     }
                 }
@@ -250,7 +344,7 @@ Item {
                     visible: bridge.corporate
                     height: visible ? implicitHeight : 0
                     width: parent.width
-                    implicitHeight: corpCol.implicitHeight + 24
+                    implicitHeight: visible ? corpCol.implicitHeight + 24 : 0
                     Column {
                         id: corpCol
                         anchors.left: parent.left
@@ -272,6 +366,32 @@ Item {
                         SettingField {
                             label: "Исключения (через запятую)"
                             settingKey: "proxyBypass"
+                        }
+                    }
+                }
+
+                SectionLabel {
+                    text: "SSH С СЕРВЕРА"
+                    topPadding: 8
+                }
+                Card {
+                    width: parent.width
+                    implicitHeight: sshCol.implicitHeight + 24
+                    Column {
+                        id: sshCol
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.margins: 14
+                        spacing: 10
+
+                        Text {
+                            width: parent.width
+                            text: "С VPS можно зайти на этот ПК, пока VPN включён. Нужен OpenSSH Server и ключ в creds/."
+                            color: T.muted
+                            font.pixelSize: 11
+                            font.family: T.fontUi
+                            wrapMode: Text.WordWrap
                         }
                         Text { text: "SSH с VPS на этот ПК"; color: T.muted; font.pixelSize: 11; font.weight: Font.Medium; font.family: T.fontUi }
                         Segmented {

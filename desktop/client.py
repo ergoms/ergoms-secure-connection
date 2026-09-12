@@ -644,8 +644,6 @@ class OpsClient:
         hy = hysteria2_opts(transport) if dial == "hysteria2" else None
         if dial == "hysteria2" and not hy:
             raise RuntimeError("Hysteria2: укажите пароль в Настройках")
-        if not office_proxy and not hy and str(transport.get("dial") or "auto") == "auto":
-            self.log("дом: протокол Авто — Hysteria2 без пароля, иду через Reality")
         if office_proxy:
             self.log(f"Probing CONNECT {host}:{port} via proxy...")
             if self.probe(host, port) != 0:
@@ -1367,6 +1365,10 @@ class OpsClient:
             self.set_git_singbox(cfg, get_http_bridge_port())
         except Exception as exc:  # noqa: BLE001
             self.log(f"PAC/git после проверки: {exc}")
+        try:
+            self._maybe_start_reverse_ssh()
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"reverse-ssh после проверки: {exc}")
 
     def _kill_switch_hosts(self, cfg: dict[str, Any]) -> list[str]:
         hosts = [get_server_host(cfg)]
@@ -1417,7 +1419,7 @@ class OpsClient:
         label = "Hysteria2" if dial == "hysteria2" else "VLESS+Reality"
         self.log(
             f"подключение: {label}, TUN={'вкл' if tun else 'выкл'}"
-            f", kill switch={'вкл' if ks else 'выкл'}"
+            f", защита при обрыве={'вкл' if ks else 'выкл'}"
         )
         self._exit_probe_error = None
         self._exit_probe_hint = None

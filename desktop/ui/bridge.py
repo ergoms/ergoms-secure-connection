@@ -34,6 +34,7 @@ from desktop.config_io import (
     get_tun_enabled,
     infer_corporate,
     load_config,
+    normalize_dial,
     normalize_hy2_sni,
     save_config,
 )
@@ -447,16 +448,7 @@ class GuiBridge(QObject):
         )
         self._settings.insert("trPort", str(tr.get("port") or 443))
         hy = tr.get("hysteria2") if isinstance(tr.get("hysteria2"), dict) else {}
-        dial = str(tr.get("dial") or "auto").strip().lower()
-        if dial in ("vless", "reality"):
-            dial = "vless-reality"
-        if dial in ("hy2",):
-            dial = "hysteria2"
-        if dial not in ("auto", "vless-reality", "hysteria2"):
-            dial = "auto"
-        if dial == "auto" and str(hy.get("password") or "").strip():
-            dial = "hysteria2"
-        self._settings.insert("trDial", dial)
+        self._settings.insert("trDial", normalize_dial(tr.get("dial")))
         self._settings.insert("hy2Password", str(hy.get("password") or ""))
         self._settings.insert("hy2Port", str(hy.get("port") or 8443))
         self._settings.insert(
@@ -464,7 +456,7 @@ class GuiBridge(QObject):
         )
         self._settings.insert("hy2Obfs", str(hy.get("obfs_password") or ""))
         rev = cfg.get("reverse_ssh") or {}
-        self._settings.insert("reverseSsh", bool(rev.get("enabled")))
+        self._settings.insert("reverseSsh", bool(rev.get("enabled", True)))
         self._settings.insert("reverseSshListen", str(rev.get("listen_port") or 2222))
         self._settings.insert("reverseSshVpsUser", str(rev.get("vps_user") or "root"))
         self._settings.insert("reverseSshVpsPort", str(rev.get("vps_port") or 22))
@@ -505,13 +497,14 @@ class GuiBridge(QObject):
             self._settings.insert("corporateProxy", CORPORATE_PROXY_PRESET)
             self._settings.insert("proxyBypass", ", ".join(CORPORATE_BYPASS_PRESET))
             self._settings.insert("proxyBypassVia", "direct")
+            self._settings.insert("trDial", "vless-reality")
         else:
             self._settings.insert("socksScope", "full")
             self._settings.insert("useProxy", False)
             self._settings.insert("corporateProxy", "")
             self._settings.insert("proxyBypass", ", ".join(STANDARD_BYPASS_PRESET))
             self._settings.insert("proxyBypassVia", "direct")
-            self._settings.insert("reverseSsh", False)
+            self._settings.insert("trDial", "hysteria2")
         self._settings.insert("gitProxy", on)
         self._settings.insert("dockerProxy", on)
         self._mode_label = "Корпоративный" if on else "VPN"
@@ -638,14 +631,10 @@ class GuiBridge(QObject):
             cfg["tun"]["sing_box_path"] = ""
             cfg.setdefault("transport", {})
             cfg["transport"]["type"] = "vless-reality"
-            dial = str(s.value("trDial") or "auto").strip().lower()
-            if dial in ("vless", "reality"):
-                dial = "vless-reality"
-            if dial in ("hy2",):
-                dial = "hysteria2"
-            if dial not in ("auto", "vless-reality", "hysteria2"):
-                dial = "auto"
-            cfg["transport"]["dial"] = dial
+            if corporate:
+                cfg["transport"]["dial"] = "vless-reality"
+            else:
+                cfg["transport"]["dial"] = normalize_dial(s.value("trDial"))
             cfg["transport"]["uuid"] = str(s.value("trUuid") or "").strip()
             cfg["transport"]["public_key"] = str(s.value("trPublicKey") or "").strip()
             cfg["transport"]["short_id"] = str(s.value("trShortId") or "").strip()
@@ -667,19 +656,16 @@ class GuiBridge(QObject):
             ).strip()
             hy["insecure"] = bool(hy.get("insecure", True))
             cfg.setdefault("reverse_ssh", {})
-            if corporate:
-                cfg["reverse_ssh"]["enabled"] = bool(s.value("reverseSsh"))
-                cfg["reverse_ssh"]["listen_port"] = int(
-                    str(s.value("reverseSshListen") or "2222").strip() or "2222"
-                )
-                cfg["reverse_ssh"]["vps_user"] = (
-                    str(s.value("reverseSshVpsUser") or "").strip() or "root"
-                )
-                cfg["reverse_ssh"]["vps_port"] = int(
-                    str(s.value("reverseSshVpsPort") or "22").strip() or "22"
-                )
-            else:
-                cfg["reverse_ssh"]["enabled"] = False
+            cfg["reverse_ssh"]["enabled"] = bool(s.value("reverseSsh"))
+            cfg["reverse_ssh"]["listen_port"] = int(
+                str(s.value("reverseSshListen") or "2222").strip() or "2222"
+            )
+            cfg["reverse_ssh"]["vps_user"] = (
+                str(s.value("reverseSshVpsUser") or "").strip() or "root"
+            )
+            cfg["reverse_ssh"]["vps_port"] = int(
+                str(s.value("reverseSshVpsPort") or "22").strip() or "22"
+            )
             save_config(self.paths.config_path, cfg)
             apply_config(self.paths.config_path, force=True)
             self._enqueue_log("Настройки сохранены")
@@ -1009,7 +995,7 @@ class GuiBridge(QObject):
         elif ks_on:
             title, sub, color = (
                 "Нет сети",
-                "Kill switch блокирует интернет — отключите VPN, чтобы снять блок",
+                "Интернет закрыт: туннель упал. Отключите VPN, чтобы снять блок",
                 _C_WARN,
             )
             power = "Отключить"
@@ -1077,12 +1063,12 @@ def _settings_defaults() -> dict[str, Any]:
         "trShortId": "",
         "trServerName": "www.cloudflare.com",
         "trPort": "443",
-        "trDial": "auto",
+        "trDial": "hysteria2",
         "hy2Password": "",
         "hy2Port": "8443",
         "hy2ServerName": HY2_DEFAULT_SNI,
         "hy2Obfs": "",
-        "reverseSsh": False,
+        "reverseSsh": True,
         "reverseSshListen": "2222",
         "reverseSshVpsUser": "root",
         "reverseSshVpsPort": "22",
