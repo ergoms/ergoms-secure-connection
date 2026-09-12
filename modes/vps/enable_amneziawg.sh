@@ -38,6 +38,33 @@ if [[ "$AWG_PORT" == "8443" ]]; then
   AWG_PORT=51820
 fi
 
+udp_foreign_listen() {
+  local line
+  line="$(ss -lunp 2>/dev/null | grep -E ":${1}[[:space:]]" || true)"
+  [[ -z "$line" ]] && return 1
+  echo "$line" | grep -qE 'amneziawg-go|"awg"' && return 1
+  return 0
+}
+if udp_foreign_listen "$AWG_PORT"; then
+  echo "WARN: UDP :${AWG_PORT} already in use (often Docker amneziawg); picking another port"
+  picked=""
+  for candidate in 51821 51822 41820 24600; do
+    if [[ "$candidate" == "$AWG_PORT" ]]; then
+      continue
+    fi
+    if ! udp_foreign_listen "$candidate"; then
+      picked="$candidate"
+      break
+    fi
+  done
+  if [[ -z "$picked" ]]; then
+    echo "ERROR: no free UDP port for AmneziaWG" >&2
+    exit 1
+  fi
+  AWG_PORT="$picked"
+  echo "==> Using UDP :${AWG_PORT}"
+fi
+
 arch="$(uname -m)"
 case "$arch" in
   x86_64|amd64) go_arch=amd64 ;;
