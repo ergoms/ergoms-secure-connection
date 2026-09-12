@@ -230,7 +230,8 @@ On the office PC — config.json (merge into existing file):
     "hysteria2": {
       "password": "${HY2_PASSWORD:-}",
       "port": ${HY2_PORT:-8443},
-      "server_name": "$SERVER_NAME",
+      "server_name": "${HY2_SERVER_NAME:-www.microsoft.com}",
+      "obfs_password": "${HY2_OBFS:-}",
       "insecure": true
     }
   }

@@ -14,6 +14,7 @@ from typing import Any, Callable
 
 from desktop import procutil
 from desktop.branding import APP_EXE, APP_EXE_LEGACY
+from desktop.config_io import HY2_DEFAULT_SNI, REALITY_DEFAULT_SNI, normalize_hy2_sni
 from desktop.tun import (
     RUSTDESK_PORTS,
     TUN_IFACE_NAME,
@@ -50,15 +51,48 @@ def hysteria2_opts(tr: dict[str, Any] | None) -> dict[str, Any] | None:
     password = str(raw.get("password") or "").strip()
     if not password or "REPLACE" in password.upper():
         return None
-    sni = str(
-        raw.get("server_name") or tr.get("server_name") or "www.cloudflare.com"
-    ).strip()
+    sni = normalize_hy2_sni(raw.get("server_name"), fallback=HY2_DEFAULT_SNI)
+    obfs = str(raw.get("obfs_password") or "").strip()
+    blob = raw.get("obfs")
+    if isinstance(blob, dict):
+        obfs = str(blob.get("password") or obfs).strip()
+    elif isinstance(blob, str) and blob.strip():
+        obfs = blob.strip()
     return {
         "password": password,
         "port": int(raw.get("port") or 8443),
-        "server_name": sni or "www.cloudflare.com",
+        "server_name": sni,
         "insecure": bool(raw.get("insecure", True)),
+        "obfs_password": obfs,
     }
+
+
+def hy2_outbound(
+    server_host: str,
+    hy: dict[str, Any],
+    *,
+    bind_iface: str = "",
+    tag: str = "proxy",
+) -> dict[str, Any]:
+    outbound: dict[str, Any] = {
+        "type": "hysteria2",
+        "tag": tag,
+        "server": server_host,
+        "server_port": int(hy["port"]),
+        "password": hy["password"],
+        "tls": {
+            "enabled": True,
+            "server_name": hy["server_name"],
+            "insecure": bool(hy.get("insecure", True)),
+            "alpn": ["h3"],
+        },
+    }
+    obfs = str(hy.get("obfs_password") or "").strip()
+    if obfs:
+        outbound["obfs"] = {"type": "salamander", "password": obfs}
+    if bind_iface:
+        outbound["bind_interface"] = bind_iface
+    return outbound
 
 
 def choose_dial(transport: dict[str, Any], *, office: bool) -> str:
@@ -89,7 +123,7 @@ def require_transport(cfg: dict[str, Any]) -> dict[str, Any]:
     uuid = str(tr.get("uuid") or "").strip()
     pub = str(tr.get("public_key") or "").strip()
     short_id = str(tr.get("short_id") or "").strip()
-    sni = str(tr.get("server_name") or "www.cloudflare.com").strip()
+    sni = str(tr.get("server_name") or REALITY_DEFAULT_SNI).strip() or REALITY_DEFAULT_SNI
     typ = str(tr.get("type") or "vless-reality").strip().lower()
     if typ not in ("vless-reality", "vless", "reality", "hysteria2", "auto"):
         raise RuntimeError(f"Unsupported transport.type={typ} (use vless-reality)")
@@ -183,6 +217,22 @@ class SingboxModeManager:
             )
         elif enable_tun:
             self.log("underlay NIC: не определён — outbound может уйти в TUN")
+
+        office = bool(squid_host)
+        dial = choose_dial(transport, office=office)
+        hy = hysteria2_opts(transport) if dial == "hysteria2" else None
+        if hy and not enable_tun and not use_office_proxy:
+            if dial == "hysteria2":
+                self.log(
+                    f"дом: Hysteria2 UDP :{hy['port']} (Reality на этом Wi-Fi режет DPI)"
+                )
+            return self._minimal_hy2_config(
+                server_host=server_host,
+                hy=hy,
+                bind_iface=bind_iface,
+                socks_port=socks_port,
+                http_port=http_port,
+            )
 
         route_exclude = [
             "10.0.0.0/8",
@@ -377,19 +427,7 @@ class SingboxModeManager:
                     else []
                 ),
                 (
-                    {
-                        "type": "hysteria2",
-                        "tag": "proxy",
-                        "server": server_host,
-                        "server_port": int(hy["port"]),
-                        "password": hy["password"],
-                        "tls": {
-                            "enabled": True,
-                            "server_name": hy["server_name"],
-                            "insecure": bool(hy.get("insecure", True)),
-                            "alpn": ["h3"],
-                        },
-                    }
+                    hy2_outbound(server_host, hy, bind_iface=bind_iface)
                     if hy
                     else {
                         "type": "vless",
@@ -437,6 +475,67 @@ class SingboxModeManager:
                     ),
                     *rules,
                 ],
+            },
+        }
+
+    def _minimal_hy2_config(
+        self,
+        *,
+        server_host: str,
+        hy: dict[str, Any],
+        bind_iface: str,
+        socks_port: int,
+        http_port: int,
+    ) -> dict[str, Any]:
+        """Same shape as sandbox Hy2: extra process/VPS rules break QUIC handshake."""
+        self.log("дом: Hy2 как в песочнице — без process/python route на handshake")
+        if str(hy.get("obfs_password") or "").strip():
+            self.log("дом: Hy2 salamander — QUIC Initial без открытого SNI")
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        outbound = hy2_outbound(server_host, hy, bind_iface=bind_iface)
+        return {
+            "log": {
+                "level": "info",
+                "timestamp": True,
+                "output": str(self.log_path).replace("\\", "/"),
+            },
+            "dns": {
+                "servers": [
+                    {
+                        "tag": "dns-proxy",
+                        "address": "https://1.1.1.1/dns-query",
+                        "detour": "proxy",
+                    }
+                ],
+                "final": "dns-proxy",
+                "strategy": "prefer_ipv4",
+            },
+            "inbounds": [
+                {
+                    "type": "socks",
+                    "tag": "socks-in",
+                    "listen": "127.0.0.1",
+                    "listen_port": int(socks_port),
+                },
+                {
+                    "type": "http",
+                    "tag": "http-in",
+                    "listen": "127.0.0.1",
+                    "listen_port": int(http_port),
+                },
+            ],
+            "outbounds": [
+                outbound,
+                {
+                    "type": "direct",
+                    "tag": "direct",
+                    **({"bind_interface": bind_iface} if bind_iface else {}),
+                },
+            ],
+            "route": {
+                "auto_detect_interface": False,
+                **({"default_interface": bind_iface} if bind_iface else {}),
+                "final": "proxy",
             },
         }
 

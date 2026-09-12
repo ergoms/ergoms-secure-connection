@@ -7,6 +7,7 @@ import platform
 import re
 import shutil
 import socket
+import struct
 import subprocess
 import sys
 import time
@@ -38,6 +39,44 @@ def _resolve_host(host: str) -> str | None:
         return socket.gethostbyname(host)
     except OSError:
         return None
+
+
+def underlay_bind_info(dest: str) -> tuple[str, str, int]:
+    """(iface alias, ipv4, if_index) of the NIC that reaches dest, not TUN."""
+    alias = detect_bind_interface(dest) or ""
+    ip = ""
+    idx = 0
+    if alias:
+        ips = [
+            x
+            for x in iface_ipv4s(alias)
+            if not x.startswith(("169.254.", "0."))
+        ]
+        if ips:
+            ip = ips[0]
+        if sys.platform == "win32":
+            idx = int(_win_if_index_by_alias(alias) or 0)
+    return alias, ip, idx
+
+
+def bind_underlay_socket(
+    sock: socket.socket, *, ip: str = "", if_index: int = 0
+) -> None:
+    """Force packets out the underlay NIC even if TUN/KS/Amnezia owns default."""
+    if ip:
+        try:
+            sock.bind((ip, 0))
+        except OSError:
+            pass
+    if sys.platform != "win32" or not if_index:
+        return
+    opt = getattr(socket, "IP_UNICAST_IF", 31)
+    try:
+        sock.setsockopt(
+            socket.IPPROTO_IP, opt, struct.pack("@I", socket.htonl(int(if_index)))
+        )
+    except OSError:
+        pass
 
 
 def detect_bind_interface(dest: str) -> str | None:
@@ -131,6 +170,14 @@ def foreign_vpn_processes() -> list[str]:
             if tag not in found:
                 found.append(tag)
     return found
+
+
+def foreign_vpn_live() -> list[str]:
+    """Foreign tunnel that actually steals routes (adapter or split default)."""
+    names = [name for _idx, name in leftover_vpn_ifaces()]
+    if leftover_vpn_default_cmds() and not names:
+        names.append("split-default")
+    return names
 
 
 def leftover_vpn_ifaces() -> list[tuple[int, str]]:

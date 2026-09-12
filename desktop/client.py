@@ -66,6 +66,7 @@ from desktop.singbox_mode import (
 from desktop.tun import (
     TunManager,
     default_route_lines,
+    foreign_vpn_live,
     foreign_vpn_processes,
     gateway_via_dest,
     install_tun_split_default,
@@ -198,6 +199,7 @@ class OpsClient:
         self._defer_win_tun = False
         self._defer_win_ks = False
         self._hold_watchdog = False
+        self._want_watchdog = False
         self._box_boot: dict[str, Any] = {}
         self._pending_allow: list[str] = []
         atexit.register(self._atexit_teardown)
@@ -542,6 +544,12 @@ class OpsClient:
 
     def set_git_singbox(self, cfg: dict[str, Any], http_port: int) -> None:
         """Point CLI/docker/browser at sing-box HTTP inbound + PAC server."""
+        # Home Windows: PAC/git/Docker must not hit Hy2 until QUIC is up.
+        # Sandbox Hy2 works; production failed because Yandex/Telegram slammed
+        # :1088 via PAC during the handshake (CONNECT ok, HTTPS EOF).
+        if getattr(self, "_defer_win_tun", False):
+            self.log("дом: PAC/git/Docker после проверки Hy2 — иначе QUIC не поднимается")
+            return
         self._apply_integrations(cfg, http_port)
 
     def _apply_integrations(self, cfg: dict[str, Any], http_port: int) -> None:
@@ -595,7 +603,12 @@ class OpsClient:
 
         # TUN already carries browser/CLI traffic. PAC + Windows Internet
         # Settings look like a system proxy and fight the tunnel.
-        if get_tun_enabled(cfg) and not getattr(self, "_defer_win_tun", False):
+        tun_live = False
+        if sys.platform == "win32":
+            tun_live = bool(wait_tun_iface(timeout=0.05))
+        elif get_tun_enabled(cfg) and not getattr(self, "_defer_win_tun", False):
+            tun_live = True
+        if tun_live:
             self.stop_pac_server()
             try:
                 disable_browser_proxy(self.paths.proxy_backup, log=self.log)
@@ -670,18 +683,18 @@ class OpsClient:
         keep_gw = gateway_via_dest(host) or ""
         stale = stale_default_cmds(keep_gw) if keep_gw else []
         leftover_cmds = list(dict.fromkeys(leftover_cmds + stale))
-        others = leftover or foreign_vpn_processes()
+        idle_procs = foreign_vpn_processes()
         if leftover:
             names = ", ".join(name for _idx, name in leftover)
             self.log(
                 f"чужой туннель ещё поднят ({names}) — сниму его 0.0.0.0/0 и "
                 f"0.0.0.0/1, выход оставлю через {keep_gw or 'underlay'}"
             )
-        elif others:
+        elif idle_procs:
             self.log(
-                "второй VPN ("
-                + ", ".join(str(x) for x in others)
-                + ") запущен — если туннель поднят, QUIC уйдёт в него"
+                "служба "
+                + ", ".join(str(x) for x in idle_procs)
+                + " установлена, туннель не поднят — на QUIC не влияет"
             )
         for row in default_route_lines():
             self.log(f"default: {row}")
@@ -803,7 +816,10 @@ class OpsClient:
         self._pending_allow = allow
         threading.Thread(
             target=self._probe_exit,
-            args=(socks_port, 0.4 if start_tun or self._defer_win_tun else 0.0),
+            args=(
+                socks_port,
+                1.2 if self._defer_win_tun else (0.4 if start_tun else 0.0),
+            ),
             daemon=True,
         ).start()
 
@@ -1248,6 +1264,15 @@ class OpsClient:
             self._probe_exit_body(socks_port, delay)
         finally:
             self._hold_watchdog = False
+            probe_ok = not getattr(self, "_exit_probe_error", None)
+            if getattr(self, "_want_watchdog", False) and probe_ok:
+                try:
+                    self.ensure_watchdog_daemon()
+                except Exception as exc:  # noqa: BLE001
+                    self.log(f"watchdog: {exc}")
+            elif getattr(self, "_want_watchdog", False) and not probe_ok:
+                self._want_watchdog = False
+                self.log("watchdog не стартую — выход не прошёл, kill switch не ставлю")
 
     def _probe_exit_body(self, socks_port: int, delay: float = 0.0) -> None:
         try:
@@ -1281,15 +1306,13 @@ class OpsClient:
                 except Exception:  # noqa: BLE001
                     hy_port = 0
                 if hy_port and hy_port != 443:
-                    ifaces = leftover_vpn_ifaces()
-                    procs = foreign_vpn_processes()
-                    if ifaces or procs:
-                        names = ", ".join(
-                            [name for _idx, name in ifaces] + list(procs)
-                        )
+                    live = foreign_vpn_live()
+                    if live:
                         self.log(
                             f"Hysteria2 UDP :{hy_port} не дошёл до VPS. "
-                            f"Чужой VPN ещё в системе ({names}) — отключите его полностью."
+                            "Чужой туннель поднят ("
+                            + ", ".join(live)
+                            + ") — его split default перехватывает QUIC."
                         )
                     else:
                         self.log(
@@ -1339,6 +1362,11 @@ class OpsClient:
             allow = list(getattr(self, "_pending_allow", []) or [])
             self.log("Hysteria2 живой — ставлю TUN split default")
             self._install_win_tun_routes(allow)
+        try:
+            cfg = self.config()
+            self.set_git_singbox(cfg, get_http_bridge_port())
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"PAC/git после проверки: {exc}")
 
     def _kill_switch_hosts(self, cfg: dict[str, Any]) -> list[str]:
         hosts = [get_server_host(cfg)]
@@ -1393,8 +1421,9 @@ class OpsClient:
         )
         self._exit_probe_error = None
         self._exit_probe_hint = None
+        self._want_watchdog = spawn_watchdog
         self.start_singbox_mode()
-        if spawn_watchdog:
+        if spawn_watchdog and not getattr(self, "_defer_win_tun", False):
             if procutil.is_admin() and not self._inprocess_helpers:
                 self.stop_watchdog_daemon()
             self.ensure_watchdog_daemon()
@@ -1631,7 +1660,8 @@ class OpsClient:
             )
             if hy:
                 lines.append(
-                    f"hysteria2       = udp :{hy['port']} "
+                    f"hysteria2       = udp :{hy['port']} sni={hy['server_name']}"
+                    f"{' obfs=salamander' if hy.get('obfs_password') else ''} "
                     f"(дом={'вкл' if dial == 'hysteria2' else 'офис → Reality'})"
                 )
             lines.append(f"proxy_bypass    = {info['proxy_bypass_n']} entries")

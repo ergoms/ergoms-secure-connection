@@ -27,13 +27,15 @@ Item {
                 spacing: 8
                 topPadding: 8
                 bottomPadding: 16
-                enabled: !bridge.active
-                opacity: bridge.active ? 0.55 : 1
+                enabled: !bridge.active && !bridge.busy
+                opacity: (bridge.active || bridge.busy) ? 0.55 : 1
 
                 Text {
-                    visible: bridge.active
+                    visible: bridge.active || bridge.busy
                     width: parent.width
-                    text: "Отключите VPN, чтобы менять настройки"
+                    text: bridge.busy
+                          ? "Дождитесь окончания операции"
+                          : "Отключите VPN, чтобы менять настройки"
                     color: T.warn
                     font.pixelSize: 12
                     font.family: T.fontUi
@@ -207,7 +209,7 @@ Item {
                             settingKey: "trShortId"
                         }
                         SettingField {
-                            label: "Server name (SNI)"
+                            label: "Reality SNI (dest)"
                             settingKey: "trServerName"
                         }
                         Column {
@@ -224,6 +226,15 @@ Item {
                             SettingField {
                                 label: "UDP порт"
                                 settingKey: "hy2Port"
+                            }
+                            SettingField {
+                                label: "Hysteria2 SNI"
+                                settingKey: "hy2ServerName"
+                            }
+                            SettingField {
+                                label: "Hysteria2 obfuscation"
+                                password: true
+                                settingKey: "hy2Obfs"
                             }
                         }
                     }
@@ -328,14 +339,14 @@ Item {
                 PrimaryButton {
                     Layout.fillWidth: true
                     text: "Из файла"
-                    enabled: !bridge.active
+                    enabled: !bridge.active && !bridge.busy
                     onClicked: bridge.importConfigFile()
                 }
                 PrimaryButton {
                     Layout.fillWidth: true
                     text: "Сохранить"
                     primary: true
-                    enabled: !bridge.active
+                    enabled: !bridge.active && !bridge.busy
                     onClicked: bridge.saveSettings()
                 }
             }

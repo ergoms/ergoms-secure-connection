@@ -23,6 +23,8 @@ from desktop.config_crypto import MAGIC, decrypt_config
 from desktop.config_io import (
     CORPORATE_BYPASS_PRESET,
     CORPORATE_PROXY_PRESET,
+    HY2_DEFAULT_SNI,
+    REALITY_DEFAULT_SNI,
     STANDARD_BYPASS_PRESET,
     apply_config,
     apply_corporate_profile,
@@ -32,6 +34,7 @@ from desktop.config_io import (
     get_tun_enabled,
     infer_corporate,
     load_config,
+    normalize_hy2_sni,
     save_config,
 )
 from desktop.paths import Paths, gui_command
@@ -440,7 +443,7 @@ class GuiBridge(QObject):
         self._settings.insert("trPublicKey", str(tr.get("public_key") or ""))
         self._settings.insert("trShortId", str(tr.get("short_id") or ""))
         self._settings.insert(
-            "trServerName", str(tr.get("server_name") or "www.cloudflare.com")
+            "trServerName", str(tr.get("server_name") or REALITY_DEFAULT_SNI)
         )
         self._settings.insert("trPort", str(tr.get("port") or 443))
         hy = tr.get("hysteria2") if isinstance(tr.get("hysteria2"), dict) else {}
@@ -456,6 +459,10 @@ class GuiBridge(QObject):
         self._settings.insert("trDial", dial)
         self._settings.insert("hy2Password", str(hy.get("password") or ""))
         self._settings.insert("hy2Port", str(hy.get("port") or 8443))
+        self._settings.insert(
+            "hy2ServerName", normalize_hy2_sni(hy.get("server_name"))
+        )
+        self._settings.insert("hy2Obfs", str(hy.get("obfs_password") or ""))
         rev = cfg.get("reverse_ssh") or {}
         self._settings.insert("reverseSsh", bool(rev.get("enabled")))
         self._settings.insert("reverseSshListen", str(rev.get("listen_port") or 2222))
@@ -471,6 +478,8 @@ class GuiBridge(QObject):
 
     @Slot(bool)
     def setAutostart(self, on: bool) -> None:
+        if self._busy or self._active:
+            return
         try:
             if on:
                 autostart.enable()
@@ -487,6 +496,8 @@ class GuiBridge(QObject):
 
     @Slot(bool)
     def applyCorporateMode(self, on: bool) -> None:
+        if self._busy or self._active:
+            return
         self._set_corporate(on)
         if on:
             self._settings.insert("socksScope", "github")
@@ -508,6 +519,9 @@ class GuiBridge(QObject):
 
     @Slot()
     def importConfigFile(self) -> None:
+        if self._busy or self._active:
+            self.toast.emit("Дождитесь окончания операции или отключите VPN", "warn")
+            return
         path, _ = QFileDialog.getOpenFileName(
             None,
             "Конфиг ERGOMS SECURE CONNECTION",
@@ -571,6 +585,9 @@ class GuiBridge(QObject):
 
     @Slot()
     def saveSettings(self) -> None:
+        if self._busy or self._active:
+            self.toast.emit("Дождитесь окончания операции или отключите VPN", "warn")
+            return
         try:
             if self.paths.config_path.is_file():
                 cfg = load_config(self.paths.config_path)
@@ -633,7 +650,7 @@ class GuiBridge(QObject):
             cfg["transport"]["public_key"] = str(s.value("trPublicKey") or "").strip()
             cfg["transport"]["short_id"] = str(s.value("trShortId") or "").strip()
             cfg["transport"]["server_name"] = (
-                str(s.value("trServerName") or "").strip() or "www.cloudflare.com"
+                str(s.value("trServerName") or "").strip() or REALITY_DEFAULT_SNI
             )
             cfg["transport"]["port"] = int(
                 str(s.value("serverPort") or s.value("trPort") or "443").strip() or "443"
@@ -644,10 +661,10 @@ class GuiBridge(QObject):
                 cfg["transport"]["hysteria2"] = hy
             hy["password"] = str(s.value("hy2Password") or "").strip()
             hy["port"] = int(str(s.value("hy2Port") or "8443").strip() or "8443")
-            hy["server_name"] = (
-                str(hy.get("server_name") or s.value("trServerName") or "").strip()
-                or "www.cloudflare.com"
-            )
+            hy["server_name"] = normalize_hy2_sni(s.value("hy2ServerName"))
+            hy["obfs_password"] = str(
+                s.value("hy2Obfs") or hy.get("obfs_password") or ""
+            ).strip()
             hy["insecure"] = bool(hy.get("insecure", True))
             cfg.setdefault("reverse_ssh", {})
             if corporate:
@@ -1063,6 +1080,8 @@ def _settings_defaults() -> dict[str, Any]:
         "trDial": "auto",
         "hy2Password": "",
         "hy2Port": "8443",
+        "hy2ServerName": HY2_DEFAULT_SNI,
+        "hy2Obfs": "",
         "reverseSsh": False,
         "reverseSshListen": "2222",
         "reverseSshVpsUser": "root",
