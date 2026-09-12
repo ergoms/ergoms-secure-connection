@@ -8,13 +8,13 @@
 
 **дом:** программа → sing-box → VPS UDP :8443 (Hysteria2) → интернет
 
-Домашний провайдер часто глотает TLS Reality; Hysteria2 — QUIC, как у Amnezia. Офисный Squid UDP не проводит, поэтому Reality там остаётся. На уже установленном VPS: `bash modes/vps/enable_hysteria2.sh`, пароль вставить в `transport.hysteria2`.
+Домашний провайдер часто глотает TLS Reality; Hysteria2 — QUIC. Без **salamander** TSPU читает SNI из QUIC Initial и рвёт handshake (`timeout: no recent network activity`). Офисный Squid UDP не проводит, поэтому Reality там остаётся. На уже установленном VPS: `bash modes/vps/enable_hysteria2.sh` (пароль + `HY2_OBFS` в `credentials.env` → `transport.hysteria2`).
 
 **Что проверено**
 
 - корпоративный VPN (VLESS+Reality через Squid) — работает
-- дом, Hysteria2 — работает
-- дом, VLESS+Reality по Wi‑Fi — пока не тестировали
+- дом, Hysteria2 + salamander, SNI не Cloudflare — **работает** (Ethernet, Россия)
+- дом, VLESS+Reality напрямую — DPI глотает TLS ClientHello, не использовать
 
 ---
 
@@ -64,7 +64,7 @@ bash modes/vps/bootstrap_singbox_443.sh
 
 Локально после `on`: SOCKS `:1080`, HTTP `:1088`, PAC `:1089`.
 
-Окно: в трее три пункта — **Открыть**, **Подключить / Отключить** (текст и доступность меняются по статусу), **Выход**. Во вкладке «Журнал» кнопка **Копировать всё** кладёт текущий лог в буфер обмена. Не включайте одновременно другой VPN (Amnezia и т.п.) — маршруты и TUN будут конфликтовать.
+Окно: в трее три пункта — **Открыть**, **Подключить / Отключить** (текст и доступность меняются по статусу), **Выход**. Во вкладке «Журнал» кнопка **Копировать всё** кладёт текущий лог в буфер обмена. Служба Amnezia без поднятого туннеля Hy2 не ломает. Если Amnezia-туннель всё же включён — в split добавьте IP VPS `/32` (домены и exe не нужны). Kill switch Amnezia (`WinError 10013`) UDP всё равно может резать.
 
 ---
 
@@ -72,14 +72,16 @@ bash modes/vps/bootstrap_singbox_443.sh
 
 Проверено на домашнем Ethernet: TCP до VPS `:443` живой, SOCKS CONNECT до `1.1.1.1:443` тоже, а сайты мёртвые (`HTTPS probe timeout` / `no recent network activity`). Это **не** «клиент не стартовал».
 
-Что помогло:
+Что помогло (без этого дома не поднимается):
 
-1. **Hysteria2 UDP :8443**, не Reality. Домашний DPI глотает VLESS+Reality. Пустой `transport.hysteria2.password` = клиент молча идёт в Reality. На VPS: `ss -lunp | grep 8443` и пароль из `/var/lib/ops-content-singbox/credentials.env` (`HY2_PASSWORD`). `HY2_PORT` в этом файле может врать (`443`), смотреть фактический listen.
-2. **Не два VPN сразу.** Amnezia / Tailscale / похожие оставляют второй default `0.0.0.0/0` через `100.x` (CGNAT). В `route print` у persistent-строки вместо метрики слово `Default` — раньше клиент такие не снимал, QUIC уходил во второй туннель. Нужно выключить чужой туннель (не только GUI) и дать клиенту удалить этот default.
-3. **Windows TUN без `auto_route`.** `auto_route` крадёт UDP до VPS: CONNECT есть, HTTPS нет. Стек `mixed`, `/32` на VPS через Ethernet, split-default `0.0.0.0/1` на наш TUN — **только после** успешной проверки Hy2.
-4. На VPS в панели хостинга открыть **UDP 8443** (не путать с TCP 443).
+1. **Hysteria2 UDP :8443**, не Reality. Домашний DPI глотает VLESS+Reality на TCP :443 (`TLS handshake timed out`, HTTP 400 с VPS при этом живой). Пустой `transport.hysteria2.password` = клиент молча идёт в Reality. На VPS: `ss -lunp | grep 8443` и `HY2_PASSWORD` / `HY2_OBFS` из `/var/lib/ops-content-singbox/credentials.env`. `HY2_PORT` в этом файле может врать (`443`) — смотреть фактический listen.
+2. **Salamander (obfs) на VPS и в клиенте.** TSPU расшифровывает QUIC Initial и читает SNI; порт 8443 сам по себе больше не обход (фильтр на все UDP). Без obfs — `timeout: no recent network activity` / SOCKS `rep=1`, даже когда Amnezia выключена и VPS слушает. В конфиге: `transport.hysteria2.obfs_password` = `HY2_OBFS`. На VPS снова: `bash modes/vps/enable_hysteria2.sh`.
+3. **Hy2 SNI отдельно от Reality, не Cloudflare.** Reality dest остаётся `www.cloudflare.com`. В QUIC Initial `www.cloudflare.com` — стоп-лист РКН/TSPU. Hy2: `www.microsoft.com` + `insecure: true`. Поле в настройках: «Hysteria2 SNI», не путать с Reality SNI.
+4. **Дом: сначала Hy2 без TUN/PAC/kill switch.** Windows `auto_route` и PAC крадут UDP до handshake. TUN split-default и watchdog — **только после** `проверка выхода: OK`. Если handshake не прошёл, kill switch не ставить (иначе интернет мёртвый, а VPN тоже).
+5. **Чужой туннель с default `0.0.0.0/0`.** Amnezia / Tailscale через `100.x` / `10.13.13.2` metric 5 перехватывают QUIC. Idle-служба Amnezia (туннель не поднят) на Hy2 не влияет. В `route print` у persistent-строки слово `Default` вместо метрики — клиент такие снимает. Если второй VPN нужен: split `/32` на IP VPS через Ethernet.
+6. На VPS в панели хостинга открыть **UDP 8443** (не путать с TCP 443).
 
-В журнале при норме: `дом: Hysteria2 UDP :8443`, затем `проверка выхода: OK`, затем `Hysteria2 живой — ставлю TUN split default`. Если видите `100.121.* Default` во втором `default:` — второй VPN ещё в таблице.
+В журнале при норме: `дом: Hy2 salamander — QUIC Initial без открытого SNI`, затем `проверка выхода: OK`, затем `Hysteria2 живой — ставлю TUN split default`. Песочница (`python -m desktop sandbox`): `hy2 CONNECT` + `hy2 HTTPS` OK.
 
 ---
 
@@ -90,7 +92,7 @@ bash modes/vps/bootstrap_singbox_443.sh
 | Ключ | Назначение |
 |------|------------|
 | `server.host` | IP/hostname VPS |
-| `transport` | VLESS: uuid, public_key, short_id, server_name. Дом: `hysteria2.password` |
+| `transport` | VLESS: uuid, public_key, short_id, `server_name` (Reality dest). Дом: `hysteria2.password`, `obfs_password`, свой `server_name` |
 | `socks_scope` | `full` или `github` (область PAC) |
 | `tun.enabled` / `tun.elevate` | TUN вместе с `on` (по умолчанию вкл.), запрос прав |
 | `kill_switch` | при обрыве резать интернет (по умолчанию вкл.; нужен TUN) |
