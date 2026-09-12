@@ -34,6 +34,16 @@ _BLOCKED_HY2_SNI = frozenset(
 )
 
 
+def normalize_dial(value: Any) -> str:
+    """Reality or Hysteria2. Legacy `auto` becomes Hysteria2 (home)."""
+    raw = str(value or "").strip().lower()
+    if raw in ("vless", "reality", "vless-reality"):
+        return "vless-reality"
+    if raw in ("hy2", "hysteria2"):
+        return "hysteria2"
+    return "hysteria2"
+
+
 def normalize_hy2_sni(value: Any, *, fallback: str = HY2_DEFAULT_SNI) -> str:
     sni = str(value or "").strip()
     if not sni or sni.lower() in _BLOCKED_HY2_SNI:
@@ -163,7 +173,7 @@ def default_config_template() -> dict[str, Any]:
         },
         "transport": {
             "type": "vless-reality",
-            "dial": "auto",
+            "dial": "hysteria2",
             "uuid": "",
             "public_key": "",
             "short_id": "",
@@ -178,7 +188,7 @@ def default_config_template() -> dict[str, Any]:
             },
         },
         "reverse_ssh": {
-            "enabled": False,
+            "enabled": True,
             "vps_user": "root",
             "vps_port": 22,
             "listen_port": 2222,
@@ -225,7 +235,7 @@ def migrate_env_into_config(cfg: dict[str, Any], env: dict[str, str]) -> dict[st
     if "REVERSE_SSH" in env:
         rev = out.setdefault("reverse_ssh", {})
         if isinstance(rev, dict):
-            rev["enabled"] = _as_bool(env["REVERSE_SSH"], False)
+            rev["enabled"] = _as_bool(env["REVERSE_SSH"], True)
     return out
 
 
@@ -247,6 +257,9 @@ def apply_corporate_profile(cfg: dict[str, Any]) -> dict[str, Any]:
     out.setdefault("proxy_bypass_via", "direct")
     out["git_proxy"] = True
     out["docker_proxy"] = True
+    tr = out.setdefault("transport", {})
+    if isinstance(tr, dict):
+        tr["dial"] = "vless-reality"
     return out
 
 
@@ -259,9 +272,6 @@ def apply_standard_profile(cfg: dict[str, Any]) -> dict[str, Any]:
     out["corporate_proxy"] = ""
     out["proxy_bypass"] = list(STANDARD_BYPASS_PRESET)
     out["proxy_bypass_via"] = "direct"
-    rev = out.setdefault("reverse_ssh", {})
-    if isinstance(rev, dict):
-        rev["enabled"] = False
     return out
 
 
@@ -329,15 +339,7 @@ def ensure_config_defaults(cfg: dict[str, Any]) -> dict[str, Any]:
         transport = {}
         out["transport"] = transport
     transport.setdefault("type", "vless-reality")
-    transport.setdefault("dial", "auto")
-    raw_dial = str(transport.get("dial") or "auto").strip().lower()
-    if raw_dial in ("vless", "reality"):
-        raw_dial = "vless-reality"
-    if raw_dial in ("hy2",):
-        raw_dial = "hysteria2"
-    if raw_dial not in ("auto", "vless-reality", "hysteria2"):
-        raw_dial = "auto"
-    transport["dial"] = raw_dial
+    transport["dial"] = normalize_dial(transport.get("dial"))
     transport.setdefault("uuid", "")
     transport.setdefault("public_key", "")
     transport.setdefault("short_id", "")
@@ -359,13 +361,13 @@ def ensure_config_defaults(cfg: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(rev, dict):
         rev = {}
         out["reverse_ssh"] = rev
-    rev.setdefault("enabled", False)
+    rev.setdefault("enabled", True)
     rev.setdefault("vps_user", "root")
     rev.setdefault("vps_port", 22)
     rev.setdefault("listen_port", 2222)
     rev.setdefault("local_port", 22)
     rev.setdefault("identity_file", "")
-    rev["enabled"] = _as_bool(rev.get("enabled"), False)
+    rev["enabled"] = _as_bool(rev.get("enabled"), True)
     rev["vps_port"] = max(1, min(65535, _as_int(rev.get("vps_port"), 22)))
     rev["listen_port"] = max(1, min(65535, _as_int(rev.get("listen_port"), 2222)))
     rev["local_port"] = max(1, min(65535, _as_int(rev.get("local_port"), 22)))
@@ -719,7 +721,7 @@ def get_reverse_ssh(cfg: dict[str, Any] | None = None) -> dict[str, Any]:
     src = cfg if cfg is not None else _runtime()
     rev = src.get("reverse_ssh") if isinstance(src.get("reverse_ssh"), dict) else {}
     return {
-        "enabled": _as_bool(rev.get("enabled"), False),
+        "enabled": _as_bool(rev.get("enabled"), True),
         "vps_user": str(rev.get("vps_user") or "root").strip() or "root",
         "vps_port": max(1, min(65535, _as_int(rev.get("vps_port"), 22))),
         "listen_port": max(1, min(65535, _as_int(rev.get("listen_port"), 2222))),

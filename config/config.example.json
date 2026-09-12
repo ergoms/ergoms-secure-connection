@@ -57,7 +57,7 @@
   },
   "transport": {
     "type": "vless-reality",
-    "dial": "auto",
+    "dial": "hysteria2",
     "uuid": "",
     "public_key": "",
     "short_id": "",
@@ -72,7 +72,7 @@
     }
   },
   "reverse_ssh": {
-    "enabled": false,
+    "enabled": true,
     "vps_user": "root",
     "vps_port": 22,
     "listen_port": 2222,

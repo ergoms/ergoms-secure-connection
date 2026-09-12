@@ -14,7 +14,7 @@ from typing import Any, Callable
 
 from desktop import procutil
 from desktop.branding import APP_EXE, APP_EXE_LEGACY
-from desktop.config_io import HY2_DEFAULT_SNI, REALITY_DEFAULT_SNI, normalize_hy2_sni
+from desktop.config_io import HY2_DEFAULT_SNI, REALITY_DEFAULT_SNI, normalize_dial, normalize_hy2_sni
 from desktop.tun import (
     RUSTDESK_PORTS,
     TUN_IFACE_NAME,
@@ -96,21 +96,10 @@ def hy2_outbound(
 
 
 def choose_dial(transport: dict[str, Any], *, office: bool) -> str:
-    """Office always Reality (Squid has no UDP). Home: transport.dial or auto."""
-    prefer = str((transport or {}).get("dial") or "auto").strip().lower()
-    if prefer in ("vless", "reality"):
-        prefer = "vless-reality"
-    if prefer in ("hy2",):
-        prefer = "hysteria2"
+    """Office always Reality (Squid has no UDP). Home: explicit dial."""
     if office:
         return "vless-reality"
-    if prefer == "hysteria2":
-        return "hysteria2"
-    if prefer == "vless-reality":
-        return "vless-reality"
-    if hysteria2_opts(transport):
-        return "hysteria2"
-    return "vless-reality"
+    return normalize_dial((transport or {}).get("dial"))
 
 
 def require_transport(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -125,20 +114,14 @@ def require_transport(cfg: dict[str, Any]) -> dict[str, Any]:
     short_id = str(tr.get("short_id") or "").strip()
     sni = str(tr.get("server_name") or REALITY_DEFAULT_SNI).strip() or REALITY_DEFAULT_SNI
     typ = str(tr.get("type") or "vless-reality").strip().lower()
-    if typ not in ("vless-reality", "vless", "reality", "hysteria2", "auto"):
+    if typ not in ("vless-reality", "vless", "reality", "hysteria2"):
         raise RuntimeError(f"Unsupported transport.type={typ} (use vless-reality)")
     if not uuid or "REPLACE" in uuid.upper() or len(uuid) < 8:
         raise RuntimeError("transport.uuid missing — paste from VPS bootstrap output")
     if not pub or "REPLACE" in pub.upper():
         raise RuntimeError("transport.public_key missing — paste from VPS bootstrap")
     port = int(tr.get("port") or 443)
-    dial = str(tr.get("dial") or "auto").strip().lower()
-    if dial in ("vless", "reality"):
-        dial = "vless-reality"
-    if dial in ("hy2",):
-        dial = "hysteria2"
-    if dial not in ("auto", "vless-reality", "hysteria2"):
-        dial = "auto"
+    dial = normalize_dial(tr.get("dial"))
     out = {
         "uuid": uuid,
         "public_key": pub,

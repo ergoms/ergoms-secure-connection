@@ -222,6 +222,7 @@ On the office PC — config.json (merge into existing file):
   },
   "transport": {
     "type": "vless-reality",
+    "dial": "vless-reality",
     "uuid": "$UUID",
     "public_key": "$PUBLIC_KEY",
     "short_id": "$SHORT_ID",
