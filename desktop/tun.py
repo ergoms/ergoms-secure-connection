@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import platform
 import re
@@ -20,6 +21,12 @@ from desktop.paths import bundle_dir, is_frozen
 LogFn = Callable[[str], None]
 
 SING_BOX_VERSION = "1.11.15"
+AWG_SING_BOX_VERSION = "1.13.12-awg2.0"
+AWG_SING_BOX_REPO = "spoofi/sing-box-awg"
+AWG_ARCHIVE_SHA256 = {
+    "windows-amd64": "a0a1912ebc74eca085a6e6c5a20dc91ec29fc66869230f4454342bb4817588c3",
+    "linux-amd64": "46e21eb918dbbcb0da6b8e6e98e8496407556f0cd7e66f8be33c4185e60681cf",
+}
 
 
 def _noop(msg: str) -> None:
@@ -554,6 +561,17 @@ def _arch_tag() -> str:
     return "amd64"
 
 
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        while True:
+            chunk = fh.read(1024 * 1024)
+            if not chunk:
+                break
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def _direct_python_paths() -> list[str]:
     """Interpreters used by reverse-ssh / PAC (avoid TUN loops).
 
@@ -737,7 +755,13 @@ class TunManager:
         if pid:
             targets.append(pid)
         for orphan in procutil.pids_named(
-            "sing-box.exe", "sing-box", "ergoms-tun.exe", "ergoms-tun"
+            "sing-box.exe",
+            "sing-box",
+            "sing-box-awg",
+            "ergoms-tun.exe",
+            "ergoms-tun",
+            "ergoms-tun-awg.exe",
+            "ergoms-tun-awg",
         ):
             if orphan not in targets:
                 targets.append(orphan)
@@ -758,7 +782,13 @@ class TunManager:
 
     def _find_sing_box_pid(self) -> int | None:
         for pid in procutil.pids_named(
-            "sing-box.exe", "sing-box", "ergoms-tun.exe", "ergoms-tun"
+            "sing-box.exe",
+            "sing-box",
+            "sing-box-awg",
+            "ergoms-tun.exe",
+            "ergoms-tun",
+            "ergoms-tun-awg.exe",
+            "ergoms-tun-awg",
         ):
             return pid
         return None
@@ -816,6 +846,121 @@ class TunManager:
             target.chmod(0o755)
             archive.unlink(missing_ok=True)
         self.log(f"sing-box → {target}")
+        return target
+
+    def _awg_bin_name(self) -> str:
+        return "ergoms-tun-awg.exe" if sys.platform == "win32" else "sing-box-awg"
+
+    def _awg_version_path(self) -> Path:
+        return self.tools_dir / "sing-box-awg.ver"
+
+    def find_awg_sing_box(self) -> Path | None:
+        name = self._awg_bin_name()
+        candidates = [
+            self.tools_dir / name,
+            bundle_dir() / "tools" / name,
+        ]
+        if sys.platform == "win32":
+            candidates.append(self.tools_dir / "sing-box-awg.exe")
+        else:
+            candidates.append(self.tools_dir / "sing-box-awg")
+        seen: set[str] = set()
+        for c in candidates:
+            key = str(c.resolve()) if c.exists() else str(c)
+            if key in seen:
+                continue
+            seen.add(key)
+            if not self._is_native_sing_box(c):
+                continue
+            if sys.platform != "win32" and not os.access(c, os.X_OK):
+                try:
+                    c.chmod(c.stat().st_mode | 0o111)
+                except OSError:
+                    continue
+            if sys.platform == "win32" or os.access(c, os.X_OK):
+                return c.resolve()
+        return None
+
+    def ensure_awg_downloaded(self, proxy_url: str | None = None) -> Path:
+        """Pinned AmneziaWG sing-box fork (does not replace official 1.11.15)."""
+        import tarfile
+        import zipfile
+
+        existing = self.find_awg_sing_box()
+        ver_path = self._awg_version_path()
+        if existing and ver_path.is_file():
+            try:
+                got = ver_path.read_text(encoding="utf-8").strip()
+            except OSError:
+                got = ""
+            if got == AWG_SING_BOX_VERSION:
+                return existing
+        plat = "windows" if sys.platform == "win32" else "linux"
+        arch = _arch_tag()
+        key = f"{plat}-{arch}"
+        digest = AWG_ARCHIVE_SHA256.get(key)
+        if not digest:
+            raise RuntimeError(
+                f"AmneziaWG sing-box нет для {key}. Нужен amd64. "
+                f"Форк {AWG_SING_BOX_REPO} {AWG_SING_BOX_VERSION}"
+            )
+        self.tools_dir.mkdir(parents=True, exist_ok=True)
+        if plat == "windows":
+            asset = f"sing-box-{AWG_SING_BOX_VERSION}-windows-{arch}.zip"
+        else:
+            asset = f"sing-box-{AWG_SING_BOX_VERSION}-linux-{arch}.tar.gz"
+        url = (
+            f"https://github.com/{AWG_SING_BOX_REPO}/releases/download/"
+            f"v{AWG_SING_BOX_VERSION}/{asset}"
+        )
+        archive = self.tools_dir / asset
+        self.log(f"Downloading AWG {asset}…")
+        self._download_file(url, archive, proxy_url=proxy_url)
+        got_hash = _sha256_file(archive)
+        if got_hash != digest:
+            archive.unlink(missing_ok=True)
+            raise RuntimeError(
+                f"SHA256 mismatch for {asset}: {got_hash} (ожидали {digest})"
+            )
+        target = self.tools_dir / self._awg_bin_name()
+        if plat == "windows":
+            with zipfile.ZipFile(archive, "r") as zf:
+                member = next(
+                    (
+                        n
+                        for n in zf.namelist()
+                        if n.endswith("sing-box.exe") or n.endswith("ergoms-tun.exe")
+                    ),
+                    None,
+                )
+                if not member:
+                    raise RuntimeError("sing-box.exe not found in AWG zip")
+                with zf.open(member) as src, open(target, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+        else:
+            with tarfile.open(archive, "r:gz") as tf:
+                member = next(
+                    (
+                        m
+                        for m in tf.getmembers()
+                        if m.name.endswith("/sing-box") or m.name == "sing-box"
+                    ),
+                    None,
+                )
+                if not member:
+                    raise RuntimeError("sing-box not found in AWG tar.gz")
+                f = tf.extractfile(member)
+                if not f:
+                    raise RuntimeError("cannot extract AWG sing-box")
+                with open(target, "wb") as dst:
+                    shutil.copyfileobj(f, dst)
+            target.chmod(0o755)
+        archive.unlink(missing_ok=True)
+        try:
+            ver_path.write_text(AWG_SING_BOX_VERSION + "\n", encoding="utf-8")
+        except OSError:
+            pass
+        self.log(f"sing-box AWG → {target}")
         return target
 
     def _download_file(self, url: str, dest: Path, *, proxy_url: str | None = None) -> None:

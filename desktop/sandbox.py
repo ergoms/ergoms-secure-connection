@@ -15,7 +15,14 @@ from desktop import procutil
 from desktop.client import OpsClient
 from desktop.config_io import get_server, get_server_host, get_sing_box_path
 from desktop.kill_switch import underlay_gateway
-from desktop.singbox_mode import hy2_outbound, hysteria2_opts, require_transport
+from desktop.singbox_mode import (
+    amneziawg_opts,
+    awg_endpoint,
+    hy2_outbound,
+    hysteria2_opts,
+    require_transport,
+    _dns_v12,
+)
 from desktop.tun import (
     bind_underlay_socket,
     default_route_lines,
@@ -32,6 +39,8 @@ SANDBOX_SOCKS = 18080
 SANDBOX_HTTP = 18088
 VLESS_SOCKS = 18180
 VLESS_HTTP = 18188
+AWG_SOCKS = 18280
+AWG_HTTP = 18288
 
 
 def _noop(msg: str) -> None:
@@ -440,6 +449,48 @@ def _hy2_cfg(
     }
 
 
+def _awg_cfg(
+    opts: dict,
+    *,
+    server: str,
+    log_path: Path,
+    bind_iface: str = "",
+    socks_port: int = AWG_SOCKS,
+    http_port: int = AWG_HTTP,
+) -> dict:
+    return {
+        "log": {
+            "level": "info",
+            "timestamp": True,
+            "output": str(log_path).replace("\\", "/"),
+        },
+        "dns": _dns_v12(),
+        "inbounds": [
+            {
+                "type": "socks",
+                "tag": "socks-in",
+                "listen": "127.0.0.1",
+                "listen_port": int(socks_port),
+            },
+            {
+                "type": "http",
+                "tag": "http-in",
+                "listen": "127.0.0.1",
+                "listen_port": int(http_port),
+            },
+        ],
+        "endpoints": [awg_endpoint(server, opts, bind_iface=bind_iface)],
+        "outbounds": [
+            {
+                "type": "direct",
+                "tag": "direct",
+                **({"bind_interface": bind_iface} if bind_iface else {}),
+            }
+        ],
+        "route": _route_block(bind_iface),
+    }
+
+
 def _start_box(exe: Path, cfg_path: Path) -> subprocess.Popen:
     return subprocess.Popen(
         [str(exe), "run", "-c", str(cfg_path)],
@@ -610,15 +661,23 @@ def run_sandbox(client: OpsClient, *, log: LogFn = _noop) -> int:
     vless_log = client.paths.logs_dir / "sandbox-vless.log"
     hy2_cfg_path = client.paths.var_dir / "sandbox-hy2.json"
     hy2_log = client.paths.logs_dir / "sandbox-hy2.log"
+    awg_cfg_path = client.paths.var_dir / "sandbox-awg.json"
+    awg_log = client.paths.logs_dir / "sandbox-awg.log"
 
     hy = hysteria2_opts(transport)
+    awg = amneziawg_opts(transport)
     if hy:
         udp_ok, udp_detail = _udp(
             host, int(hy["port"]), bind_ip=bind_ip, if_index=if_index
         )
         report(udp_ok, f"UDP python :{hy['port']}", udp_detail)
+    if awg:
+        udp_ok, udp_detail = _udp(
+            host, int(awg["port"]), bind_ip=bind_ip, if_index=if_index
+        )
+        report(udp_ok, f"UDP python AWG :{awg['port']}", udp_detail)
 
-    log("— VLESS+Reality и Hysteria2 параллельно (разные порты, bind underlay)")
+    log("— VLESS+Reality, Hysteria2 и AmneziaWG параллельно (разные порты, bind underlay)")
     lock = threading.Lock()
 
     def locked_report(ok: bool, name: str, detail: str) -> None:
@@ -631,6 +690,7 @@ def run_sandbox(client: OpsClient, *, log: LogFn = _noop) -> int:
 
     direct_ok = False
     hy2_ok = False
+    awg_ok = False
 
     def run_vless() -> None:
         nonlocal direct_ok
@@ -693,13 +753,55 @@ def run_sandbox(client: OpsClient, *, log: LogFn = _noop) -> int:
         finally:
             _stop_box(proc)
 
+    def run_awg() -> None:
+        nonlocal awg_ok
+        if not awg:
+            locked_note(True, "AmneziaWG", "ключи не заданы — слой пропущен")
+            return
+        awg_exe = client.singbox.find_awg_sing_box()
+        if not awg_exe:
+            locked_note(
+                False,
+                "AmneziaWG",
+                "нет AWG-сборки (download-sing-box-awg) — слой пропущен",
+            )
+            return
+        _write_box(
+            awg_cfg_path,
+            awg_log,
+            _awg_cfg(
+                awg,
+                server=host,
+                log_path=awg_log,
+                bind_iface=bind_iface,
+            ),
+        )
+        proc = _start_box(awg_exe, awg_cfg_path)
+        try:
+            if not procutil.wait_port_open("127.0.0.1", AWG_SOCKS, timeout=8.0):
+                locked_note(False, "AWG SOCKS", f"не открылся :{AWG_SOCKS}")
+                return
+            conn_err = socks_probe(AWG_SOCKS, timeout=10.0)
+            https_err = socks_https_probe(AWG_SOCKS, timeout=14.0)
+            locked_report(not conn_err, "AWG CONNECT", conn_err or "1.1.1.1:443")
+            locked_report(not https_err, "AWG HTTPS", https_err or "HTTPS через SOCKS")
+            awg_ok = not https_err
+        finally:
+            _stop_box(proc)
+
     t_vless = threading.Thread(target=run_vless, name="sandbox-vless", daemon=True)
     t_hy2 = threading.Thread(target=run_hy2, name="sandbox-hy2", daemon=True)
+    t_awg = threading.Thread(target=run_awg, name="sandbox-awg", daemon=True)
     t_vless.start()
     t_hy2.start()
+    t_awg.start()
     t_vless.join()
     t_hy2.join()
+    t_awg.join()
 
+    if awg_ok:
+        log("итог: AmneziaWG живой с underlay — Reality можно оставить офису")
+        return 0
     if hy2_ok:
         log("итог: Hysteria2 живой с underlay — Reality можно оставить офису")
         return 0
@@ -715,13 +817,19 @@ def run_sandbox(client: OpsClient, *, log: LogFn = _noop) -> int:
                 "  Hysteria2 не дошёл до VPS (QUIC/HTTPS). "
                 "Проверьте UDP на VPS, пароль, SNI и что порт открыт в панели хостинга."
             )
+    if awg:
+        _dump_tail(awg_log, log)
+        log(
+            "  AmneziaWG не дошёл до VPS. Проверьте UDP на VPS, ключи и "
+            "bash modes/vps/enable_amneziawg.sh"
+        )
     if not direct_ok:
         _dump_tail(vless_log, log)
 
     relay_ok: bool | None = None
     cfg_path = vless_cfg_path
     log_path = vless_log
-    if not direct_ok and not hy2_ok:
+    if not direct_ok and not hy2_ok and not awg_ok:
         relay_ok = False
         for vision in (True, False):
             label = "vision" if vision else "без flow"
@@ -804,7 +912,9 @@ def run_sandbox(client: OpsClient, *, log: LogFn = _noop) -> int:
     log("песочница остановлена")
     if failed:
         _dump_tail(log_path, log)
-    return _finish(failed, leftover, direct_ok, relay_ok, hy2_ok=hy2_ok, log=log)
+    return _finish(
+        failed, leftover, direct_ok, relay_ok, hy2_ok=hy2_ok, awg_ok=awg_ok, log=log
+    )
 
 
 def _write_box(cfg_path: Path, log_path: Path, box_cfg: dict) -> None:
@@ -822,8 +932,12 @@ def _finish(
     relay_ok: bool | None,
     *,
     hy2_ok: bool,
+    awg_ok: bool = False,
     log: LogFn,
 ) -> int:
+    if awg_ok:
+        log("итог: AmneziaWG с этой сети живой (трафик шёл мимо VPN TUN)")
+        return 0
     if hy2_ok:
         log("итог: Hysteria2 с этой сети живой (трафик шёл мимо VPN TUN)")
         return 0
@@ -835,7 +949,7 @@ def _finish(
         return 0
     if leftover and not direct_ok and not relay_ok:
         log(
-            "итог: TCP до VPS есть, Reality/Hy2 с underlay не отвечает. "
+            "итог: TCP до VPS есть, Reality/Hy2/AWG с underlay не отвечает. "
             "Это не idle-служба: смотрите DPI, порт и пароль на VPS."
         )
         return 1

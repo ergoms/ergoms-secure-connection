@@ -59,7 +59,9 @@ from desktop.kill_switch import remember_plan as remember_kill_switch_plan
 from desktop.kill_switch import state_path as kill_switch_state_path
 from desktop.singbox_mode import (
     SingboxModeManager,
+    amneziawg_opts,
     choose_dial,
+    dial_label,
     hysteria2_opts,
     require_transport,
 )
@@ -642,8 +644,11 @@ class OpsClient:
         office_proxy = resolve_corporate_proxy(cfg)
         dial = choose_dial(transport, office=bool(office_proxy))
         hy = hysteria2_opts(transport) if dial == "hysteria2" else None
+        awg = amneziawg_opts(transport) if dial == "amneziawg" else None
         if dial == "hysteria2" and not hy:
             raise RuntimeError("Hysteria2: укажите пароль в Настройках")
+        if dial == "amneziawg" and not awg:
+            raise RuntimeError("AmneziaWG: укажите ключи в Настройках")
         if office_proxy:
             self.log(f"Probing CONNECT {host}:{port} via proxy...")
             if self.probe(host, port) != 0:
@@ -664,9 +669,33 @@ class OpsClient:
         http_port = get_http_bridge_port()
         self.reap_leftovers(socks_port=socks_port)
 
-        if not self.singbox.find_sing_box(get_sing_box_path(cfg)):
+        proxy_url = None
+        if _port_open("127.0.0.1", http_port):
+            proxy_url = f"http://127.0.0.1:{http_port}"
+        sing_box_path = get_sing_box_path(cfg)
+        if dial == "amneziawg":
+            exe = self.singbox.find_awg_sing_box()
+            ver_ok = False
+            try:
+                from desktop.tun import AWG_SING_BOX_VERSION
+
+                ver_path = self.tun.tools_dir / "sing-box-awg.ver"
+                ver_ok = bool(
+                    exe
+                    and ver_path.is_file()
+                    and ver_path.read_text(encoding="utf-8").strip()
+                    == AWG_SING_BOX_VERSION
+                )
+            except OSError:
+                ver_ok = False
+            if not ver_ok:
+                self.log("sing-box AWG — скачиваю зафиксированную сборку…")
+                exe = self.singbox.ensure_awg_downloaded(proxy_url=proxy_url)
+            sing_box_path = str(exe)
+        elif not self.singbox.find_sing_box(sing_box_path):
             self.log("sing-box missing — downloading…")
             self.download_sing_box()
+            sing_box_path = get_sing_box_path(cfg)
 
         if infer_corporate(cfg):
             bypass = [str(h) for h in cfg.get("proxy_bypass") or [] if h]
@@ -682,29 +711,39 @@ class OpsClient:
         stale = stale_default_cmds(keep_gw) if keep_gw else []
         leftover_cmds = list(dict.fromkeys(leftover_cmds + stale))
         idle_procs = foreign_vpn_processes()
+        live = leftover or foreign_vpn_live()
         if leftover:
             names = ", ".join(name for _idx, name in leftover)
             self.log(
-                f"чужой туннель ещё поднят ({names}) — сниму его 0.0.0.0/0 и "
-                f"0.0.0.0/1, выход оставлю через {keep_gw or 'underlay'}"
+                f"чужой туннель ещё поднят ({names}) — UDP с Ethernet, "
+                f"маршруты {keep_gw or 'underlay'} не трогаю"
+            )
+        elif live:
+            self.log(
+                "чужой туннель ещё поднят ("
+                + ", ".join(str(x) for x in live)
+                + ") — UDP с Ethernet"
             )
         elif idle_procs:
             self.log(
                 "служба "
                 + ", ".join(str(x) for x in idle_procs)
-                + " установлена, туннель не поднят — на QUIC не влияет"
+                + " установлена, туннель не поднят"
             )
         for row in default_route_lines():
             self.log(f"default: {row}")
-        if stale:
+        home = not bool(office_proxy)
+        if stale and not home:
             shown = [c for c in stale if "-p" not in c]
             self.log(
                 "лишний default второго VPN сниму: " + "; ".join(shown)
             )
-        if leftover_cmds and procutil.is_admin():
+        if leftover_cmds and procutil.is_admin() and not home:
             for line in leftover_cmds:
                 args = [p for p in line.split(" ") if p]
                 procutil.run(args, timeout=8)
+            leftover_cmds = []
+        if home:
             leftover_cmds = []
         prelude: list[str] = []
         allow = self._kill_switch_hosts(cfg)
@@ -721,7 +760,7 @@ class OpsClient:
             "corporate_proxy": office_proxy or "",
             "socks_port": socks_port,
             "http_port": http_port,
-            "sing_box_path": get_sing_box_path(cfg),
+            "sing_box_path": sing_box_path,
             "bypass_hosts": bypass,
             "mtu": get_tun_mtu(cfg),
             "vps_proxy_ports": get_vps_proxy_ports(cfg),
@@ -743,7 +782,8 @@ class OpsClient:
             if allow:
                 remember_kill_switch_plan(self.paths.var_dir, allow)
         if self._defer_win_tun:
-            self.log("дом: сначала Hysteria2 без TUN, маршруты поставлю после проверки")
+            proto = "AmneziaWG" if dial == "amneziawg" else "Hysteria2"
+            self.log(f"дом: сначала {proto} без TUN, маршруты поставлю после проверки")
         postlude = (
             kill_switch_pin_cmds(self.paths.var_dir, allow) if start_tun else []
         )
@@ -754,7 +794,7 @@ class OpsClient:
             socks_port=socks_port,
             http_port=http_port,
             enable_tun=start_tun,
-            sing_box_path=get_sing_box_path(cfg),
+            sing_box_path=sing_box_path,
             elevate=get_tun_elevate() if start_tun else False,
             bypass_hosts=bypass,
             mtu=get_tun_mtu(cfg),
@@ -765,7 +805,10 @@ class OpsClient:
             postlude_cmds=postlude,
         )
         self.set_git_singbox(cfg, http_port)
-        self._maybe_start_reverse_ssh(cfg)
+        # Home Hy2: SOCKS is dead until QUIC is up. Reverse SSH through
+        # SOCKS here steals the handshake (same class as PAC).
+        if not getattr(self, "_defer_win_tun", False):
+            self._maybe_start_reverse_ssh(cfg)
         state = {
             "mode": "singbox",
             "scope": get_socks_scope(),
@@ -785,6 +828,11 @@ class OpsClient:
             self.log(
                 f"диагностика: прямой TCP {host}:{port} не проверяем — "
                 "VLESS идёт через корпоративный прокси"
+            )
+        elif awg:
+            self.log(
+                f"диагностика: AmneziaWG UDP {host}:{awg['port']} — "
+                "TCP Reality не проверяем"
             )
         elif hy:
             self.log(
@@ -1021,6 +1069,15 @@ class OpsClient:
             save_config(self.paths.config_path, cfg)
         self.log(f"sing-box ready (auto): {path}")
 
+    def download_awg_sing_box(self) -> None:
+        self.reload_env()
+        proxy_url = None
+        http_port = get_http_bridge_port()
+        if _port_open("127.0.0.1", http_port):
+            proxy_url = f"http://127.0.0.1:{http_port}"
+        path = self.tun.ensure_awg_downloaded(proxy_url=proxy_url)
+        self.log(f"sing-box AWG ready: {path}")
+
     def watchdog_daemon_alive(self) -> bool:
         if self._watchdog is not None and getattr(self._watchdog, "running", False):
             return True
@@ -1188,7 +1245,7 @@ class OpsClient:
         if not boot:
             self.log("TUN: нет параметров запуска — оставляю SOCKS")
             return
-        self.log("Hysteria2 живой — поднимаю TUN")
+        self.log("выход живой — поднимаю TUN")
         remember_kill_switch_plan(self.paths.var_dir, allow)
         try:
             self.singbox.start(
@@ -1216,7 +1273,7 @@ class OpsClient:
         err = socks_https_probe(socks_port, timeout=10.0)
         if err:
             self.log(
-                f"TUN снова оборвал Hysteria2 ({err}) — возвращаю SOCKS без TUN"
+                f"TUN снова оборвал UDP ({err}) — возвращаю SOCKS без TUN"
             )
             try:
                 self.singbox.start(
@@ -1244,7 +1301,7 @@ class OpsClient:
                 )
         except (OSError, json.JSONDecodeError):
             pass
-        self.log("TUN готов (split default после живого Hysteria2)")
+        self.log("TUN готов (split default после живого UDP)")
 
     def _pin_underlay_later(self, allow: list[str]) -> None:
         for i, wait in enumerate((0.2, 0.6, 1.5, 3.0)):
@@ -1283,7 +1340,26 @@ class OpsClient:
         if not self.singbox.running():
             return
         self.log(f"проверка выхода через SOCKS :{socks_port} → 1.1.1.1:443…")
-        err = socks_https_probe(socks_port, timeout=10.0)
+        home_udp = bool(getattr(self, "_defer_win_tun", False))
+        try:
+            cfg_now = self.config()
+            office = bool(resolve_corporate_proxy(cfg_now))
+            tr_now = require_transport(cfg_now)
+            dial_now = choose_dial(tr_now, office=office)
+            home_udp = home_udp or (dial_now in ("hysteria2", "amneziawg") and not office)
+        except Exception:  # noqa: BLE001
+            pass
+        attempts = 3 if home_udp else 1
+        err: str | None = None
+        for attempt in range(attempts):
+            if not self.singbox.running():
+                return
+            if attempt:
+                self.log(f"проверка выхода: повтор {attempt + 1}/{attempts}")
+                time.sleep(0.6)
+            err = socks_https_probe(socks_port, timeout=12.0)
+            if not err:
+                break
         if not self.singbox.running():
             return
         if err:
@@ -1299,44 +1375,55 @@ class OpsClient:
             if "no recent network activity" in tail:
                 self._exit_probe_hint = "hy2-udp"
                 try:
-                    hy_now = hysteria2_opts(require_transport(self.config()))
-                    hy_port = int((hy_now or {}).get("port") or 0)
+                    tr_now = require_transport(self.config())
+                    office_now = bool(resolve_corporate_proxy(self.config()))
+                    dial_now = choose_dial(tr_now, office=office_now)
+                    awg_now = amneziawg_opts(tr_now)
+                    hy_now = hysteria2_opts(tr_now)
+                    udp_port = int(
+                        (awg_now or {}).get("port")
+                        or (hy_now or {}).get("port")
+                        or 0
+                    )
                 except Exception:  # noqa: BLE001
-                    hy_port = 0
-                if hy_port and hy_port != 443:
+                    dial_now, udp_port = "hysteria2", 0
+                proto = "AmneziaWG" if dial_now == "amneziawg" else "Hysteria2"
+                if udp_port and udp_port != 443:
                     live = foreign_vpn_live()
                     if live:
                         self.log(
-                            f"Hysteria2 UDP :{hy_port} не дошёл до VPS. "
+                            f"{proto} UDP :{udp_port} не дошёл до VPS. "
                             "Чужой туннель поднят ("
                             + ", ".join(live)
-                            + ") — его split default перехватывает QUIC."
+                            + ") — его split default перехватывает UDP."
                         )
                     else:
                         self.log(
-                            f"Hysteria2 UDP :{hy_port} не дошёл до VPS. "
+                            f"{proto} UDP :{udp_port} не дошёл до VPS. "
                             "Проверьте, что на VPS слушает UDP и порт открыт в панели хостинга."
                         )
                 else:
                     self.log(
-                        "Hysteria2 не дошёл до VPS (QUIC timeout). "
-                        "UDP :443 часто режет домашний DPI — нужен порт 8443"
+                        f"{proto} не дошёл до VPS (UDP timeout). "
+                        "UDP :443 часто режет домашний DPI"
                     )
             else:
                 try:
                     cfg = self.config()
                     office = bool(resolve_corporate_proxy(cfg))
-                    hy = hysteria2_opts(require_transport(cfg))
+                    tr = require_transport(cfg)
+                    dial_now = choose_dial(tr, office=office)
+                    hy = hysteria2_opts(tr)
+                    awg = amneziawg_opts(tr)
                 except Exception:  # noqa: BLE001
-                    office, hy = False, None
-                if not office and not hy:
+                    office, hy, awg, dial_now = False, None, None, "vless-reality"
+                if not office and not hy and not awg and dial_now == "vless-reality":
                     self._exit_probe_hint = "need-hy2"
                     self.log(
                         "домашний DPI съел Reality: TCP до VPS живой, "
-                        "внутри туннеля — тишина. Без Hysteria2 дома интернет "
+                        "внутри туннеля — тишина. Без Hysteria2 или AmneziaWG дома интернет "
                         "не заработает. На VPS: bash modes/vps/enable_hysteria2.sh "
-                        "— пароль вставьте в Настройки → Hysteria2 (или "
-                        "transport.hysteria2.password в config.json)"
+                        "или bash modes/vps/enable_amneziawg.sh"
                     )
             self._log_singbox_tail("после неудачной проверки")
             return
@@ -1358,7 +1445,7 @@ class OpsClient:
         elif getattr(self, "_pending_win_tun", False):
             self._pending_win_tun = False
             allow = list(getattr(self, "_pending_allow", []) or [])
-            self.log("Hysteria2 живой — ставлю TUN split default")
+            self.log("выход живой — ставлю TUN split default")
             self._install_win_tun_routes(allow)
         try:
             cfg = self.config()
@@ -1416,7 +1503,7 @@ class OpsClient:
             dial = choose_dial(require_transport(cfg), office=office)
         except Exception:  # noqa: BLE001
             dial = "vless-reality"
-        label = "Hysteria2" if dial == "hysteria2" else "VLESS+Reality"
+        label = dial_label(dial)
         self.log(
             f"подключение: {label}, TUN={'вкл' if tun else 'выкл'}"
             f", защита при обрыве={'вкл' if ks else 'выкл'}"
@@ -1654,17 +1741,24 @@ class OpsClient:
             uuid = str(tr.get("uuid") or "")
             uuid_show = (uuid[:8] + "…") if len(uuid) > 8 else (uuid or "(empty)")
             hy = hysteria2_opts(tr)
+            awg = amneziawg_opts(tr) if isinstance(tr, dict) else None
             office = bool(info["corporate_proxy"])
             dial = choose_dial(tr if isinstance(tr, dict) else {}, office=office)
             lines.append(
                 f"transport       = {info['transport_type'] or 'vless-reality'} "
-                f"uuid={uuid_show} sni={tr.get('server_name') or ''}"
+                f"uuid={uuid_show} sni={tr.get('server_name') or ''} "
+                f"dial={dial}"
             )
             if hy:
                 lines.append(
                     f"hysteria2       = udp :{hy['port']} sni={hy['server_name']}"
                     f"{' obfs=salamander' if hy.get('obfs_password') else ''} "
                     f"(дом={'вкл' if dial == 'hysteria2' else 'офис → Reality'})"
+                )
+            if awg:
+                lines.append(
+                    f"amneziawg       = udp :{awg['port']} {awg.get('address') or ''} "
+                    f"(дом={'вкл' if dial == 'amneziawg' else 'не выбран'})"
                 )
             lines.append(f"proxy_bypass    = {info['proxy_bypass_n']} entries")
             if info["sing_box_path"]:

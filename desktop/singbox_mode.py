@@ -14,7 +14,15 @@ from typing import Any, Callable
 
 from desktop import procutil
 from desktop.branding import APP_EXE, APP_EXE_LEGACY
-from desktop.config_io import HY2_DEFAULT_SNI, REALITY_DEFAULT_SNI, normalize_dial, normalize_hy2_sni
+from desktop.config_io import (
+    AWG_DEFAULT_ADDRESS,
+    AWG_DEFAULT_MTU,
+    AWG_DEFAULT_PORT,
+    HY2_DEFAULT_SNI,
+    REALITY_DEFAULT_SNI,
+    normalize_dial,
+    normalize_hy2_sni,
+)
 from desktop.tun import (
     RUSTDESK_PORTS,
     TUN_IFACE_NAME,
@@ -22,6 +30,7 @@ from desktop.tun import (
     _direct_python_paths,
     _resolve_host,
     detect_bind_interface,
+    iface_ipv4s,
 )
 from lib.http_via_socks import bypass_to_singbox
 
@@ -80,6 +89,8 @@ def hy2_outbound(
         "server": server_host,
         "server_port": int(hy["port"]),
         "password": hy["password"],
+        # Home UDP is lossy (DPI / Amnezia WFP). Default QUIC handshake is 5s.
+        "connect_timeout": "15s",
         "tls": {
             "enabled": True,
             "server_name": hy["server_name"],
@@ -90,9 +101,166 @@ def hy2_outbound(
     obfs = str(hy.get("obfs_password") or "").strip()
     if obfs:
         outbound["obfs"] = {"type": "salamander", "password": obfs}
-    if bind_iface:
-        outbound["bind_interface"] = bind_iface
+    outbound.update(_udp_bind(bind_iface))
     return outbound
+
+
+def amneziawg_opts(tr: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Home UDP AmneziaWG. Empty keys mean the protocol is off."""
+    if not isinstance(tr, dict):
+        return None
+    raw = tr.get("amneziawg")
+    if not isinstance(raw, dict):
+        return None
+    priv = str(raw.get("private_key") or "").strip()
+    pub = str(raw.get("peer_public_key") or "").strip()
+    if not priv or not pub or "REPLACE" in priv.upper() or "REPLACE" in pub.upper():
+        return None
+    address = str(raw.get("address") or AWG_DEFAULT_ADDRESS).strip() or AWG_DEFAULT_ADDRESS
+    try:
+        port = int(raw.get("port") or AWG_DEFAULT_PORT)
+    except (TypeError, ValueError):
+        port = AWG_DEFAULT_PORT
+    try:
+        mtu = int(raw.get("mtu") or AWG_DEFAULT_MTU)
+    except (TypeError, ValueError):
+        mtu = AWG_DEFAULT_MTU
+    try:
+        keepalive = int(raw.get("keepalive") or 25)
+    except (TypeError, ValueError):
+        keepalive = 25
+
+    def _junk(name: str) -> int:
+        try:
+            return max(0, int(raw.get(name) or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    return {
+        "private_key": priv,
+        "peer_public_key": pub,
+        "pre_shared_key": str(raw.get("pre_shared_key") or "").strip(),
+        "address": address,
+        "port": max(1, min(65535, port)),
+        "mtu": max(1280, min(1500, mtu)),
+        "jc": _junk("jc"),
+        "jmin": _junk("jmin"),
+        "jmax": _junk("jmax"),
+        "s1": _junk("s1"),
+        "s2": _junk("s2"),
+        "h1": str(raw.get("h1") or "").strip(),
+        "h2": str(raw.get("h2") or "").strip(),
+        "h3": str(raw.get("h3") or "").strip(),
+        "h4": str(raw.get("h4") or "").strip(),
+        "keepalive": max(0, min(600, keepalive)),
+    }
+
+
+def awg_endpoint(
+    server_host: str,
+    opts: dict[str, Any],
+    *,
+    bind_iface: str = "",
+    tag: str = "proxy",
+) -> dict[str, Any]:
+    addresses = [
+        part.strip()
+        for part in str(opts.get("address") or AWG_DEFAULT_ADDRESS).split(",")
+        if part.strip()
+    ]
+    peer: dict[str, Any] = {
+        "address": server_host,
+        "port": int(opts["port"]),
+        "public_key": opts["peer_public_key"],
+        "allowed_ips": ["0.0.0.0/0", "::/0"],
+        "persistent_keepalive_interval": int(opts.get("keepalive") or 25),
+    }
+    psk = str(opts.get("pre_shared_key") or "").strip()
+    if psk:
+        peer["pre_shared_key"] = psk
+    endpoint: dict[str, Any] = {
+        "type": "wireguard",
+        "tag": tag,
+        "system": False,
+        "mtu": int(opts.get("mtu") or AWG_DEFAULT_MTU),
+        "address": addresses or [AWG_DEFAULT_ADDRESS],
+        "private_key": opts["private_key"],
+        "peers": [peer],
+    }
+    for junk in ("jc", "jmin", "jmax", "s1", "s2"):
+        val = int(opts.get(junk) or 0)
+        if val:
+            endpoint[junk] = val
+    for hdr in ("h1", "h2", "h3", "h4"):
+        val = str(opts.get(hdr) or "").strip()
+        if val:
+            endpoint[hdr] = val
+    endpoint.update(_udp_bind(bind_iface))
+    return endpoint
+
+
+def dial_label(dial: str) -> str:
+    if dial == "hysteria2":
+        return "Hysteria2"
+    if dial == "amneziawg":
+        return "AmneziaWG"
+    return "VLESS+Reality"
+
+
+def _dns_v12(
+    *,
+    docker_wsl_procs: list[str] | None = None,
+    bypass_suffixes: list[str] | None = None,
+    bypass_domains: list[str] | None = None,
+) -> dict[str, Any]:
+    """sing-box 1.12+ DNS (AWG fork). Official 1.11 still uses address: https://..."""
+    rules: list[dict[str, Any]] = []
+    if docker_wsl_procs:
+        rules.append({"process_name": docker_wsl_procs, "server": "dns-local"})
+    if bypass_suffixes:
+        rules.append({"domain_suffix": bypass_suffixes, "server": "dns-local"})
+    if bypass_domains:
+        rules.append({"domain": bypass_domains, "server": "dns-local"})
+    rules.append(
+        {
+            "domain_suffix": [".local", ".lan", ".internal", ".localhost"],
+            "server": "dns-local",
+        }
+    )
+    return {
+        "servers": [
+            {
+                "type": "https",
+                "tag": "dns-proxy",
+                "server": "1.1.1.1",
+                "path": "/dns-query",
+                "detour": "proxy",
+            },
+            {
+                "type": "local",
+                "tag": "dns-local",
+                "detour": "direct",
+            },
+        ],
+        "rules": rules,
+        "final": "dns-proxy",
+        "strategy": "prefer_ipv4",
+    }
+
+
+def _udp_bind(bind_iface: str) -> dict[str, Any]:
+    """Windows: bind the NIC IPv4. bind_interface by name drops Hy2 UDP."""
+    if not bind_iface:
+        return {}
+    if sys.platform == "win32":
+        ips = [
+            ip
+            for ip in iface_ipv4s(bind_iface)
+            if not ip.startswith(("169.254.", "0."))
+        ]
+        if ips:
+            return {"inet4_bind_address": ips[0]}
+    return {"bind_interface": bind_iface}
 
 
 def choose_dial(transport: dict[str, Any], *, office: bool) -> str:
@@ -134,6 +302,9 @@ def require_transport(cfg: dict[str, Any]) -> dict[str, Any]:
     hy = hysteria2_opts(tr)
     if hy:
         out["hysteria2"] = hy
+    awg = amneziawg_opts(tr)
+    if awg:
+        out["amneziawg"] = awg
     return out
 
 
@@ -161,8 +332,14 @@ class SingboxModeManager:
     def find_sing_box(self, explicit: str = "") -> Path | None:
         return self._tun_helper.find_sing_box(explicit)
 
+    def find_awg_sing_box(self) -> Path | None:
+        return self._tun_helper.find_awg_sing_box()
+
     def ensure_downloaded(self, proxy_url: str | None = None) -> Path:
         return self._tun_helper.ensure_downloaded(proxy_url=proxy_url)
+
+    def ensure_awg_downloaded(self, proxy_url: str | None = None) -> Path:
+        return self._tun_helper.ensure_awg_downloaded(proxy_url=proxy_url)
 
     def build_config(
         self,
@@ -204,6 +381,18 @@ class SingboxModeManager:
         office = bool(squid_host)
         dial = choose_dial(transport, office=office)
         hy = hysteria2_opts(transport) if dial == "hysteria2" else None
+        awg = amneziawg_opts(transport) if dial == "amneziawg" else None
+        if awg and not enable_tun and not use_office_proxy:
+            self.log(
+                f"дом: AmneziaWG UDP :{awg['port']} (обфускация handshake)"
+            )
+            return self._minimal_awg_config(
+                server_host=server_host,
+                awg=awg,
+                bind_iface=bind_iface,
+                socks_port=socks_port,
+                http_port=http_port,
+            )
         if hy and not enable_tun and not use_office_proxy:
             if dial == "hysteria2":
                 self.log(
@@ -234,7 +423,9 @@ class SingboxModeManager:
         proc_names = [
             "sing-box",
             "sing-box.exe",
+            "sing-box-awg",
             "ergoms-tun.exe",
+            "ergoms-tun-awg.exe",
             f"{APP_EXE}.exe",
             *[f"{name}.exe" for name in APP_EXE_LEGACY],
         ]
@@ -266,8 +457,16 @@ class SingboxModeManager:
         office = bool(squid_host)
         dial = choose_dial(transport, office=office)
         hy = hysteria2_opts(transport) if dial == "hysteria2" else None
-        vpn_port = int((hy or {}).get("port") or transport.get("port") or 443)
-        if dial == "hysteria2" and hy:
+        awg = amneziawg_opts(transport) if dial == "amneziawg" else None
+        vpn_port = int(
+            (awg or {}).get("port")
+            or (hy or {}).get("port")
+            or transport.get("port")
+            or 443
+        )
+        if dial == "amneziawg" and awg:
+            self.log(f"дом: AmneziaWG UDP :{awg['port']}")
+        elif dial == "hysteria2" and hy:
             self.log(f"дом: Hysteria2 UDP :{hy['port']} (Reality на этом Wi-Fi режет DPI)")
         elif office:
             self.log("офис: VLESS+Reality через Squid")
@@ -351,7 +550,7 @@ class SingboxModeManager:
                 }
             )
 
-        return {
+        box: dict[str, Any] = {
             "log": {
                 "level": "info",
                 "timestamp": True,
@@ -460,6 +659,23 @@ class SingboxModeManager:
                 ],
             },
         }
+        if awg:
+            box["dns"] = _dns_v12(
+                docker_wsl_procs=docker_wsl_procs,
+                bypass_suffixes=bypass_suffixes,
+                bypass_domains=bypass_domains,
+            )
+            box["endpoints"] = [
+                awg_endpoint(server_host, awg, bind_iface=bind_iface)
+            ]
+            box["outbounds"] = [
+                {
+                    "type": "direct",
+                    "tag": "direct",
+                    **({"bind_interface": bind_iface} if bind_iface else {}),
+                }
+            ]
+        return box
 
     def _minimal_hy2_config(
         self,
@@ -474,6 +690,12 @@ class SingboxModeManager:
         self.log("дом: Hy2 как в песочнице — без process/python route на handshake")
         if str(hy.get("obfs_password") or "").strip():
             self.log("дом: Hy2 salamander — QUIC Initial без открытого SNI")
+        bind = _udp_bind(bind_iface)
+        ip = str(bind.get("inet4_bind_address") or "")
+        if ip:
+            self.log(
+                f"дом: Hy2 UDP с {ip} (имя NIC на Windows глотает датаграммы)"
+            )
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         outbound = hy2_outbound(server_host, hy, bind_iface=bind_iface)
         return {
@@ -514,6 +736,60 @@ class SingboxModeManager:
                     "tag": "direct",
                     **({"bind_interface": bind_iface} if bind_iface else {}),
                 },
+            ],
+            "route": {
+                "auto_detect_interface": False,
+                **({"default_interface": bind_iface} if bind_iface else {}),
+                "final": "proxy",
+            },
+        }
+
+    def _minimal_awg_config(
+        self,
+        *,
+        server_host: str,
+        awg: dict[str, Any],
+        bind_iface: str,
+        socks_port: int,
+        http_port: int,
+    ) -> dict[str, Any]:
+        """SOCKS/HTTP only — TUN after handshake, same deferral as Hy2."""
+        self.log("дом: AmneziaWG как в песочнице — без TUN на handshake")
+        bind = _udp_bind(bind_iface)
+        ip = str(bind.get("inet4_bind_address") or "")
+        if ip:
+            self.log(f"дом: AWG UDP с {ip}")
+        self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        return {
+            "log": {
+                "level": "info",
+                "timestamp": True,
+                "output": str(self.log_path).replace("\\", "/"),
+            },
+            "dns": _dns_v12(),
+            "inbounds": [
+                {
+                    "type": "socks",
+                    "tag": "socks-in",
+                    "listen": "127.0.0.1",
+                    "listen_port": int(socks_port),
+                },
+                {
+                    "type": "http",
+                    "tag": "http-in",
+                    "listen": "127.0.0.1",
+                    "listen_port": int(http_port),
+                },
+            ],
+            "endpoints": [
+                awg_endpoint(server_host, awg, bind_iface=bind_iface)
+            ],
+            "outbounds": [
+                {
+                    "type": "direct",
+                    "tag": "direct",
+                    **({"bind_interface": bind_iface} if bind_iface else {}),
+                }
             ],
             "route": {
                 "auto_detect_interface": False,
@@ -615,7 +891,10 @@ class SingboxModeManager:
         office = bool((corporate_proxy or "").strip())
         dial = choose_dial(transport, office=office)
         hy = hysteria2_opts(transport) if dial == "hysteria2" else None
-        if hy:
+        awg = amneziawg_opts(transport) if dial == "amneziawg" else None
+        if awg:
+            dest = f"AmneziaWG {server_host}:{awg['port']}/udp"
+        elif hy:
             dest = f"Hysteria2 {server_host}:{hy['port']}/udp"
         else:
             dest = f"VLESS {server_host}:{transport['port']}"
@@ -744,7 +1023,13 @@ class SingboxModeManager:
         if pid:
             targets.append(pid)
         for orphan in procutil.pids_named(
-            "sing-box.exe", "sing-box", "ergoms-tun.exe", "ergoms-tun"
+            "sing-box.exe",
+            "sing-box",
+            "sing-box-awg",
+            "ergoms-tun.exe",
+            "ergoms-tun",
+            "ergoms-tun-awg.exe",
+            "ergoms-tun-awg",
         ):
             if orphan not in targets:
                 targets.append(orphan)
@@ -910,7 +1195,13 @@ class SingboxModeManager:
 
     def _find_pid(self) -> int | None:
         for pid in procutil.pids_named(
-            "sing-box.exe", "sing-box", "ergoms-tun.exe", "ergoms-tun"
+            "sing-box.exe",
+            "sing-box",
+            "sing-box-awg",
+            "ergoms-tun.exe",
+            "ergoms-tun",
+            "ergoms-tun-awg.exe",
+            "ergoms-tun-awg",
         ):
             return pid
         return None

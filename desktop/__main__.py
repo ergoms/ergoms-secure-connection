@@ -27,6 +27,7 @@ COMMANDS = (
     "reverse-on",
     "reverse-off",
     "download-sing-box",
+    "download-sing-box-awg",
     "sing-box",
     "docker-env",
     "docker-test",
@@ -72,7 +73,8 @@ def _show_help() -> int:
   sandbox              песочница (мимо TUN/Amnezia; прямой Ethernet, свои :18080)
   tun-on / tun-off     TUN в процессе sing-box
   reverse-on / reverse-off  SSH с VPS на этот ПК (через SOCKS, не :22 офиса)
-  download-sing-box    скачать sing-box в tools/
+  download-sing-box    скачать sing-box 1.11 в tools/
+  download-sing-box-awg  скачать AWG-сборку sing-box (AmneziaWG)
   docker-env           var/docker.env + compose (прокси для контейнеров)
   docker-test          проверка: curl из контейнера через мост
   watch                следить и переподключать (Ctrl+C)
@@ -83,7 +85,7 @@ def _show_help() -> int:
   gui                  окно Qt Quick (нужен дисплей, poetry install --extras gui)
   help
 
-Транспорт: офис — VLESS+Reality через Squid; дом — Hysteria2 UDP :8443
+Транспорт: офис — VLESS+Reality через Squid; дом — Hysteria2 или AmneziaWG
 
 Запуск:
   python -m desktop <cmd> …
@@ -253,6 +255,8 @@ def _run_cli(cmd: str, rest: list[str]) -> int:
             client.disable_reverse_ssh()
         elif cmd in ("download-sing-box", "sing-box"):
             client.download_sing_box()
+        elif cmd in ("download-sing-box-awg", "sing-box-awg"):
+            client.download_awg_sing_box()
         elif cmd == "docker-env":
             client.docker_env()
         elif cmd == "docker-test":

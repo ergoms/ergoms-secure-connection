@@ -8,7 +8,11 @@
 
 **дом:** программа → sing-box → VPS UDP :8443 (Hysteria2) → интернет
 
+**дом (AmneziaWG):** программа → sing-box AWG → VPS UDP :51820 (AmneziaWG) → интернет
+
 Домашний провайдер часто глотает TLS Reality; Hysteria2 — QUIC. Без **salamander** TSPU читает SNI из QUIC Initial и рвёт handshake (`timeout: no recent network activity`). Офисный Squid UDP не проводит, поэтому Reality там остаётся. На уже установленном VPS: `bash modes/vps/enable_hysteria2.sh` (пароль + `HY2_OBFS` в `credentials.env` → `transport.hysteria2`).
+
+AmneziaWG — третий домашний dial (`transport.dial=amneziawg`). Официальный sing-box 1.11.15 его не говорит, клиент качает отдельную AWG-сборку (`download-sing-box-awg`, `tools/sing-box-awg` / `ergoms-tun-awg.exe`). На VPS это **отдельный** сервис рядом с sing-box, не замена Reality: `bash modes/vps/enable_amneziawg.sh`. Чужой туннель AmneziaVPN по-прежнему конфликт; наш AWG идёт gVisor-endpoint внутри sing-box и свой `wireguard` NIC не поднимает.
 
 **Что проверено**
 
@@ -30,6 +34,14 @@ bash modes/vps/bootstrap_singbox_443.sh
 Скрипт напечатает блок `server` + `transport` для `config.json`.
 
 Проверка: `systemctl status sing-box`, `ss -lntp | grep ':443'`.
+
+Дом, AmneziaWG (после bootstrap):
+
+```bash
+bash modes/vps/enable_amneziawg.sh
+```
+
+Скрипт напечатает `transport.amneziawg` и кусок `.conf` для вставки в настройки клиента. Проверка: `systemctl status ergoms-amneziawg`, `ss -lunp | grep ':51820'`. В панели хостинга открыть **UDP 51820**.
 
 Подсказки: `.\deploy.ps1` / `./deploy.sh`.
 
@@ -92,7 +104,7 @@ bash modes/vps/bootstrap_singbox_443.sh
 | Ключ | Назначение |
 |------|------------|
 | `server.host` | IP/hostname VPS |
-| `transport` | VLESS: uuid, public_key, short_id, `server_name` (Reality dest). Дом: `hysteria2.password`, `obfs_password`, свой `server_name` |
+| `transport` | VLESS: uuid, public_key, short_id, `server_name` (Reality dest). Дом: `hysteria2.password`, `obfs_password`, свой `server_name`. Либо `amneziawg` (ключи, UDP-порт, Jc/H*) |
 | `socks_scope` | `full` или `github` (область PAC) |
 | `tun.enabled` / `tun.elevate` | TUN вместе с `on` (по умолчанию вкл.), запрос прав |
 | `kill_switch` | при обрыве резать интернет (по умолчанию вкл.; нужен TUN) |
@@ -128,7 +140,8 @@ bash modes/vps/bootstrap_singbox_443.sh
 | `tun-on` / `tun-off` | TUN |
 | `reverse-on` / `reverse-off` | SSH с VPS на этот ПК |
 | `encrypt` / `decrypt` | Зашифровать / расшифровать конфиг |
-| `download-sing-box` | Скачать бинарник в `tools/` |
+| `download-sing-box` | Скачать официальный sing-box 1.11 в `tools/` |
+| `download-sing-box-awg` | Скачать AWG-сборку (AmneziaWG) |
 | `docker-env` / `docker-test` | Прокси для контейнеров |
 | `install-service` / `uninstall-service` | служба VPN (Windows / Linux) |
 | `gui` | Окно |
