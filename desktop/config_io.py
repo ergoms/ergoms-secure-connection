@@ -23,6 +23,9 @@ REALITY_DEFAULT_SNI = "www.cloudflare.com"
 # QUIC Initial SNI is plaintext to TSPU. Cloudflare is on the RU block/throttle
 # list; do not reuse Reality dest here.
 HY2_DEFAULT_SNI = "www.microsoft.com"
+AWG_DEFAULT_PORT = 51820
+AWG_DEFAULT_ADDRESS = "10.66.66.2/32"
+AWG_DEFAULT_MTU = 1280
 _BLOCKED_HY2_SNI = frozenset(
     {
         "www.cloudflare.com",
@@ -35,13 +38,107 @@ _BLOCKED_HY2_SNI = frozenset(
 
 
 def normalize_dial(value: Any) -> str:
-    """Reality or Hysteria2. Legacy `auto` becomes Hysteria2 (home)."""
+    """Reality, Hysteria2, or AmneziaWG. Legacy `auto` becomes Hysteria2 (home)."""
     raw = str(value or "").strip().lower()
     if raw in ("vless", "reality", "vless-reality"):
         return "vless-reality"
     if raw in ("hy2", "hysteria2"):
         return "hysteria2"
+    if raw in ("amneziawg", "awg", "wireguard", "wg"):
+        return "amneziawg"
     return "hysteria2"
+
+
+def default_amneziawg_block() -> dict[str, Any]:
+    return {
+        "port": AWG_DEFAULT_PORT,
+        "private_key": "",
+        "peer_public_key": "",
+        "pre_shared_key": "",
+        "address": AWG_DEFAULT_ADDRESS,
+        "mtu": AWG_DEFAULT_MTU,
+        "jc": 0,
+        "jmin": 0,
+        "jmax": 0,
+        "s1": 0,
+        "s2": 0,
+        "h1": "",
+        "h2": "",
+        "h3": "",
+        "h4": "",
+        "keepalive": 25,
+    }
+
+
+def parse_amnezia_conf(text: str) -> dict[str, Any]:
+    """Parse wg-quick / Amnezia .conf into host + amneziawg fields."""
+    section = ""
+    iface: dict[str, str] = {}
+    peer: dict[str, str] = {}
+    for raw in str(text or "").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or line.startswith(";"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section = line[1:-1].strip().lower()
+            continue
+        if "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key_l = key.strip().lower()
+        val_s = val.strip().strip('"').strip("'")
+        if section == "interface":
+            iface[key_l] = val_s
+        elif section == "peer":
+            peer[key_l] = val_s
+
+    def _int_field(src: dict[str, str], name: str, default: int = 0) -> int:
+        raw = str(src.get(name) or "").strip()
+        if not raw:
+            return default
+        try:
+            return int(raw.split()[0], 10)
+        except ValueError:
+            return default
+
+    endpoint = str(peer.get("endpoint") or "").strip()
+    host = ""
+    port = AWG_DEFAULT_PORT
+    if endpoint:
+        if endpoint.startswith("["):
+            br = endpoint.find("]")
+            host = endpoint[1:br].strip() if br > 0 else ""
+            rest = endpoint[br + 1 :].lstrip(":") if br > 0 else ""
+            port = _as_int(rest, AWG_DEFAULT_PORT)
+        else:
+            host, sep, port_s = endpoint.rpartition(":")
+            if sep:
+                host = host.strip()
+                port = _as_int(port_s, AWG_DEFAULT_PORT)
+            else:
+                host = endpoint
+    address = str(iface.get("address") or AWG_DEFAULT_ADDRESS).split(",")[0].strip()
+    mtu = _int_field(iface, "mtu", AWG_DEFAULT_MTU)
+    keepalive = _int_field(peer, "persistentkeepalive", 25) or 25
+    return {
+        "host": host,
+        "port": max(1, min(65535, port)),
+        "private_key": str(iface.get("privatekey") or "").strip(),
+        "peer_public_key": str(peer.get("publickey") or "").strip(),
+        "pre_shared_key": str(peer.get("presharedkey") or "").strip(),
+        "address": address or AWG_DEFAULT_ADDRESS,
+        "mtu": max(1280, min(1500, mtu or AWG_DEFAULT_MTU)),
+        "jc": _int_field(iface, "jc"),
+        "jmin": _int_field(iface, "jmin"),
+        "jmax": _int_field(iface, "jmax"),
+        "s1": _int_field(iface, "s1"),
+        "s2": _int_field(iface, "s2"),
+        "h1": str(iface.get("h1") or "").strip(),
+        "h2": str(iface.get("h2") or "").strip(),
+        "h3": str(iface.get("h3") or "").strip(),
+        "h4": str(iface.get("h4") or "").strip(),
+        "keepalive": max(0, min(600, keepalive)),
+    }
 
 
 def normalize_hy2_sni(value: Any, *, fallback: str = HY2_DEFAULT_SNI) -> str:
@@ -186,6 +283,7 @@ def default_config_template() -> dict[str, Any]:
                 "obfs_password": "",
                 "insecure": True,
             },
+            "amneziawg": default_amneziawg_block(),
         },
         "reverse_ssh": {
             "enabled": True,
@@ -356,6 +454,24 @@ def ensure_config_defaults(cfg: dict[str, Any]) -> dict[str, Any]:
     hy.setdefault("insecure", True)
     hy["insecure"] = _as_bool(hy.get("insecure"), True)
     hy["port"] = max(1, min(65535, _as_int(hy.get("port"), 8443)))
+    awg = transport.get("amneziawg")
+    if not isinstance(awg, dict):
+        awg = {}
+        transport["amneziawg"] = awg
+    tmpl_awg = default_amneziawg_block()
+    for key, val in tmpl_awg.items():
+        awg.setdefault(key, val)
+    awg["port"] = max(1, min(65535, _as_int(awg.get("port"), AWG_DEFAULT_PORT)))
+    awg["mtu"] = max(1280, min(1500, _as_int(awg.get("mtu"), AWG_DEFAULT_MTU)))
+    awg["keepalive"] = max(0, min(600, _as_int(awg.get("keepalive"), 25)))
+    for junk in ("jc", "jmin", "jmax", "s1", "s2"):
+        awg[junk] = max(0, _as_int(awg.get(junk), 0))
+    awg["private_key"] = str(awg.get("private_key") or "").strip()
+    awg["peer_public_key"] = str(awg.get("peer_public_key") or "").strip()
+    awg["pre_shared_key"] = str(awg.get("pre_shared_key") or "").strip()
+    awg["address"] = str(awg.get("address") or AWG_DEFAULT_ADDRESS).strip() or AWG_DEFAULT_ADDRESS
+    for hdr in ("h1", "h2", "h3", "h4"):
+        awg[hdr] = str(awg.get(hdr) or "").strip()
 
     rev = out.setdefault("reverse_ssh", {})
     if not isinstance(rev, dict):

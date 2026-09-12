@@ -1,0 +1,287 @@
+#!/usr/bin/env bash
+# Add AmneziaWG (UDP :51820) next to existing VLESS+Reality and Hysteria2.
+# Does not replace /usr/local/bin/sing-box or touch TCP :443 / UDP :8443.
+set -euo pipefail
+
+if [[ "$(id -u)" -ne 0 ]]; then
+  echo "Run as root" >&2
+  exit 1
+fi
+
+STATE_DIR=/var/lib/ops-content-singbox
+CREDS="$STATE_DIR/credentials.env"
+AWG_DIR=/etc/amnezia/amneziawg
+CONF="$AWG_DIR/awg0.conf"
+UNIT=/etc/systemd/system/ergoms-amneziawg.service
+GO_VERSION="${GO_VERSION:-1.24.6}"
+AWG_PORT_OVERRIDE="${AWG_PORT:-}"
+CLIENT_ADDR_DEFAULT="10.66.66.2/32"
+SERVER_ADDR_DEFAULT="10.66.66.1/24"
+
+mkdir -p "$STATE_DIR" "$AWG_DIR"
+touch "$CREDS"
+chmod 600 "$CREDS" "$AWG_DIR"
+
+# shellcheck disable=SC1090
+source "$CREDS"
+
+if [[ -n "$AWG_PORT_OVERRIDE" ]]; then
+  AWG_PORT="$AWG_PORT_OVERRIDE"
+fi
+AWG_PORT="${AWG_PORT:-51820}"
+if [[ "$AWG_PORT" == "443" ]]; then
+  echo "WARN: AWG_PORT=443 is Reality TCP; using UDP 51820"
+  AWG_PORT=51820
+fi
+if [[ "$AWG_PORT" == "8443" ]]; then
+  echo "WARN: UDP 8443 is Hysteria2; using UDP 51820"
+  AWG_PORT=51820
+fi
+
+arch="$(uname -m)"
+case "$arch" in
+  x86_64|amd64) go_arch=amd64 ;;
+  aarch64|arm64) go_arch=arm64 ;;
+  *)
+    echo "Unsupported arch: $arch" >&2
+    exit 1
+    ;;
+esac
+
+need_go=0
+if ! command -v go >/dev/null 2>&1; then
+  need_go=1
+else
+  go_maj="$(go env GOVERSION 2>/dev/null | sed -n 's/^go\([0-9]*\).*/\1/p')"
+  if [[ -z "$go_maj" || "$go_maj" -lt 1 ]]; then
+    need_go=1
+  fi
+fi
+if [[ "$need_go" == 1 ]]; then
+  echo "==> Installing Go ${GO_VERSION} (${go_arch})"
+  tmp="$(mktemp -d)"
+  curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${go_arch}.tar.gz" -o "$tmp/go.tgz"
+  rm -rf /usr/local/go
+  tar -C /usr/local -xzf "$tmp/go.tgz"
+  rm -rf "$tmp"
+fi
+export PATH="/usr/local/go/bin:${PATH:-/usr/bin}"
+
+install_awg_bins() {
+  if command -v amneziawg-go >/dev/null 2>&1 && command -v awg >/dev/null 2>&1 && command -v awg-quick >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "==> Building amneziawg-go + amneziawg-tools"
+  apt-get update -y >/dev/null 2>&1 || true
+  DEBIAN_FRONTEND=noninteractive apt-get install -y git make gcc >/dev/null 2>&1 || true
+  src="$(mktemp -d)"
+  git clone --depth 1 https://github.com/amnezia-vpn/amneziawg-go "$src/go"
+  ( cd "$src/go" && make )
+  bin="$(find "$src/go" -type f -name amneziawg-go | head -n1)"
+  [[ -n "$bin" && -x "$bin" ]] || { echo "amneziawg-go build failed" >&2; exit 1; }
+  install -m 755 "$bin" /usr/local/bin/amneziawg-go
+  git clone --depth 1 https://github.com/amnezia-vpn/amneziawg-tools "$src/tools"
+  ( cd "$src/tools/src" && make && make install )
+  rm -rf "$src"
+  command -v awg >/dev/null 2>&1 || { echo "awg missing after tools install" >&2; exit 1; }
+  command -v awg-quick >/dev/null 2>&1 || { echo "awg-quick missing after tools install" >&2; exit 1; }
+}
+
+install_awg_bins
+
+rand_u32() {
+  python3 - <<'PY'
+import secrets
+print(secrets.randbelow(0xFFFFFFFE) + 1)
+PY
+}
+
+upsert_cred() {
+  local key="$1" value="$2"
+  if grep -q "^${key}=" "$CREDS" 2>/dev/null; then
+    sed -i "s|^${key}=.*|${key}=${value}|" "$CREDS"
+  else
+    printf '%s=%s\n' "$key" "$value" >>"$CREDS"
+  fi
+}
+
+if [[ -z "${AWG_SERVER_PRIVATE:-}" ]]; then
+  AWG_SERVER_PRIVATE="$(awg genkey)"
+fi
+AWG_SERVER_PUBLIC="$(printf '%s\n' "$AWG_SERVER_PRIVATE" | awg pubkey)"
+if [[ -z "${AWG_CLIENT_PRIVATE:-}" ]]; then
+  AWG_CLIENT_PRIVATE="$(awg genkey)"
+fi
+AWG_CLIENT_PUBLIC="$(printf '%s\n' "$AWG_CLIENT_PRIVATE" | awg pubkey)"
+if [[ -z "${AWG_PSK:-}" ]]; then
+  AWG_PSK="$(awg genpsk)"
+fi
+AWG_ADDRESS_SERVER="${AWG_ADDRESS_SERVER:-$SERVER_ADDR_DEFAULT}"
+AWG_ADDRESS_CLIENT="${AWG_ADDRESS_CLIENT:-$CLIENT_ADDR_DEFAULT}"
+
+if [[ -z "${AWG_JC:-}" || "$AWG_JC" == "0" ]]; then
+  AWG_JC="$(python3 -c 'import secrets; print(secrets.randbelow(8)+3)')"
+fi
+if [[ -z "${AWG_JMIN:-}" || "$AWG_JMIN" == "0" ]]; then
+  AWG_JMIN="$(python3 -c 'import secrets; print(secrets.randbelow(25)+40)')"
+fi
+if [[ -z "${AWG_JMAX:-}" || "$AWG_JMAX" == "0" ]]; then
+  AWG_JMAX="$(python3 -c "print($AWG_JMIN + 20 + (__import__('secrets').randbelow(40)))")"
+fi
+if [[ -z "${AWG_S1:-}" || "$AWG_S1" == "0" ]]; then
+  AWG_S1="$(python3 -c 'import secrets; print(secrets.randbelow(80)+15)')"
+fi
+if [[ -z "${AWG_S2:-}" || "$AWG_S2" == "0" ]]; then
+  AWG_S2="$(python3 -c 'import secrets; print(secrets.randbelow(80)+15)')"
+fi
+if [[ -z "${AWG_H1:-}" ]]; then AWG_H1="$(rand_u32)"; fi
+if [[ -z "${AWG_H2:-}" ]]; then AWG_H2="$(rand_u32)"; fi
+if [[ -z "${AWG_H3:-}" ]]; then AWG_H3="$(rand_u32)"; fi
+if [[ -z "${AWG_H4:-}" ]]; then AWG_H4="$(rand_u32)"; fi
+
+WAN_IFACE="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="dev") {print $(i+1); exit}}')"
+WAN_IFACE="${WAN_IFACE:-eth0}"
+
+upsert_cred AWG_PORT "$AWG_PORT"
+upsert_cred AWG_SERVER_PRIVATE "$AWG_SERVER_PRIVATE"
+upsert_cred AWG_SERVER_PUBLIC "$AWG_SERVER_PUBLIC"
+upsert_cred AWG_CLIENT_PRIVATE "$AWG_CLIENT_PRIVATE"
+upsert_cred AWG_CLIENT_PUBLIC "$AWG_CLIENT_PUBLIC"
+upsert_cred AWG_PSK "$AWG_PSK"
+upsert_cred AWG_ADDRESS_SERVER "$AWG_ADDRESS_SERVER"
+upsert_cred AWG_ADDRESS_CLIENT "$AWG_ADDRESS_CLIENT"
+upsert_cred AWG_JC "$AWG_JC"
+upsert_cred AWG_JMIN "$AWG_JMIN"
+upsert_cred AWG_JMAX "$AWG_JMAX"
+upsert_cred AWG_S1 "$AWG_S1"
+upsert_cred AWG_S2 "$AWG_S2"
+upsert_cred AWG_H1 "$AWG_H1"
+upsert_cred AWG_H2 "$AWG_H2"
+upsert_cred AWG_H3 "$AWG_H3"
+upsert_cred AWG_H4 "$AWG_H4"
+
+echo "==> Writing $CONF (iface $WAN_IFACE, UDP :$AWG_PORT)"
+cat >"$CONF" <<EOF
+[Interface]
+Address = ${AWG_ADDRESS_SERVER}
+ListenPort = ${AWG_PORT}
+PrivateKey = ${AWG_SERVER_PRIVATE}
+Jc = ${AWG_JC}
+Jmin = ${AWG_JMIN}
+Jmax = ${AWG_JMAX}
+S1 = ${AWG_S1}
+S2 = ${AWG_S2}
+H1 = ${AWG_H1}
+H2 = ${AWG_H2}
+H3 = ${AWG_H3}
+H4 = ${AWG_H4}
+PostUp = iptables -A FORWARD -i awg0 -j ACCEPT; iptables -A FORWARD -o awg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o ${WAN_IFACE} -j MASQUERADE
+PostDown = iptables -D FORWARD -i awg0 -j ACCEPT; iptables -D FORWARD -o awg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o ${WAN_IFACE} -j MASQUERADE
+
+[Peer]
+PublicKey = ${AWG_CLIENT_PUBLIC}
+PresharedKey = ${AWG_PSK}
+AllowedIPs = ${AWG_ADDRESS_CLIENT}
+EOF
+chmod 600 "$CONF"
+
+sysctl -w net.ipv4.ip_forward=1 >/dev/null
+mkdir -p /etc/sysctl.d
+printf 'net.ipv4.ip_forward=1\n' >/etc/sysctl.d/99-ergoms-awg.conf
+
+AWG_QUICK_BIN="$(command -v awg-quick)"
+cat >"$UNIT" <<EOF
+[Unit]
+Description=ERGOMS SECURE CONNECTION AmneziaWG
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=${AWG_QUICK_BIN} up awg0
+ExecStop=${AWG_QUICK_BIN} down awg0
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+if command -v ufw >/dev/null 2>&1; then
+  ufw allow "${AWG_PORT}/udp" || true
+fi
+if command -v firewall-cmd >/dev/null 2>&1; then
+  firewall-cmd --permanent --add-port="${AWG_PORT}/udp" || true
+  firewall-cmd --reload || true
+fi
+iptables -C INPUT -p udp --dport "$AWG_PORT" -j ACCEPT 2>/dev/null \
+  || iptables -I INPUT -p udp --dport "$AWG_PORT" -j ACCEPT || true
+
+systemctl daemon-reload
+systemctl enable ergoms-amneziawg.service
+if systemctl is-active --quiet ergoms-amneziawg.service; then
+  systemctl restart ergoms-amneziawg.service
+else
+  systemctl start ergoms-amneziawg.service
+fi
+sleep 1
+ss -lunp 2>/dev/null | grep -E ":${AWG_PORT}\\b" || echo "WARN: UDP :$AWG_PORT not listening"
+
+python3 - "$AWG_PORT" "$AWG_CLIENT_PRIVATE" "$AWG_SERVER_PUBLIC" "$AWG_PSK" \
+  "$AWG_ADDRESS_CLIENT" "$AWG_JC" "$AWG_JMIN" "$AWG_JMAX" "$AWG_S1" "$AWG_S2" \
+  "$AWG_H1" "$AWG_H2" "$AWG_H3" "$AWG_H4" <<'PY'
+import json, sys
+(
+    port, priv, pub, psk, addr, jc, jmin, jmax, s1, s2, h1, h2, h3, h4
+) = sys.argv[1:]
+blob = {
+    "port": int(port),
+    "private_key": priv,
+    "peer_public_key": pub,
+    "pre_shared_key": psk,
+    "address": addr,
+    "mtu": 1280,
+    "jc": int(jc),
+    "jmin": int(jmin),
+    "jmax": int(jmax),
+    "s1": int(s1),
+    "s2": int(s2),
+    "h1": h1,
+    "h2": h2,
+    "h3": h3,
+    "h4": h4,
+    "keepalive": 25,
+}
+print("\n--- transport.amneziawg ---")
+print(json.dumps({"amneziawg": blob}, indent=2))
+print("\n--- client .conf ---")
+print(f"""[Interface]
+PrivateKey = {priv}
+Address = {addr}
+MTU = 1280
+Jc = {jc}
+Jmin = {jmin}
+Jmax = {jmax}
+S1 = {s1}
+S2 = {s2}
+H1 = {h1}
+H2 = {h2}
+H3 = {h3}
+H4 = {h4}
+
+[Peer]
+PublicKey = {pub}
+PresharedKey = {psk}
+Endpoint = YOUR_VPS_IP:{port}
+AllowedIPs = 0.0.0.0/0, ::/0
+PersistentKeepalive = 25
+""")
+PY
+
+cat <<EOF
+
+========================================================================
+OK: AmneziaWG UDP :${AWG_PORT} (sing-box Reality/Hy2 не трогали)
+Ключи также в $CREDS. В клиенте: протокол AWG, вставьте .conf.
+На VPS в панели хостинга откройте UDP ${AWG_PORT}.
+========================================================================
+EOF

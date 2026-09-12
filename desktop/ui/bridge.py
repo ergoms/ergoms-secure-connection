@@ -21,6 +21,9 @@ from desktop.branding import ENV_RESUME, env
 from desktop.client import OpsClient
 from desktop.config_crypto import MAGIC, decrypt_config
 from desktop.config_io import (
+    AWG_DEFAULT_ADDRESS,
+    AWG_DEFAULT_MTU,
+    AWG_DEFAULT_PORT,
     CORPORATE_BYPASS_PRESET,
     CORPORATE_PROXY_PRESET,
     HY2_DEFAULT_SNI,
@@ -36,6 +39,7 @@ from desktop.config_io import (
     load_config,
     normalize_dial,
     normalize_hy2_sni,
+    parse_amnezia_conf,
     save_config,
 )
 from desktop.paths import Paths, gui_command
@@ -455,6 +459,24 @@ class GuiBridge(QObject):
             "hy2ServerName", normalize_hy2_sni(hy.get("server_name"))
         )
         self._settings.insert("hy2Obfs", str(hy.get("obfs_password") or ""))
+        awg = tr.get("amneziawg") if isinstance(tr.get("amneziawg"), dict) else {}
+        self._settings.insert("awgPrivateKey", str(awg.get("private_key") or ""))
+        self._settings.insert("awgPeerPublicKey", str(awg.get("peer_public_key") or ""))
+        self._settings.insert("awgPresharedKey", str(awg.get("pre_shared_key") or ""))
+        self._settings.insert(
+            "awgAddress", str(awg.get("address") or AWG_DEFAULT_ADDRESS)
+        )
+        self._settings.insert("awgPort", str(awg.get("port") or AWG_DEFAULT_PORT))
+        self._settings.insert("awgMtu", str(awg.get("mtu") or AWG_DEFAULT_MTU))
+        self._settings.insert("awgJc", str(awg.get("jc") or 0))
+        self._settings.insert("awgJmin", str(awg.get("jmin") or 0))
+        self._settings.insert("awgJmax", str(awg.get("jmax") or 0))
+        self._settings.insert("awgS1", str(awg.get("s1") or 0))
+        self._settings.insert("awgS2", str(awg.get("s2") or 0))
+        self._settings.insert("awgH1", str(awg.get("h1") or ""))
+        self._settings.insert("awgH2", str(awg.get("h2") or ""))
+        self._settings.insert("awgH3", str(awg.get("h3") or ""))
+        self._settings.insert("awgH4", str(awg.get("h4") or ""))
         rev = cfg.get("reverse_ssh") or {}
         self._settings.insert("reverseSsh", bool(rev.get("enabled", True)))
         self._settings.insert("reverseSshListen", str(rev.get("listen_port") or 2222))
@@ -554,6 +576,61 @@ class GuiBridge(QObject):
         self._enqueue_log(f"Конфиг загружен из {src}")
         self.toast.emit("Конфиг загружен", "info")
         self._refresh_status(force=True)
+
+    @Slot()
+    def importAwgConf(self) -> None:
+        if self._busy or self._active:
+            self.toast.emit("Дождитесь окончания операции или отключите VPN", "warn")
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            None,
+            "AmneziaWG / WireGuard",
+            "",
+            "Config (*.conf);;All files (*)",
+        )
+        text = ""
+        if path:
+            try:
+                text = Path(path).read_text(encoding="utf-8-sig")
+            except OSError as exc:
+                self.toast.emit(str(exc), "error")
+                return
+        else:
+            text, ok = QInputDialog.getMultiLineText(
+                None,
+                "ERGOMS SECURE CONNECTION",
+                "Вставьте содержимое .conf:",
+            )
+            if not ok or not str(text or "").strip():
+                return
+        try:
+            parsed = parse_amnezia_conf(text)
+            if not parsed.get("private_key") or not parsed.get("peer_public_key"):
+                raise ValueError("В .conf нет PrivateKey или PublicKey пира")
+            s = self._settings
+            s.insert("trDial", "amneziawg")
+            s.insert("awgPrivateKey", parsed["private_key"])
+            s.insert("awgPeerPublicKey", parsed["peer_public_key"])
+            s.insert("awgPresharedKey", parsed.get("pre_shared_key") or "")
+            s.insert("awgAddress", parsed.get("address") or AWG_DEFAULT_ADDRESS)
+            s.insert("awgPort", str(parsed.get("port") or AWG_DEFAULT_PORT))
+            s.insert("awgMtu", str(parsed.get("mtu") or AWG_DEFAULT_MTU))
+            s.insert("awgJc", str(parsed.get("jc") or 0))
+            s.insert("awgJmin", str(parsed.get("jmin") or 0))
+            s.insert("awgJmax", str(parsed.get("jmax") or 0))
+            s.insert("awgS1", str(parsed.get("s1") or 0))
+            s.insert("awgS2", str(parsed.get("s2") or 0))
+            s.insert("awgH1", str(parsed.get("h1") or ""))
+            s.insert("awgH2", str(parsed.get("h2") or ""))
+            s.insert("awgH3", str(parsed.get("h3") or ""))
+            s.insert("awgH4", str(parsed.get("h4") or ""))
+            host = str(parsed.get("host") or "").strip()
+            if host:
+                s.insert("serverHost", host)
+            self._enqueue_log("AmneziaWG .conf загружен")
+            self.toast.emit("AmneziaWG конфиг подставлен — нажмите Сохранить", "info")
+        except Exception as exc:  # noqa: BLE001
+            self.toast.emit(str(exc), "error")
 
     def _sync_config_ready(self) -> None:
         uuid = str(self._settings.value("trUuid") or "").strip()
@@ -655,6 +732,33 @@ class GuiBridge(QObject):
                 s.value("hy2Obfs") or hy.get("obfs_password") or ""
             ).strip()
             hy["insecure"] = bool(hy.get("insecure", True))
+            awg = cfg["transport"].setdefault("amneziawg", {})
+            if not isinstance(awg, dict):
+                awg = {}
+                cfg["transport"]["amneziawg"] = awg
+            awg["private_key"] = str(s.value("awgPrivateKey") or "").strip()
+            awg["peer_public_key"] = str(s.value("awgPeerPublicKey") or "").strip()
+            awg["pre_shared_key"] = str(s.value("awgPresharedKey") or "").strip()
+            awg["address"] = (
+                str(s.value("awgAddress") or "").strip() or AWG_DEFAULT_ADDRESS
+            )
+            awg["port"] = int(
+                str(s.value("awgPort") or str(AWG_DEFAULT_PORT)).strip()
+                or str(AWG_DEFAULT_PORT)
+            )
+            awg["mtu"] = int(
+                str(s.value("awgMtu") or str(AWG_DEFAULT_MTU)).strip()
+                or str(AWG_DEFAULT_MTU)
+            )
+            awg["jc"] = int(str(s.value("awgJc") or "0").strip() or "0")
+            awg["jmin"] = int(str(s.value("awgJmin") or "0").strip() or "0")
+            awg["jmax"] = int(str(s.value("awgJmax") or "0").strip() or "0")
+            awg["s1"] = int(str(s.value("awgS1") or "0").strip() or "0")
+            awg["s2"] = int(str(s.value("awgS2") or "0").strip() or "0")
+            awg["h1"] = str(s.value("awgH1") or "").strip()
+            awg["h2"] = str(s.value("awgH2") or "").strip()
+            awg["h3"] = str(s.value("awgH3") or "").strip()
+            awg["h4"] = str(s.value("awgH4") or "").strip()
             cfg.setdefault("reverse_ssh", {})
             cfg["reverse_ssh"]["enabled"] = bool(s.value("reverseSsh"))
             cfg["reverse_ssh"]["listen_port"] = int(
@@ -1068,6 +1172,21 @@ def _settings_defaults() -> dict[str, Any]:
         "hy2Port": "8443",
         "hy2ServerName": HY2_DEFAULT_SNI,
         "hy2Obfs": "",
+        "awgPrivateKey": "",
+        "awgPeerPublicKey": "",
+        "awgPresharedKey": "",
+        "awgAddress": AWG_DEFAULT_ADDRESS,
+        "awgPort": str(AWG_DEFAULT_PORT),
+        "awgMtu": str(AWG_DEFAULT_MTU),
+        "awgJc": "0",
+        "awgJmin": "0",
+        "awgJmax": "0",
+        "awgS1": "0",
+        "awgS2": "0",
+        "awgH1": "",
+        "awgH2": "",
+        "awgH3": "",
+        "awgH4": "",
         "reverseSsh": True,
         "reverseSshListen": "2222",
         "reverseSshVpsUser": "root",

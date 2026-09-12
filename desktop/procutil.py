@@ -213,8 +213,11 @@ def is_sing_box_pid(pid: int) -> bool:
     return process_basename(pid) in {
         "sing-box",
         "sing-box.exe",
+        "sing-box-awg",
         "ergoms-tun.exe",
         "ergoms-tun",
+        "ergoms-tun-awg.exe",
+        "ergoms-tun-awg",
     }
 
 
@@ -763,7 +766,15 @@ def _scan_cmdline_many_win(needles: Sequence[str], me: int) -> dict[str, list[in
     return found
 
 
-_TUN_BIN_NAMES = ("ergoms-tun.exe", "ergoms-tun", "sing-box.exe", "sing-box")
+_TUN_BIN_NAMES = (
+    "ergoms-tun.exe",
+    "ergoms-tun",
+    "ergoms-tun-awg.exe",
+    "ergoms-tun-awg",
+    "sing-box.exe",
+    "sing-box",
+    "sing-box-awg",
+)
 
 
 def tun_bin_pids() -> list[int]:
@@ -774,6 +785,7 @@ def _taskkill_images() -> None:
     if sys.platform != "win32":
         return
     run(["taskkill", "/F", "/IM", "ergoms-tun.exe"], timeout=8)
+    run(["taskkill", "/F", "/IM", "ergoms-tun-awg.exe"], timeout=8)
     run(["taskkill", "/F", "/IM", "sing-box.exe"], timeout=8)
 
 
@@ -809,6 +821,7 @@ def _elevate_kill_tun_win() -> bool:
     script.write_text(
         "@echo off\r\n"
         "taskkill /F /IM ergoms-tun.exe >nul 2>&1\r\n"
+        "taskkill /F /IM ergoms-tun-awg.exe >nul 2>&1\r\n"
         "taskkill /F /IM sing-box.exe >nul 2>&1\r\n",
         encoding="utf-8",
     )

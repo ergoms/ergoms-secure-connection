@@ -8,6 +8,8 @@ Item {
 
     readonly property bool tunOn: Boolean(bridge.settings.tunAuto) || Boolean(bridge.settings.killSwitch)
     readonly property bool hy2Dial: !bridge.corporate && String(bridge.settings.trDial) === "hysteria2"
+    readonly property bool awgDial: !bridge.corporate && String(bridge.settings.trDial) === "amneziawg"
+    property bool awgAdvanced: false
 
     ColumnLayout {
         anchors.fill: parent
@@ -229,7 +231,8 @@ Item {
                             value: bridge.corporate ? "vless-reality" : String(bridge.settings.trDial || "hysteria2")
                             model: [
                                 { label: "Reality", value: "vless-reality" },
-                                { label: "Hysteria2", value: "hysteria2" }
+                                { label: "Hy2", value: "hysteria2" },
+                                { label: "AWG", value: "amneziawg" }
                             ]
                             onActivated: (v) => { bridge.settings.trDial = v }
                         }
@@ -237,13 +240,13 @@ Item {
                 }
 
                 SectionLabel {
-                    visible: !root.hy2Dial
+                    visible: !root.hy2Dial && !root.awgDial
                     height: visible ? implicitHeight : 0
                     text: "VLESS + REALITY"
                     topPadding: 8
                 }
                 Card {
-                    visible: !root.hy2Dial
+                    visible: !root.hy2Dial && !root.awgDial
                     height: visible ? implicitHeight : 0
                     width: parent.width
                     implicitHeight: visible ? realityCol.implicitHeight + 24 : 0
@@ -259,7 +262,7 @@ Item {
                             visible: bridge.corporate
                             width: parent.width
                             height: visible ? implicitHeight : 0
-                            text: "В офисе только Reality: Squid не проводит UDP Hysteria2."
+                            text: "В офисе только Reality: Squid не проводит UDP (Hysteria2 / AmneziaWG)."
                             color: T.muted
                             font.pixelSize: 11
                             font.family: T.fontUi
@@ -330,6 +333,137 @@ Item {
                             label: "Obfuscation (salamander)"
                             password: true
                             settingKey: "hy2Obfs"
+                        }
+                    }
+                }
+
+                SectionLabel {
+                    visible: root.awgDial
+                    height: visible ? implicitHeight : 0
+                    text: "AMNEZIAWG"
+                    topPadding: 8
+                }
+                Card {
+                    visible: root.awgDial
+                    height: visible ? implicitHeight : 0
+                    width: parent.width
+                    implicitHeight: visible ? awgCol.implicitHeight + 24 : 0
+                    Column {
+                        id: awgCol
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.top: parent.top
+                        anchors.margins: 14
+                        spacing: 10
+
+                        Text {
+                            width: parent.width
+                            text: "Дом: UDP с обфускацией handshake. Офисный Squid этот протокол не проводит."
+                            color: T.muted
+                            font.pixelSize: 11
+                            font.family: T.fontUi
+                            wrapMode: Text.WordWrap
+                        }
+                        PrimaryButton {
+                            width: parent.width
+                            text: "Вставить .conf"
+                            onClicked: bridge.importAwgConf()
+                        }
+                        SettingField {
+                            label: "Private key"
+                            password: true
+                            settingKey: "awgPrivateKey"
+                        }
+                        SettingField {
+                            label: "Peer public key"
+                            password: true
+                            settingKey: "awgPeerPublicKey"
+                        }
+                        SettingField {
+                            label: "Адрес туннеля"
+                            settingKey: "awgAddress"
+                        }
+                        SettingField {
+                            label: "UDP порт"
+                            settingKey: "awgPort"
+                        }
+                        SettingField {
+                            label: "Preshared key"
+                            password: true
+                            settingKey: "awgPresharedKey"
+                        }
+                        Text {
+                            width: parent.width
+                            text: root.awgAdvanced ? "Обфускация ▾" : "Обфускация ▸"
+                            color: T.muted
+                            font.pixelSize: 11
+                            font.weight: Font.Medium
+                            font.family: T.fontUi
+                            MouseArea {
+                                anchors.fill: parent
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: root.awgAdvanced = !root.awgAdvanced
+                            }
+                        }
+                        SettingField {
+                            visible: root.awgAdvanced
+                            height: visible ? implicitHeight : 0
+                            label: "MTU"
+                            settingKey: "awgMtu"
+                        }
+                        SettingField {
+                            visible: root.awgAdvanced
+                            height: visible ? implicitHeight : 0
+                            label: "Jc"
+                            settingKey: "awgJc"
+                        }
+                        SettingField {
+                            visible: root.awgAdvanced
+                            height: visible ? implicitHeight : 0
+                            label: "Jmin"
+                            settingKey: "awgJmin"
+                        }
+                        SettingField {
+                            visible: root.awgAdvanced
+                            height: visible ? implicitHeight : 0
+                            label: "Jmax"
+                            settingKey: "awgJmax"
+                        }
+                        SettingField {
+                            visible: root.awgAdvanced
+                            height: visible ? implicitHeight : 0
+                            label: "S1"
+                            settingKey: "awgS1"
+                        }
+                        SettingField {
+                            visible: root.awgAdvanced
+                            height: visible ? implicitHeight : 0
+                            label: "S2"
+                            settingKey: "awgS2"
+                        }
+                        SettingField {
+                            visible: root.awgAdvanced
+                            height: visible ? implicitHeight : 0
+                            label: "H1"
+                            settingKey: "awgH1"
+                        }
+                        SettingField {
+                            visible: root.awgAdvanced
+                            height: visible ? implicitHeight : 0
+                            label: "H2"
+                            settingKey: "awgH2"
+                        }
+                        SettingField {
+                            visible: root.awgAdvanced
+                            height: visible ? implicitHeight : 0
+                            label: "H3"
+                            settingKey: "awgH3"
+                        }
+                        SettingField {
+                            visible: root.awgAdvanced
+                            height: visible ? implicitHeight : 0
+                            label: "H4"
+                            settingKey: "awgH4"
                         }
                     }
                 }
