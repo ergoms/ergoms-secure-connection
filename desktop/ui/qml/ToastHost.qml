@@ -17,7 +17,9 @@ Item {
     anchors.left: parent.left
     anchors.right: parent.right
     anchors.top: parent.top
-    anchors.margins: 14
+    anchors.leftMargin: 14
+    anchors.rightMargin: 14
+    anchors.topMargin: 60
     height: shown ? box.height : 0
     visible: shown
     z: 20

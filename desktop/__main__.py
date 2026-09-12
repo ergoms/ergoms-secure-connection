@@ -69,7 +69,7 @@ def _show_help() -> int:
   status               состояние
   probe HOST [PORT]    CONNECT через Squid
   test                 проверка обхода
-  sandbox              песочница VLESS (без TUN; рядом с Amnezia — через реле)
+  sandbox              песочница (мимо TUN/Amnezia; прямой Ethernet, свои :18080)
   tun-on / tun-off     TUN в процессе sing-box
   reverse-on / reverse-off  SSH с VPS на этот ПК (через SOCKS, не :22 офиса)
   download-sing-box    скачать sing-box в tools/

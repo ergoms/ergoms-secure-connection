@@ -66,7 +66,8 @@
     "hysteria2": {
       "password": "",
       "port": 8443,
-      "server_name": "www.cloudflare.com",
+      "server_name": "www.microsoft.com",
+      "obfs_password": "",
       "insecure": true
     }
   },

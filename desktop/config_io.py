@@ -18,6 +18,28 @@ CORPORATE_PROXY_PRESET = "192.0.2.10:3128"
 CORPORATE_BYPASS_PRESET = ["*.intranet.example", "*.local", "*.lan"]
 STANDARD_BYPASS_PRESET = ["*.local", "*.lan"]
 
+# Reality dest must look like a real site the VPS can handshake with.
+REALITY_DEFAULT_SNI = "www.cloudflare.com"
+# QUIC Initial SNI is plaintext to TSPU. Cloudflare is on the RU block/throttle
+# list; do not reuse Reality dest here.
+HY2_DEFAULT_SNI = "www.microsoft.com"
+_BLOCKED_HY2_SNI = frozenset(
+    {
+        "www.cloudflare.com",
+        "cloudflare.com",
+        "cloudflare-dns.com",
+        "1.1.1.1",
+        "one.one.one.one",
+    }
+)
+
+
+def normalize_hy2_sni(value: Any, *, fallback: str = HY2_DEFAULT_SNI) -> str:
+    sni = str(value or "").strip()
+    if not sni or sni.lower() in _BLOCKED_HY2_SNI:
+        return fallback
+    return sni
+
 # Legacy .env keys → config.json (migration only)
 _ENV_BOOL_TRUE = frozenset({"1", "true", "yes", "on"})
 
@@ -145,12 +167,13 @@ def default_config_template() -> dict[str, Any]:
             "uuid": "",
             "public_key": "",
             "short_id": "",
-            "server_name": "www.cloudflare.com",
+            "server_name": REALITY_DEFAULT_SNI,
             "port": 443,
             "hysteria2": {
                 "password": "",
                 "port": 8443,
-                "server_name": "www.cloudflare.com",
+                "server_name": HY2_DEFAULT_SNI,
+                "obfs_password": "",
                 "insecure": True,
             },
         },
@@ -318,7 +341,7 @@ def ensure_config_defaults(cfg: dict[str, Any]) -> dict[str, Any]:
     transport.setdefault("uuid", "")
     transport.setdefault("public_key", "")
     transport.setdefault("short_id", "")
-    transport.setdefault("server_name", "www.cloudflare.com")
+    transport.setdefault("server_name", REALITY_DEFAULT_SNI)
     transport.setdefault("port", 443)
     hy = transport.get("hysteria2")
     if not isinstance(hy, dict):
@@ -326,7 +349,8 @@ def ensure_config_defaults(cfg: dict[str, Any]) -> dict[str, Any]:
         transport["hysteria2"] = hy
     hy.setdefault("password", "")
     hy.setdefault("port", 8443)
-    hy.setdefault("server_name", str(transport.get("server_name") or "www.cloudflare.com"))
+    hy["server_name"] = normalize_hy2_sni(hy.get("server_name"))
+    hy.setdefault("obfs_password", "")
     hy.setdefault("insecure", True)
     hy["insecure"] = _as_bool(hy.get("insecure"), True)
     hy["port"] = max(1, min(65535, _as_int(hy.get("port"), 8443)))

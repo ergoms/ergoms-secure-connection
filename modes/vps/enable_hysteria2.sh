@@ -17,6 +17,7 @@ KEY="$CONF_DIR/hy2.key"
 # UDP 443 looks like HTTP/3 and home DPI often blackholes it.
 # TCP 443 stays VLESS; this is a different protocol on 8443.
 HY2_PORT_OVERRIDE="${HY2_PORT:-}"
+HY2_OBFS_OVERRIDE="${HY2_OBFS:-}"
 
 if [[ ! -f "$CONF_DIR/config.json" ]]; then
   echo "ERROR: $CONF_DIR/config.json missing — run bootstrap_singbox_443.sh first" >&2
@@ -44,7 +45,11 @@ if [[ "$HY2_PORT" == "443" ]]; then
   echo "WARN: HY2_PORT=443 is Reality TCP; using UDP 8443"
   HY2_PORT=8443
 fi
-SERVER_NAME="${REALITY_SERVER_NAME:-${SERVER_NAME:-www.cloudflare.com}}"
+# Reality dest stays Cloudflare; QUIC Initial SNI must not — TSPU reads it.
+HY2_SNI="${HY2_SERVER_NAME:-www.microsoft.com}"
+if [[ "$HY2_SNI" == "www.cloudflare.com" || "$HY2_SNI" == "cloudflare.com" ]]; then
+  HY2_SNI="www.microsoft.com"
+fi
 
 if [[ -z "${HY2_PASSWORD:-}" ]]; then
   HY2_PASSWORD="$(openssl rand -hex 16)"
@@ -60,53 +65,81 @@ else
   printf 'HY2_PORT=%s\n' "$HY2_PORT" >>"$CREDS"
 fi
 
+if grep -q '^HY2_SERVER_NAME=' "$CREDS" 2>/dev/null; then
+  sed -i "s/^HY2_SERVER_NAME=.*/HY2_SERVER_NAME=$HY2_SNI/" "$CREDS"
+else
+  printf 'HY2_SERVER_NAME=%s\n' "$HY2_SNI" >>"$CREDS"
+fi
+
+if [[ -n "$HY2_OBFS_OVERRIDE" ]]; then
+  HY2_OBFS="$HY2_OBFS_OVERRIDE"
+fi
+if [[ -z "${HY2_OBFS:-}" ]]; then
+  HY2_OBFS="$(openssl rand -hex 16)"
+fi
+if grep -q '^HY2_OBFS=' "$CREDS" 2>/dev/null; then
+  sed -i "s/^HY2_OBFS=.*/HY2_OBFS=$HY2_OBFS/" "$CREDS"
+else
+  printf 'HY2_OBFS=%s\n' "$HY2_OBFS" >>"$CREDS"
+fi
+
+need_cert=0
 if [[ ! -f "$CERT" || ! -f "$KEY" ]]; then
-  echo "==> Self-signed cert for Hysteria2 (SNI $SERVER_NAME)"
+  need_cert=1
+else
+  cert_cn="$(openssl x509 -in "$CERT" -noout -subject 2>/dev/null | sed -n 's/.*CN=\([^/,]*\).*/\1/p')"
+  if [[ "$cert_cn" != "$HY2_SNI" ]]; then
+    need_cert=1
+  fi
+fi
+if [[ "$need_cert" == 1 ]]; then
+  echo "==> Self-signed cert for Hysteria2 (SNI $HY2_SNI)"
   openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
     -keyout "$KEY" -out "$CERT" -days 3650 -nodes \
-    -subj "/CN=$SERVER_NAME" >/dev/null 2>&1
+    -subj "/CN=$HY2_SNI" >/dev/null 2>&1
   chmod 600 "$KEY" "$CERT"
 fi
 
-echo "==> Merging hysteria2 inbound (UDP :$HY2_PORT)"
-python3 - "$CONF_DIR/config.json" "$HY2_PASSWORD" "$HY2_PORT" "$SERVER_NAME" "$CERT" "$KEY" <<'PY'
+echo "==> Merging hysteria2 inbound (UDP :$HY2_PORT, SNI $HY2_SNI, salamander)"
+python3 - "$CONF_DIR/config.json" "$HY2_PASSWORD" "$HY2_PORT" "$HY2_SNI" "$CERT" "$KEY" "$HY2_OBFS" <<'PY'
 import json, sys
-path, password, port, sni, cert, key = sys.argv[1:]
+path, password, port, sni, cert, key, obfs = sys.argv[1:]
 cfg = json.load(open(path, encoding="utf-8"))
 ins = cfg.setdefault("inbounds", [])
 hy = next((x for x in ins if str(x.get("type") or "") == "hysteria2"), None)
-if hy is not None:
-    hy["listen_port"] = int(port)
-    users = hy.get("users") or [{"name": "ergoms", "password": password}]
-    if users and isinstance(users[0], dict):
-        users[0]["password"] = password
-    hy["users"] = users
-    json.dump(cfg, open(path, "w", encoding="utf-8"), indent=2)
-    open(path, "a", encoding="utf-8").write("\n")
-    print(f"hysteria2 inbound moved to UDP :{port}")
-else:
-    ins.append({
+if hy is None:
+    hy = {
         "type": "hysteria2",
         "tag": "hy2-in",
         "listen": "::",
-        "listen_port": int(port),
         "users": [{"name": "ergoms", "password": password}],
-        "tls": {
-            "enabled": True,
-            "server_name": sni,
-            "alpn": ["h3"],
-            "certificate_path": cert,
-            "key_path": key,
-        },
-        "masquerade": f"https://{sni}",
-    })
+    }
+    ins.append(hy)
     route = cfg.setdefault("route", {})
     rules = route.setdefault("rules", [])
     if not any(r.get("inbound") == ["hy2-in"] for r in rules if isinstance(r, dict)):
         rules.insert(0, {"inbound": ["hy2-in"], "action": "sniff", "timeout": "1s"})
-    json.dump(cfg, open(path, "w", encoding="utf-8"), indent=2)
-    open(path, "a", encoding="utf-8").write("\n")
     print("added hy2-in")
+else:
+    print(f"hysteria2 inbound UDP :{port} SNI {sni} obfs=salamander")
+hy["listen_port"] = int(port)
+users = hy.get("users") or [{"name": "ergoms", "password": password}]
+if users and isinstance(users[0], dict):
+    users[0]["password"] = password
+hy["users"] = users
+tls = hy.setdefault("tls", {})
+tls["enabled"] = True
+tls["server_name"] = sni
+tls["alpn"] = ["h3"]
+tls["certificate_path"] = cert
+tls["key_path"] = key
+hy["masquerade"] = f"https://{sni}"
+if obfs:
+    hy["obfs"] = {"type": "salamander", "password": obfs}
+else:
+    hy.pop("obfs", None)
+json.dump(cfg, open(path, "w", encoding="utf-8"), indent=2)
+open(path, "a", encoding="utf-8").write("\n")
 PY
 chmod 600 "$CONF_DIR/config.json"
 
@@ -130,18 +163,8 @@ ss -lunp 2>/dev/null | grep -E ":${HY2_PORT}\\b" || echo "WARN: UDP :$HY2_PORT n
 cat <<EOF
 
 ========================================================================
-OK: Hysteria2 UDP :${HY2_PORT} (VLESS+Reality TCP :443 не трогали)
-
-В config.json клиента, внутрь transport:
-
-  "hysteria2": {
-    "password": "$HY2_PASSWORD",
-    "port": $HY2_PORT,
-    "server_name": "$SERVER_NAME",
-    "insecure": true
-  }
-
-Офис (corporate=true) по-прежнему идёт VLESS через Squid.
-Дома клиент сам возьмёт Hysteria2.
+OK: Hysteria2 UDP :${HY2_PORT} SNI ${HY2_SNI} salamander
+(VLESS+Reality TCP :443 не трогали)
+Пароль и obfs — в $CREDS, не в этом выводе.
 ========================================================================
 EOF

@@ -122,6 +122,7 @@ bash modes/vps/bootstrap_singbox_443.sh
 | `init` | Создать `config.json` |
 | `on` / `off` | Включить / выключить |
 | `status` / `probe` / `test` | Состояние и проверки |
+| `sandbox` | Песочница: путь до VPS мимо TUN/Amnezia |
 | `tun-on` / `tun-off` | TUN |
 | `reverse-on` / `reverse-off` | SSH с VPS на этот ПК |
 | `encrypt` / `decrypt` | Зашифровать / расшифровать конфиг |
@@ -207,7 +208,7 @@ ERGOMS SECURE CONNECTION/
 | `dist/ERGOMS SECURE CONNECTION/ERGOMS SECURE CONNECTION.exe` | one-dir клиент (рядом `_internal/`) |
 | `dist/ERGOMS SECURE CONNECTION-Setup.exe` | установщик Inno Setup |
 
-Установщик кладёт программу в `Program Files\ERGOMS SECURE CONNECTION` (или per-user), ярлыки, опциональный автозапуск (`--autostart`). Данные остаются в `%LOCALAPPDATA%\ERGOMS SECURE CONNECTION`. При удалении вызывается `off` (kill switch / PAC / git), каталог данных не трогается.
+Установщик кладёт программу в `Program Files\ERGOMS SECURE CONNECTION` (или per-user), ярлыки, опциональный автозапуск (`--autostart`). Перед установкой новой версии снимает предыдущую, правила firewall, задачи, автозапуск и каталоги данных (`%LOCALAPPDATA%\ERGOMS SECURE CONNECTION` и наследие `ERGOMS VPN` / `ops-content`) — конфиг нужно импортировать заново. То же при удалении, плюс `off` (kill switch / PAC / git).
 
 Только папка без Setup: `.\.vscode\setup.ps1 -Target pyinstaller`. Только Setup (после сборки): `-Target installer`. Если Inno Setup нет — ставится через `winget` (`JRSoftware.InnoSetup`).
 
