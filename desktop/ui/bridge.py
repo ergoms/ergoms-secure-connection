@@ -443,6 +443,7 @@ class GuiBridge(QObject):
             "trServerName", str(tr.get("server_name") or "www.cloudflare.com")
         )
         self._settings.insert("trPort", str(tr.get("port") or 443))
+        hy = tr.get("hysteria2") if isinstance(tr.get("hysteria2"), dict) else {}
         dial = str(tr.get("dial") or "auto").strip().lower()
         if dial in ("vless", "reality"):
             dial = "vless-reality"
@@ -450,8 +451,9 @@ class GuiBridge(QObject):
             dial = "hysteria2"
         if dial not in ("auto", "vless-reality", "hysteria2"):
             dial = "auto"
+        if dial == "auto" and str(hy.get("password") or "").strip():
+            dial = "hysteria2"
         self._settings.insert("trDial", dial)
-        hy = tr.get("hysteria2") if isinstance(tr.get("hysteria2"), dict) else {}
         self._settings.insert("hy2Password", str(hy.get("password") or ""))
         self._settings.insert("hy2Port", str(hy.get("port") or 8443))
         rev = cfg.get("reverse_ssh") or {}

@@ -389,7 +389,6 @@ class SingboxModeManager:
                             "insecure": bool(hy.get("insecure", True)),
                             "alpn": ["h3"],
                         },
-                        **({"bind_interface": bind_iface} if bind_iface else {}),
                     }
                     if hy
                     else {

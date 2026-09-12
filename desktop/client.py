@@ -595,7 +595,7 @@ class OpsClient:
 
         # TUN already carries browser/CLI traffic. PAC + Windows Internet
         # Settings look like a system proxy and fight the tunnel.
-        if get_tun_enabled(cfg):
+        if get_tun_enabled(cfg) and not getattr(self, "_defer_win_tun", False):
             self.stop_pac_server()
             try:
                 disable_browser_proxy(self.paths.proxy_backup, log=self.log)
@@ -1281,11 +1281,21 @@ class OpsClient:
                 except Exception:  # noqa: BLE001
                     hy_port = 0
                 if hy_port and hy_port != 443:
-                    self.log(
-                        f"Hysteria2 UDP :{hy_port} не дошёл до VPS (QUIC timeout). "
-                        "Часто TUN украл маршрут к VPS — либо в панели хостинга "
-                        f"закрыт UDP {hy_port}. На VPS: tcpdump -n udp port {hy_port}"
-                    )
+                    ifaces = leftover_vpn_ifaces()
+                    procs = foreign_vpn_processes()
+                    if ifaces or procs:
+                        names = ", ".join(
+                            [name for _idx, name in ifaces] + list(procs)
+                        )
+                        self.log(
+                            f"Hysteria2 UDP :{hy_port} не дошёл до VPS. "
+                            f"Чужой VPN ещё в системе ({names}) — отключите его полностью."
+                        )
+                    else:
+                        self.log(
+                            f"Hysteria2 UDP :{hy_port} не дошёл до VPS. "
+                            "Проверьте, что на VPS слушает UDP и порт открыт в панели хостинга."
+                        )
                 else:
                     self.log(
                         "Hysteria2 не дошёл до VPS (QUIC timeout). "

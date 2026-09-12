@@ -101,6 +101,7 @@ _FOREIGN_VPN = (
 # GUI/tunnel binaries. AmneziaVPN-service stays up while the tunnel is down.
 _FOREIGN_PROCS = (
     "AmneziaVPN.exe",
+    "AmneziaVPN-service.exe",
     "AmneziaWGTunnel.exe",
     "outline.exe",
     "wireguard.exe",
