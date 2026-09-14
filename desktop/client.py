@@ -738,7 +738,9 @@ class OpsClient:
         # kill Hysteria2 QUIC (CONNECT still looks fine). Bring Hy2 up on
         # the underlay first, then TUN + blackholes after HTTPS works.
         defer_win = sys.platform == "win32" and not bool(office_proxy)
-        self._defer_win_tun = bool(defer_win and enable_tun)
+        # Hy2 QUIC dies if TUN is up first. AWG binds underlay — TUN inbound
+        # (auto_route off) can start immediately; split/KS after HTTPS.
+        self._defer_win_tun = bool(defer_win and enable_tun and dial == "hysteria2")
         self._defer_win_ks = bool(defer_win and kill_switch)
         self._hold_watchdog = True
         self._box_boot = {
@@ -851,7 +853,7 @@ class OpsClient:
             target=self._probe_exit,
             args=(
                 socks_port,
-                1.2 if self._defer_win_tun else (0.4 if start_tun else 0.0),
+                1.2 if self._defer_win_tun else (0.25 if awg else (0.4 if start_tun else 0.0)),
             ),
             daemon=True,
         ).start()
@@ -1291,7 +1293,7 @@ class OpsClient:
         self.log("TUN готов (split default после живого UDP)")
 
     def _pin_underlay_later(self, allow: list[str]) -> None:
-        for i, wait in enumerate((0.2, 0.6, 1.5, 3.0)):
+        for i, wait in enumerate((0.15, 0.4)):
             time.sleep(wait)
             pin_kill_switch_underlay(
                 allow,
@@ -1434,6 +1436,11 @@ class OpsClient:
             allow = list(getattr(self, "_pending_allow", []) or [])
             self.log("выход живой — ставлю TUN split default")
             self._install_win_tun_routes(allow)
+            if getattr(self, "_defer_win_ks", False):
+                apply_kill_switch(
+                    allow, var_dir=self.paths.var_dir, log=self.log
+                )
+                self._defer_win_ks = False
         try:
             cfg = self.config()
             self.set_git_singbox(cfg, get_http_bridge_port())

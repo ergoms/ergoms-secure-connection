@@ -593,7 +593,7 @@ Item {
                 }
                 PrimaryButton {
                     Layout.fillWidth: true
-                    text: "Копия"
+                    text: "Копировать"
                     enabled: !bridge.active && !bridge.busy
                     onClicked: bridge.exportConfigFile()
                 }
