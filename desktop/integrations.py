@@ -295,11 +295,9 @@ class IntegrationOps:
 
     def set_git_singbox(self, cfg: dict[str, Any], http_port: int) -> None:
         """Point CLI/docker/browser at sing-box HTTP inbound + PAC server."""
-        # Home Windows: PAC/git/Docker must not hit Hy2 until QUIC is up.
-        # Sandbox Hy2 works; production failed because Yandex/Telegram slammed
-        # :1088 via PAC during the handshake (CONNECT ok, HTTPS EOF).
+        # Home Windows: PAC/git/Docker must not hit UDP until handshake is up.
         if getattr(self, "_defer_win_tun", False):
-            self.log("дом: PAC/git/Docker после проверки Hy2 — иначе QUIC не поднимается")
+            self.log("дом: PAC/git/Docker после проверки выхода")
             return
         self._apply_integrations(cfg, http_port)
 

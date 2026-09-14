@@ -17,10 +17,8 @@ from desktop.config_io import (
     AWG_DEFAULT_ADDRESS,
     AWG_DEFAULT_MTU,
     AWG_DEFAULT_PORT,
-    HY2_DEFAULT_SNI,
     REALITY_DEFAULT_SNI,
     normalize_dial,
-    normalize_hy2_sni,
 )
 from desktop.logutil import noop
 from desktop.net_host import resolve_host
@@ -43,64 +41,6 @@ def parse_corporate_proxy(proxy: str) -> tuple[str, int]:
     raw = (proxy or "").replace("http://", "").replace("https://", "").strip("/")
     host, _, port_s = raw.partition(":")
     return host.strip(), int(port_s or "3128")
-
-
-def hysteria2_opts(tr: dict[str, Any] | None) -> dict[str, Any] | None:
-    """Home UDP transport. Empty/missing password means Hysteria2 is off."""
-    if not isinstance(tr, dict):
-        return None
-    raw = tr.get("hysteria2")
-    if not isinstance(raw, dict):
-        password = str(tr.get("hy2_password") or "").strip()
-        raw = {"password": password} if password else None
-    if not isinstance(raw, dict):
-        return None
-    password = str(raw.get("password") or "").strip()
-    if not password or "REPLACE" in password.upper():
-        return None
-    sni = normalize_hy2_sni(raw.get("server_name"), fallback=HY2_DEFAULT_SNI)
-    obfs = str(raw.get("obfs_password") or "").strip()
-    blob = raw.get("obfs")
-    if isinstance(blob, dict):
-        obfs = str(blob.get("password") or obfs).strip()
-    elif isinstance(blob, str) and blob.strip():
-        obfs = blob.strip()
-    return {
-        "password": password,
-        "port": int(raw.get("port") or 8443),
-        "server_name": sni,
-        "insecure": bool(raw.get("insecure", True)),
-        "obfs_password": obfs,
-    }
-
-
-def hy2_outbound(
-    server_host: str,
-    hy: dict[str, Any],
-    *,
-    bind_iface: str = "",
-    tag: str = "proxy",
-) -> dict[str, Any]:
-    outbound: dict[str, Any] = {
-        "type": "hysteria2",
-        "tag": tag,
-        "server": server_host,
-        "server_port": int(hy["port"]),
-        "password": hy["password"],
-        # Home UDP is lossy (DPI / Amnezia WFP). Default QUIC handshake is 5s.
-        "connect_timeout": "15s",
-        "tls": {
-            "enabled": True,
-            "server_name": hy["server_name"],
-            "insecure": bool(hy.get("insecure", True)),
-            "alpn": ["h3"],
-        },
-    }
-    obfs = str(hy.get("obfs_password") or "").strip()
-    if obfs:
-        outbound["obfs"] = {"type": "salamander", "password": obfs}
-    outbound.update(_udp_bind(bind_iface))
-    return outbound
 
 
 def amneziawg_opts(tr: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -202,8 +142,6 @@ def awg_endpoint(
 
 
 def dial_label(dial: str) -> str:
-    if dial == "hysteria2":
-        return "Hysteria2"
     if dial == "amneziawg":
         return "AmneziaWG"
     return "VLESS+Reality"
@@ -361,7 +299,7 @@ def config_skeleton(
 
 
 def _udp_bind(bind_iface: str) -> dict[str, Any]:
-    """Windows: bind the NIC IPv4. bind_interface by name drops Hy2 UDP."""
+    """Windows: bind the NIC IPv4. bind_interface by name drops UDP."""
     if not bind_iface:
         return {}
     if sys.platform == "win32":
@@ -385,11 +323,10 @@ def choose_dial(transport: dict[str, Any], *, office: bool) -> str:
 
 def resolve_dial_bundle(
     transport: dict[str, Any], *, office: bool
-) -> tuple[str, dict[str, Any] | None, dict[str, Any] | None]:
+) -> tuple[str, dict[str, Any] | None]:
     dial = choose_dial(transport, office=office)
-    hy = hysteria2_opts(transport) if dial == "hysteria2" else None
     awg = amneziawg_opts(transport) if dial == "amneziawg" else None
-    return dial, hy, awg
+    return dial, awg
 
 
 _PRIVATE_ROUTE_EXCLUDE = [
@@ -552,7 +489,7 @@ def require_transport(cfg: dict[str, Any]) -> dict[str, Any]:
     short_id = str(tr.get("short_id") or "").strip()
     sni = str(tr.get("server_name") or REALITY_DEFAULT_SNI).strip() or REALITY_DEFAULT_SNI
     typ = str(tr.get("type") or "vless-reality").strip().lower()
-    if typ not in ("vless-reality", "vless", "reality", "hysteria2"):
+    if typ not in ("vless-reality", "vless", "reality"):
         raise RuntimeError(f"Unsupported transport.type={typ} (use vless-reality)")
     if not uuid or "REPLACE" in uuid.upper() or len(uuid) < 8:
         raise RuntimeError("transport.uuid missing — paste from VPS bootstrap output")
@@ -569,9 +506,6 @@ def require_transport(cfg: dict[str, Any]) -> dict[str, Any]:
         "type": "vless-reality",
         "dial": dial,
     }
-    hy = hysteria2_opts(tr)
-    if hy:
-        out["hysteria2"] = hy
     awg = amneziawg_opts(tr)
     if awg:
         out["amneziawg"] = awg
@@ -649,24 +583,12 @@ class SingboxModeManager:
             self.log("underlay NIC: не определён — outbound может уйти в TUN")
 
         office = bool(squid_host)
-        dial, hy, awg = resolve_dial_bundle(transport, office=office)
+        dial, awg = resolve_dial_bundle(transport, office=office)
         if awg and not enable_tun and not use_office_proxy:
             self.log(f"дом: AmneziaWG UDP :{awg['port']} (обфускация handshake)")
             return self._minimal_awg_config(
                 server_host=server_host,
                 awg=awg,
-                bind_iface=bind_iface,
-                socks_port=socks_port,
-                http_port=http_port,
-            )
-        if hy and not enable_tun and not use_office_proxy:
-            if dial == "hysteria2":
-                self.log(
-                    f"дом: Hysteria2 UDP :{hy['port']} (Reality на этом Wi-Fi режет DPI)"
-                )
-            return self._minimal_hy2_config(
-                server_host=server_host,
-                hy=hy,
                 bind_iface=bind_iface,
                 socks_port=socks_port,
                 http_port=http_port,
@@ -679,7 +601,6 @@ class SingboxModeManager:
                 route_exclude.append(cidr)
         vpn_port = int(
             (awg or {}).get("port")
-            or (hy or {}).get("port")
             or transport.get("port")
             or 443
         )
@@ -687,9 +608,6 @@ class SingboxModeManager:
         if dial == "amneziawg" and awg:
             extra = " (минуя Squid)" if office else ""
             self.log(f"{place}: AmneziaWG UDP :{awg['port']}{extra}")
-        elif dial == "hysteria2" and hy:
-            extra = " (минуя Squid)" if office else " (Reality на этом Wi-Fi режет DPI)"
-            self.log(f"{place}: Hysteria2 UDP :{hy['port']}{extra}")
         elif office:
             self.log("офис: VLESS+Reality через Squid")
         rules, bypass_suffixes, bypass_domains = _build_route_rules(
@@ -716,17 +634,14 @@ class SingboxModeManager:
                     **bind,
                 }
             )
-        if hy:
-            outbounds.append(hy2_outbound(server_host, hy, bind_iface=bind_iface))
-        else:
-            outbounds.append(
-                _vless_outbound(
-                    server_host,
-                    transport,
-                    bind_iface=bind_iface,
-                    use_office_proxy=use_office_proxy,
-                )
+        outbounds.append(
+            _vless_outbound(
+                server_host,
+                transport,
+                bind_iface=bind_iface,
+                use_office_proxy=use_office_proxy,
             )
+        )
         outbounds.append({"type": "direct", "tag": "direct", **bind})
         outbounds.append({"type": "block", "tag": "block"})
         sniff = [{"inbound": ["socks-in", "http-in"], "action": "sniff", "timeout": "1s"}]
@@ -765,49 +680,6 @@ class SingboxModeManager:
             box["route"]["default_domain_resolver"] = "dns-local"
         return box
 
-    def _minimal_hy2_config(
-        self,
-        *,
-        server_host: str,
-        hy: dict[str, Any],
-        bind_iface: str,
-        socks_port: int,
-        http_port: int,
-    ) -> dict[str, Any]:
-        """Same shape as sandbox Hy2: extra process/VPS rules break QUIC handshake."""
-        self.log("дом: Hy2 как в песочнице — без process/python route на handshake")
-        if str(hy.get("obfs_password") or "").strip():
-            self.log("дом: Hy2 salamander — QUIC Initial без открытого SNI")
-        bind = _udp_bind(bind_iface)
-        ip = str(bind.get("inet4_bind_address") or "")
-        if ip:
-            self.log(
-                f"дом: Hy2 UDP с {ip} (имя NIC на Windows глотает датаграммы)"
-            )
-        self.log_path.parent.mkdir(parents=True, exist_ok=True)
-        outbound = hy2_outbound(server_host, hy, bind_iface=bind_iface)
-        return {
-            **config_skeleton(
-                log_path=self.log_path,
-                socks_port=socks_port,
-                http_port=http_port,
-                simple_dns=True,
-            ),
-            "outbounds": [
-                outbound,
-                {
-                    "type": "direct",
-                    "tag": "direct",
-                    **({"bind_interface": bind_iface} if bind_iface else {}),
-                },
-            ],
-            "route": {
-                "auto_detect_interface": False,
-                **({"default_interface": bind_iface} if bind_iface else {}),
-                "final": "proxy",
-            },
-        }
-
     def _minimal_awg_config(
         self,
         *,
@@ -817,7 +689,7 @@ class SingboxModeManager:
         socks_port: int,
         http_port: int,
     ) -> dict[str, Any]:
-        """SOCKS/HTTP only — TUN after handshake, same deferral as Hy2."""
+        """SOCKS/HTTP only — TUN after handshake."""
         self.log("дом: AmneziaWG как в песочнице — без TUN на handshake")
         bind = _udp_bind(bind_iface)
         ip = str(bind.get("inet4_bind_address") or "")
@@ -941,12 +813,9 @@ class SingboxModeManager:
         need_admin = bool(enable_tun and elevate)
         office = bool((corporate_proxy or "").strip())
         dial = choose_dial(transport, office=office)
-        hy = hysteria2_opts(transport) if dial == "hysteria2" else None
         awg = amneziawg_opts(transport) if dial == "amneziawg" else None
         if awg:
             dest = f"AmneziaWG {server_host}:{awg['port']}/udp"
-        elif hy:
-            dest = f"Hysteria2 {server_host}:{hy['port']}/udp"
         else:
             dest = f"VLESS {server_host}:{transport['port']}"
         self.log(

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Add AmneziaWG (UDP :51820) next to existing VLESS+Reality and Hysteria2.
-# Does not replace /usr/local/bin/sing-box or touch TCP :443 / UDP :8443.
+# Add AmneziaWG (UDP :51820) next to existing VLESS+Reality.
+# Does not replace /usr/local/bin/sing-box or touch TCP :443.
 set -euo pipefail
 
 if [[ "$(id -u)" -ne 0 ]]; then
@@ -31,10 +31,6 @@ fi
 AWG_PORT="${AWG_PORT:-51820}"
 if [[ "$AWG_PORT" == "443" ]]; then
   echo "WARN: AWG_PORT=443 is Reality TCP; using UDP 51820"
-  AWG_PORT=51820
-fi
-if [[ "$AWG_PORT" == "8443" ]]; then
-  echo "WARN: UDP 8443 is Hysteria2; using UDP 51820"
   AWG_PORT=51820
 fi
 
@@ -264,7 +260,7 @@ fi
 cat <<EOF
 
 ========================================================================
-OK: AmneziaWG UDP :${AWG_PORT} (sing-box Reality/Hy2 не трогали)
+OK: AmneziaWG UDP :${AWG_PORT} (sing-box Reality не трогали)
 JSON: $STATE_DIR/client.json
 AWG:  $STATE_DIR/amneziawg.conf
 В клиенте: Настройки → Из файла (JSON), затем Загрузить .conf.

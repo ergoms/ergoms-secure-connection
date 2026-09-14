@@ -62,14 +62,7 @@
     "public_key": "",
     "short_id": "",
     "server_name": "www.cloudflare.com",
-    "port": 443,
-    "hysteria2": {
-      "password": "",
-      "port": 8443,
-      "server_name": "www.microsoft.com",
-      "obfs_password": "",
-      "insecure": true
-    }
+    "port": 443
   },
   "reverse_ssh": {
     "enabled": false,

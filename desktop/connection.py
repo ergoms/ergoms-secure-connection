@@ -44,7 +44,6 @@ from desktop.singbox_mode import (
     amneziawg_opts,
     choose_dial,
     dial_label,
-    hysteria2_opts,
     require_transport,
 )
 from desktop.tun import (
@@ -75,10 +74,7 @@ class ConnectionOps:
         port = int(transport.get("port") or server.get("port") or 443)
         office_proxy = resolve_corporate_proxy(cfg)
         dial = choose_dial(transport, office=bool(office_proxy))
-        hy = hysteria2_opts(transport) if dial == "hysteria2" else None
         awg = amneziawg_opts(transport) if dial == "amneziawg" else None
-        if dial == "hysteria2" and not hy:
-            raise RuntimeError("Hysteria2: укажите пароль в Настройках")
         if dial == "amneziawg" and not awg:
             raise RuntimeError("AmneziaWG: укажите ключи в Настройках")
         if office_proxy and dial == "vless-reality":
@@ -87,7 +83,7 @@ class ConnectionOps:
                 raise RuntimeError(
                     f"Корпоративный прокси {office_proxy} не пустил CONNECT "
                     f"{host}:{port}. Проверьте, что вы в сети организации, "
-                    "или выберите AWG / Hy2."
+                    "или выберите AWG."
                 )
 
         # Avoid fighting leftover TUN processes
@@ -128,14 +124,13 @@ class ConnectionOps:
         prelude: list[str] = []
         allow = self._kill_switch_hosts(cfg)
         # Home Windows: kill-switch /1 via 127.0.0.1 and TUN inbound both
-        # kill Hysteria2 QUIC (CONNECT still looks fine). Bring Hy2 up on
-        # the underlay first, then TUN + blackholes after HTTPS works.
-        udp_dial = dial in ("hysteria2", "amneziawg")
+        # steal AWG UDP (CONNECT still looks fine). Defer KS until HTTPS works.
+        udp_dial = dial == "amneziawg"
         defer_win = sys.platform == "win32" and (not bool(office_proxy) or udp_dial)
-        # Hy2 QUIC dies if TUN is up first. AWG binds underlay — TUN inbound
-        # (auto_route off) can start immediately; split/KS after HTTPS.
-        # Reality: apply KS immediately so a failed handshake cannot leak.
-        self._defer_win_tun = bool(defer_win and enable_tun and dial == "hysteria2")
+        # AWG binds underlay — TUN inbound (auto_route off) can start immediately;
+        # split/KS after HTTPS. Reality: apply KS immediately so a failed
+        # handshake cannot leak.
+        self._defer_win_tun = False
         self._defer_win_ks = bool(defer_win and kill_switch and udp_dial)
         self._hold_watchdog = True
         self._box_boot = {
@@ -170,8 +165,7 @@ class ConnectionOps:
             if allow:
                 remember_kill_switch_plan(self.paths.var_dir, allow)
         if self._defer_win_tun:
-            proto = "AmneziaWG" if dial == "amneziawg" else "Hysteria2"
-            self.log(f"дом: сначала {proto} без TUN, маршруты поставлю после проверки")
+            self.log("дом: сначала AmneziaWG без TUN, маршруты поставлю после проверки")
         postlude = (
             kill_switch_pin_cmds(self.paths.var_dir, allow) if start_tun else []
         )
@@ -193,8 +187,6 @@ class ConnectionOps:
             postlude_cmds=postlude,
         )
         self.set_git_singbox(cfg, http_port)
-        # Home Hy2: SOCKS is dead until QUIC is up. Reverse SSH through
-        # SOCKS here steals the handshake (same class as PAC).
         if not getattr(self, "_defer_win_tun", False):
             self._maybe_start_reverse_ssh(cfg)
         state = {
@@ -221,11 +213,6 @@ class ConnectionOps:
             self.log(
                 f"диагностика: AmneziaWG UDP {host}:{awg['port']} — "
                 "TCP Reality не проверяем"
-            )
-        elif hy:
-            self.log(
-                f"диагностика: Hysteria2 UDP {host}:{hy['port']} — "
-                "TCP Reality не проверяем, домашний DPI его глотает"
             )
         else:
             try:
@@ -421,7 +408,7 @@ class ConnectionOps:
 
 
     def _bring_up_win_tun(self) -> None:
-        """Restart sing-box with TUN only after Hysteria2 HTTPS already works."""
+        """Restart sing-box with TUN only after HTTPS already works."""
         boot = dict(getattr(self, "_box_boot", None) or {})
         allow = list(getattr(self, "_pending_allow", []) or [])
         want_ks = bool(getattr(self, "_defer_win_ks", False))

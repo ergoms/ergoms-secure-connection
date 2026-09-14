@@ -47,7 +47,6 @@ from desktop.singbox_mode import (
     SingboxModeManager,
     amneziawg_opts,
     choose_dial,
-    hysteria2_opts,
 )
 from desktop.tun import TunManager
 from lib.netutil import port_open
@@ -504,7 +503,6 @@ class OpsClient(ConnectionOps, ProbeOps, IntegrationOps):
         lines.append(f"server          = {info['server_target']}")
         uuid = str(tr.get("uuid") or "")
         uuid_show = (uuid[:8] + "…") if len(uuid) > 8 else (uuid or "(empty)")
-        hy = hysteria2_opts(tr)
         awg = amneziawg_opts(tr) if isinstance(tr, dict) else None
         office = bool(info["corporate_proxy"])
         dial = choose_dial(tr if isinstance(tr, dict) else {}, office=office)
@@ -513,12 +511,6 @@ class OpsClient(ConnectionOps, ProbeOps, IntegrationOps):
             f"uuid={uuid_show} sni={tr.get('server_name') or ''} "
             f"dial={dial}"
         )
-        if hy:
-            lines.append(
-                f"hysteria2       = udp :{hy['port']} sni={hy['server_name']}"
-                f"{' obfs=salamander' if hy.get('obfs_password') else ''} "
-                f"(выбран={'да' if dial == 'hysteria2' else 'нет'})"
-            )
         if awg:
             lines.append(
                 f"amneziawg       = udp :{awg['port']} {awg.get('address') or ''} "

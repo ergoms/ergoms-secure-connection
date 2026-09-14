@@ -49,7 +49,8 @@ class _FakeSock:
 def test_normalize_dial_aliases() -> None:
     assert normalize_dial("vless") == "vless-reality"
     assert normalize_dial("reality") == "vless-reality"
-    assert normalize_dial("hy2") == "hysteria2"
+    assert normalize_dial("hy2") == "amneziawg"
+    assert normalize_dial("hysteria2") == "amneziawg"
     assert normalize_dial("awg") == "amneziawg"
     assert normalize_dial("auto") == "amneziawg"
     assert normalize_dial("") == "amneziawg"
@@ -85,7 +86,7 @@ def test_choose_dial_defaults_and_office_choice() -> None:
     assert choose_dial({}, office=True) == "vless-reality"
     assert choose_dial({"dial": "amneziawg"}, office=True) == "amneziawg"
     assert choose_dial({"dial": "vless-reality"}, office=False) == "vless-reality"
-    assert choose_dial({"dial": "hysteria2"}, office=True) == "hysteria2"
+    assert choose_dial({"dial": "hysteria2"}, office=True) == "amneziawg"
 
 
 def test_underlay_ifaces_skips_loopback() -> None:
@@ -197,11 +198,11 @@ def test_settings_map_roundtrip() -> None:
     cfg = default_config_template()
     cfg["server"]["host"] = "vps.example"
     cfg["transport"]["uuid"] = "u-1"
-    cfg["transport"]["dial"] = "hysteria2"
+    cfg["transport"]["dial"] = "vless-reality"
     settings = cfg_to_settings(cfg)
     assert settings["serverHost"] == "vps.example"
     assert settings["trUuid"] == "u-1"
-    assert settings["trDial"] == "hysteria2"
+    assert settings["trDial"] == "vless-reality"
     defaults = settings_defaults()
     assert set(defaults) <= set(settings)
 
@@ -211,7 +212,7 @@ def test_settings_map_roundtrip() -> None:
     out = apply_settings_to_cfg(default_config_template(), get, corporate=False)
     assert out["server"]["host"] == "vps.example"
     assert out["transport"]["uuid"] == "u-1"
-    assert out["transport"]["dial"] == "hysteria2"
+    assert out["transport"]["dial"] == "vless-reality"
     assert default_config_template()["transport"]["dial"] == "amneziawg"
     assert settings_defaults()["trDial"] == "amneziawg"
 
@@ -228,7 +229,6 @@ def test_merge_empty_does_not_wipe_secrets() -> None:
     base["blocked_hosts"] = ["keep.example"]
     base["proxy_bypass"] = ["*.intranet.example", "*.local"]
     base["transport"]["uuid"] = "keep-uuid"
-    base["transport"]["hysteria2"]["password"] = "hy2-secret"
     base["transport"]["amneziawg"]["private_key"] = "awg-priv"
     base["transport"]["amneziawg"]["jc"] = 10
     incoming = {
@@ -246,7 +246,7 @@ def test_merge_empty_does_not_wipe_secrets() -> None:
     assert out["blocked_hosts"] == ["keep.example"]
     assert out["proxy_bypass"] == ["*.intranet.example", "*.local"]
     assert out["transport"]["uuid"] == "keep-uuid"
-    assert out["transport"]["hysteria2"]["password"] == "hy2-secret"
+    assert "hysteria2" not in out["transport"]
     assert out["transport"]["amneziawg"]["private_key"] == "awg-priv"
     assert out["transport"]["amneziawg"]["jc"] == 10
     incoming_awg = {
@@ -266,7 +266,6 @@ def test_apply_settings_empty_form_keeps_disk() -> None:
     cfg["tun"]["sing_box_path"] = "C:/tools/sing-box.exe"
     cfg["transport"]["uuid"] = "keep-uuid"
     cfg["transport"]["public_key"] = "keep-pk"
-    cfg["transport"]["hysteria2"]["password"] = "hy2-secret"
     cfg["transport"]["amneziawg"]["private_key"] = "awg-priv"
     cfg["transport"]["amneziawg"]["peer_public_key"] = "awg-pub"
     cfg["transport"]["amneziawg"]["jc"] = 10
@@ -282,7 +281,7 @@ def test_apply_settings_empty_form_keeps_disk() -> None:
     assert out["tun"]["sing_box_path"] == "C:/tools/sing-box.exe"
     assert out["transport"]["uuid"] == "keep-uuid"
     assert out["transport"]["public_key"] == "keep-pk"
-    assert out["transport"]["hysteria2"]["password"] == "hy2-secret"
+    assert "hysteria2" not in out["transport"]
     assert out["transport"]["amneziawg"]["private_key"] == "awg-priv"
     assert out["transport"]["amneziawg"]["peer_public_key"] == "awg-pub"
     assert out["transport"]["amneziawg"]["jc"] == 10

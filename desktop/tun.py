@@ -393,7 +393,7 @@ def stale_default_cmds(keep_gw: str) -> list[str]:
 
     Office Ethernet / old TAP often leave 10.x defaults with metric 0.
     Tailscale/Amnezia leave 100.x (CGNAT) persistent rows with 'Default'
-    instead of a metric — those used to be ignored and ate Hysteria2 UDP.
+    instead of a metric — those used to be ignored and ate UDP to the VPS.
     """
     keep = (keep_gw or "").strip()
     cmds: list[str] = []

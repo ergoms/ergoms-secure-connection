@@ -15,7 +15,6 @@ from desktop.config.constants import (
     AWG_DEFAULT_PORT,
     CORPORATE_BYPASS_PRESET,
     CORPORATE_PROXY_PRESET,
-    HY2_DEFAULT_SNI,
     REALITY_DEFAULT_SNI,
     STANDARD_BYPASS_PRESET,
 )
@@ -26,7 +25,6 @@ from desktop.config.model import (
     default_config_template,
     ensure_config_defaults,
     normalize_dial,
-    normalize_hy2_sni,
     normalize_scope,
     truthy as _truthy,
 )
@@ -228,8 +226,13 @@ def strip_amneziawg_section(cfg: dict[str, Any]) -> dict[str, Any]:
 
 
 def persistable_config(cfg: dict[str, Any] | None) -> dict[str, Any]:
-    """Normalized JSON payload without the AmneziaWG block."""
-    return strip_amneziawg_section(ensure_config_defaults(cfg or {}))
+    """Normalized JSON payload without AmneziaWG keys or leftover Hy2."""
+    out = strip_amneziawg_section(ensure_config_defaults(cfg or {}))
+    tr = out.get("transport")
+    if isinstance(tr, dict):
+        tr.pop("hysteria2", None)
+        tr.pop("hy2_password", None)
+    return out
 
 
 def _write_awg_conf(conf_path: Path, text: str) -> None:
@@ -309,7 +312,6 @@ def merge_imported_config(
     src = deepcopy(incoming if isinstance(incoming, dict) else {})
     keys = set(src)
     fragment_keys = {
-        "hysteria2",
         "uuid",
         "public_key",
         "short_id",
@@ -318,10 +320,9 @@ def merge_imported_config(
         "type",
     }
     src.pop("amneziawg", None)
+    src.pop("hysteria2", None)
     if keys & fragment_keys and "transport" not in src and "server" not in src:
         wrap: dict[str, Any] = {}
-        if "hysteria2" in src:
-            wrap["hysteria2"] = src.pop("hysteria2")
         for key in ("uuid", "public_key", "short_id", "server_name", "port", "dial", "type"):
             if key in src:
                 wrap[key] = src.pop(key)
@@ -338,17 +339,9 @@ def merge_imported_config(
             dst_tr = {}
             out["transport"] = dst_tr
         for key, val in inc_tr.items():
-            if key == "amneziawg":
+            if key in ("amneziawg", "hysteria2"):
                 continue
-            if key == "hysteria2" and isinstance(val, dict):
-                cur = dst_tr.get(key)
-                if not isinstance(cur, dict):
-                    cur = {}
-                for sub, subval in val.items():
-                    if _nonempty(subval):
-                        cur[sub] = subval
-                dst_tr[key] = cur
-            elif _nonempty(val):
+            if _nonempty(val):
                 dst_tr[key] = val
     for key, val in src.items():
         if key == "transport":
@@ -369,7 +362,7 @@ def merge_imported_config(
 
 
 def config_is_ready(cfg: dict[str, Any] | None) -> bool:
-    """True if host + at least one transport (Reality / Hy2 / AWG) is filled."""
+    """True if host + at least one transport (Reality / AWG) is filled."""
     if not isinstance(cfg, dict):
         return False
     host = str((cfg.get("server") or {}).get("host") or "").strip()
@@ -380,9 +373,6 @@ def config_is_ready(cfg: dict[str, Any] | None) -> bool:
         return False
     uuid = str(tr.get("uuid") or "").strip()
     if uuid and "REPLACE" not in uuid.upper() and len(uuid) >= 8:
-        return True
-    hy = tr.get("hysteria2") if isinstance(tr.get("hysteria2"), dict) else {}
-    if str(hy.get("password") or "").strip():
         return True
     awg = tr.get("amneziawg") if isinstance(tr.get("amneziawg"), dict) else {}
     return amnezia_keys_ready(awg)

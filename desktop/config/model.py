@@ -10,12 +10,9 @@ from desktop.config.constants import (
     AWG_DEFAULT_MTU,
     AWG_DEFAULT_PORT,
     BLOCKED_HOSTS,
-    BLOCKED_HY2_SNI,
     DEFAULT_DIAL,
     DEFAULT_SERVER_HOST,
     HTTP_BRIDGE_PORT,
-    HY2_DEFAULT_PORT,
-    HY2_DEFAULT_SNI,
     LOCAL_SOCKS_PORT,
     PAC_LISTEN_PORT,
     REALITY_DEFAULT_SNI,
@@ -63,20 +60,11 @@ def clamp_mtu(val: Any, default: int) -> int:
 
 
 def normalize_dial(value: Any) -> str:
-    """Reality, Hysteria2, or AmneziaWG. Empty / legacy `auto` → AmneziaWG."""
+    """Reality or AmneziaWG. Empty / legacy `auto` / Hy2 → AmneziaWG."""
     raw = str(value or "").strip().lower()
     if raw in ("vless", "reality", "vless-reality"):
         return "vless-reality"
-    if raw in ("hy2", "hysteria2"):
-        return "hysteria2"
     return DEFAULT_DIAL
-
-
-def normalize_hy2_sni(value: Any, *, fallback: str = HY2_DEFAULT_SNI) -> str:
-    sni = str(value or "").strip()
-    if not sni or sni.lower() in BLOCKED_HY2_SNI:
-        return fallback
-    return sni
 
 
 def normalize_scope(value: Any) -> str:
@@ -154,33 +142,6 @@ class TunConfig:
 
 
 @dataclass
-class Hysteria2Config:
-    password: str = ""
-    port: int = HY2_DEFAULT_PORT
-    server_name: str = HY2_DEFAULT_SNI
-    obfs_password: str = ""
-    insecure: bool = True
-
-    def __post_init__(self) -> None:
-        self.password = str(self.password or "").strip()
-        self.port = clamp_port(self.port, HY2_DEFAULT_PORT)
-        self.server_name = normalize_hy2_sni(self.server_name)
-        self.obfs_password = str(self.obfs_password or "").strip()
-        self.insecure = as_bool(self.insecure, True)
-
-    @classmethod
-    def from_dict(cls, raw: Any) -> Hysteria2Config:
-        data = _section(raw)
-        return cls(
-            password=str(data.get("password") or ""),
-            port=as_int(data.get("port"), HY2_DEFAULT_PORT),
-            server_name=str(data.get("server_name") or HY2_DEFAULT_SNI),
-            obfs_password=str(data.get("obfs_password") or ""),
-            insecure=as_bool(data.get("insecure"), True),
-        )
-
-
-@dataclass
 class AmneziaWgConfig:
     port: int = AWG_DEFAULT_PORT
     private_key: str = ""
@@ -234,12 +195,9 @@ class TransportConfig:
     short_id: str = ""
     server_name: str = REALITY_DEFAULT_SNI
     port: int = SERVER_PORT
-    hysteria2: Hysteria2Config = field(default_factory=Hysteria2Config)
     amneziawg: AmneziaWgConfig = field(default_factory=AmneziaWgConfig)
 
     def __post_init__(self) -> None:
-        if not isinstance(self.hysteria2, Hysteria2Config):
-            self.hysteria2 = Hysteria2Config.from_dict(self.hysteria2)
         if not isinstance(self.amneziawg, AmneziaWgConfig):
             self.amneziawg = AmneziaWgConfig.from_dict(self.amneziawg)
         self.type = "vless-reality"
@@ -253,9 +211,6 @@ class TransportConfig:
     @classmethod
     def from_dict(cls, raw: Any) -> TransportConfig:
         data = _section(raw)
-        hy = data.get("hysteria2")
-        if not isinstance(hy, dict) and filled_str(data.get("hy2_password")):
-            hy = {"password": data.get("hy2_password")}
         return cls(
             type=str(data.get("type") or "vless-reality"),
             dial=normalize_dial(data.get("dial")),
@@ -264,7 +219,6 @@ class TransportConfig:
             short_id=str(data.get("short_id") or ""),
             server_name=str(data.get("server_name") or REALITY_DEFAULT_SNI),
             port=as_int(data.get("port"), SERVER_PORT),
-            hysteria2=Hysteria2Config.from_dict(hy),
             amneziawg=AmneziaWgConfig.from_dict(data.get("amneziawg")),
         )
 

@@ -9,7 +9,6 @@ from desktop.config_io import (
     AWG_DEFAULT_ADDRESS,
     AWG_DEFAULT_MTU,
     AWG_DEFAULT_PORT,
-    HY2_DEFAULT_SNI,
     REALITY_DEFAULT_SNI,
     apply_corporate_profile,
     apply_standard_profile,
@@ -17,7 +16,6 @@ from desktop.config_io import (
     filled_str,
     infer_corporate,
     normalize_dial,
-    normalize_hy2_sni,
 )
 
 GetFn = Callable[[str], Any]
@@ -47,10 +45,6 @@ def settings_defaults() -> dict[str, Any]:
         "trServerName": app.transport.server_name,
         "trPort": str(app.transport.port),
         "trDial": app.transport.dial,
-        "hy2Password": app.transport.hysteria2.password,
-        "hy2Port": str(app.transport.hysteria2.port),
-        "hy2ServerName": app.transport.hysteria2.server_name,
-        "hy2Obfs": app.transport.hysteria2.obfs_password,
         "awgPrivateKey": app.transport.amneziawg.private_key,
         "awgPeerPublicKey": app.transport.amneziawg.peer_public_key,
         "awgPresharedKey": app.transport.amneziawg.pre_shared_key,
@@ -80,7 +74,6 @@ def cfg_to_settings(cfg: dict[str, Any]) -> dict[str, Any]:
     tun = cfg.get("tun") or {}
     tr = cfg.get("transport") or {}
     bypass = cfg.get("proxy_bypass") or []
-    hy = tr.get("hysteria2") if isinstance(tr.get("hysteria2"), dict) else {}
     awg = tr.get("amneziawg") if isinstance(tr.get("amneziawg"), dict) else {}
     rev = cfg.get("reverse_ssh") or {}
     corporate = infer_corporate(cfg)
@@ -107,10 +100,6 @@ def cfg_to_settings(cfg: dict[str, Any]) -> dict[str, Any]:
             "trServerName": str(tr.get("server_name") or REALITY_DEFAULT_SNI),
             "trPort": str(tr.get("port") or 443),
             "trDial": normalize_dial(tr.get("dial")),
-            "hy2Password": str(hy.get("password") or ""),
-            "hy2Port": str(hy.get("port") or 8443),
-            "hy2ServerName": normalize_hy2_sni(hy.get("server_name")),
-            "hy2Obfs": str(hy.get("obfs_password") or ""),
             "awgPrivateKey": str(awg.get("private_key") or ""),
             "awgPeerPublicKey": str(awg.get("peer_public_key") or ""),
             "awgPresharedKey": str(awg.get("pre_shared_key") or ""),
@@ -223,17 +212,7 @@ def apply_settings_to_cfg(
     if not filled_str(tr.get("server_name")):
         tr["server_name"] = REALITY_DEFAULT_SNI
     tr["port"] = _as_int(get("serverPort") or get("trPort"), 443)
-    hy = tr.get("hysteria2")
-    if not isinstance(hy, dict):
-        hy = {}
-        tr["hysteria2"] = hy
-    assign_filled(hy, "password", get("hy2Password"))
-    hy["port"] = _as_int(get("hy2Port"), 8443)
-    hy_sni = filled_str(get("hy2ServerName"))
-    if hy_sni:
-        hy["server_name"] = normalize_hy2_sni(hy_sni)
-    assign_filled(hy, "obfs_password", get("hy2Obfs"))
-    hy["insecure"] = bool(hy.get("insecure", True))
+    tr.pop("hysteria2", None)
     rev = cfg.get("reverse_ssh")
     if not isinstance(rev, dict):
         rev = {}

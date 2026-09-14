@@ -6,18 +6,16 @@
 
 **офис:** программа → sing-box → Squid CONNECT → VPS TCP :443 (VLESS+Reality) → интернет
 
-**дом:** программа → sing-box → VPS UDP :8443 (Hysteria2) → интернет
+**дом:** программа → sing-box AWG → VPS UDP :51820 (AmneziaWG) → интернет
 
-**дом (AmneziaWG):** программа → sing-box AWG → VPS UDP :51820 (AmneziaWG) → интернет
+Домашний провайдер часто глотает TLS Reality. Офисный Squid UDP не проводит, поэтому Reality там остаётся. Дома — AmneziaWG.
 
-Домашний провайдер часто глотает TLS Reality; Hysteria2 — QUIC. Без **salamander** TSPU читает SNI из QUIC Initial и рвёт handshake (`timeout: no recent network activity`). Офисный Squid UDP не проводит, поэтому Reality там остаётся. На уже установленном VPS: `bash modes/vps/enable_hysteria2.sh` (пароль + `HY2_OBFS` в `credentials.env` → `transport.hysteria2`).
-
-AmneziaWG — третий домашний dial (`transport.dial=amneziawg`). Официальный sing-box 1.11.15 его не говорит, клиент качает отдельную AWG-сборку (`download-sing-box-awg`, `tools/sing-box-awg` / `ergoms-tun-awg.exe`). На VPS это **отдельный** сервис рядом с sing-box, не замена Reality: `bash modes/vps/enable_amneziawg.sh`. Чужой туннель AmneziaVPN по-прежнему конфликт; наш AWG идёт gVisor-endpoint внутри sing-box и свой `wireguard` NIC не поднимает.
+AmneziaWG (`transport.dial=amneziawg`). Официальный sing-box 1.11.15 его не говорит, клиент качает отдельную AWG-сборку (`download-sing-box-awg`, `tools/sing-box-awg` / `ergoms-tun-awg.exe`). На VPS это **отдельный** сервис рядом с sing-box, не замена Reality: `bash modes/vps/enable_amneziawg.sh`. Чужой туннель AmneziaVPN по-прежнему конфликт; наш AWG идёт gVisor-endpoint внутри sing-box и свой `wireguard` NIC не поднимает.
 
 **Что проверено**
 
 - корпоративный VPN (VLESS+Reality через Squid) — работает
-- дом, Hysteria2 + salamander, SNI не Cloudflare — **работает** (Ethernet, Россия)
+- дом, AmneziaWG — работает (Ethernet, Россия)
 - дом, VLESS+Reality напрямую — DPI глотает TLS ClientHello, не использовать
 
 ---
@@ -101,7 +99,7 @@ chmod +x "ERGOMS SECURE CONNECTION"
 
 Локально после `on`: SOCKS `:1080`, HTTP `:1088`, PAC `:1089`.
 
-Окно: в трее три пункта — **Открыть**, **Подключить / Отключить** (текст и доступность меняются по статусу), **Выход**. Во вкладке «Журнал» кнопка **Копировать всё** кладёт текущий лог в буфер обмена. Служба Amnezia без поднятого туннеля Hy2 не ломает. Если Amnezia-туннель всё же включён — в split добавьте IP VPS `/32` (домены и exe не нужны). Kill switch Amnezia (`WinError 10013`) UDP всё равно может резать.
+Окно: в трее три пункта — **Открыть**, **Подключить / Отключить** (текст и доступность меняются по статусу), **Выход**. Во вкладке «Журнал» кнопка **Копировать всё** кладёт текущий лог в буфер обмена. Служба Amnezia без поднятого туннеля AWG не ломает. Если Amnezia-туннель всё же включён — в split добавьте IP VPS `/32` (домены и exe не нужны). Kill switch Amnezia (`WinError 10013`) UDP всё равно может резать.
 
 ---
 
@@ -111,14 +109,11 @@ chmod +x "ERGOMS SECURE CONNECTION"
 
 Что помогло (без этого дома не поднимается):
 
-1. **Hysteria2 UDP :8443**, не Reality. Домашний DPI глотает VLESS+Reality на TCP :443 (`TLS handshake timed out`, HTTP 400 с VPS при этом живой). Пустой `transport.hysteria2.password` = клиент молча идёт в Reality. На VPS: `ss -lunp | grep 8443` и `HY2_PASSWORD` / `HY2_OBFS` из `/var/lib/ops-content-singbox/credentials.env`. `HY2_PORT` в этом файле может врать (`443`) — смотреть фактический listen.
-2. **Salamander (obfs) на VPS и в клиенте.** TSPU расшифровывает QUIC Initial и читает SNI; порт 8443 сам по себе больше не обход (фильтр на все UDP). Без obfs — `timeout: no recent network activity` / SOCKS `rep=1`, даже когда Amnezia выключена и VPS слушает. В конфиге: `transport.hysteria2.obfs_password` = `HY2_OBFS`. На VPS снова: `bash modes/vps/enable_hysteria2.sh`.
-3. **Hy2 SNI отдельно от Reality, не Cloudflare.** Reality dest остаётся `www.cloudflare.com`. В QUIC Initial `www.cloudflare.com` — стоп-лист РКН/TSPU. Hy2: `www.microsoft.com` + `insecure: true`. Поле в настройках: «Hysteria2 SNI», не путать с Reality SNI.
-4. **Дом: сначала Hy2 без TUN/PAC/kill switch.** Windows `auto_route` и PAC крадут UDP до handshake. TUN split-default и watchdog — **только после** `проверка выхода: OK`. Если handshake не прошёл, kill switch не ставить (иначе интернет мёртвый, а VPN тоже).
-5. **Чужой туннель с default `0.0.0.0/0`.** Amnezia / Tailscale через `100.x` / `10.13.13.2` metric 5 перехватывают QUIC. Idle-служба Amnezia (туннель не поднят) на Hy2 не влияет. В `route print` у persistent-строки слово `Default` вместо метрики — клиент такие снимает. Если второй VPN нужен: split `/32` на IP VPS через Ethernet.
-6. На VPS в панели хостинга открыть **UDP 8443** (не путать с TCP 443).
+1. **AmneziaWG UDP :51820**, не Reality. Домашний DPI глотает VLESS+Reality на TCP :443 (`TLS handshake timed out`, HTTP 400 с VPS при этом живой). На VPS: `ss -lunp | grep 51820` и `bash modes/vps/enable_amneziawg.sh`.
+2. **Дом: AWG без чужого default `0.0.0.0/0`.** Amnezia / Tailscale через `100.x` / `10.13.13.2` metric 5 перехватывают UDP. Idle-служба Amnezia (туннель не поднят) не влияет. В `route print` у persistent-строки слово `Default` вместо метрики — клиент такие снимает. Если второй VPN нужен: split `/32` на IP VPS через Ethernet.
+3. На VPS в панели хостинга открыть **UDP 51820** (не путать с TCP 443).
 
-В журнале при норме: `дом: Hy2 salamander — QUIC Initial без открытого SNI`, затем `проверка выхода: OK`, затем `Hysteria2 живой — ставлю TUN split default`. Песочница (`python -m desktop sandbox`): `hy2 CONNECT` + `hy2 HTTPS` OK.
+В журнале при норме: `дом: AmneziaWG UDP :51820`, затем `проверка выхода: OK`, затем TUN split default. Песочница (`python -m desktop sandbox`): `AWG CONNECT` + `AWG HTTPS` OK.
 
 ---
 
@@ -129,7 +124,7 @@ chmod +x "ERGOMS SECURE CONNECTION"
 | Ключ | Назначение |
 |------|------------|
 | `server.host` | IP/hostname VPS |
-| `transport` | VLESS: uuid, public_key, short_id, `server_name` (Reality dest). Дом: `hysteria2.password`, `obfs_password`, свой `server_name`. `dial`: `vless-reality` / `hysteria2` / `amneziawg` |
+| `transport` | VLESS: uuid, public_key, short_id, `server_name` (Reality dest). `dial`: `vless-reality` / `amneziawg` |
 | `amneziawg.conf` | Клиентский AWG (только `.conf`, не JSON) |
 | `socks_scope` | `full` или `github` (область PAC) |
 | `tun.enabled` / `tun.elevate` | TUN вместе с `on` (по умолчанию вкл.), запрос прав |
@@ -178,7 +173,7 @@ chmod +x "ERGOMS SECURE CONNECTION"
 
 ## SSH на клиент без публичного IP
 
-По умолчанию выключено. Если включить, пока VPN поднят, с VPS можно зайти на этот ПК. Офисный Squid рвёт прямые соединения на VPS `:22`, поэтому клиент открывает обратный туннель **через SOCKS** (Hy2 или Reality).
+По умолчанию выключено. Если включить, пока VPN поднят, с VPS можно зайти на этот ПК. Офисный Squid рвёт прямые соединения на VPS `:22`, поэтому клиент открывает обратный туннель **через SOCKS** (AWG или Reality).
 
 На клиенте нужны OpenSSH Server и ключ в `creds/` (тот же, что в `authorized_keys` на VPS). В настройках: **SSH с сервера**.
 

@@ -16,7 +16,6 @@ from desktop.kill_switch import is_sealed as kill_switch_is_sealed
 from desktop.singbox_mode import (
     amneziawg_opts,
     choose_dial,
-    hysteria2_opts,
     require_transport,
 )
 from desktop.tun import foreign_vpn_live
@@ -84,7 +83,7 @@ class ProbeOps:
             probe_host, probe_path = exit_probe_target(office=office)
             tr_now = require_transport(cfg_now)
             dial_now = choose_dial(tr_now, office=office)
-            home_udp = home_udp or dial_now in ("hysteria2", "amneziawg")
+            home_udp = home_udp or dial_now == "amneziawg"
         except Exception:  # noqa: BLE001
             office = False
         self.log(f"проверка выхода через SOCKS :{socks_port} → {probe_host}:443…")
@@ -140,22 +139,16 @@ class ProbeOps:
         self._log_singbox_tail("после неудачной проверки")
 
     def _log_udp_timeout_hint(self) -> None:
-        self._exit_probe_hint = "hy2-udp"
+        self._exit_probe_hint = "udp-timeout"
         try:
             tr_now = require_transport(self.config())
             office_now = bool(resolve_corporate_proxy(self.config()))
             dial_now = choose_dial(tr_now, office=office_now)
             awg_now = amneziawg_opts(tr_now)
-            hy_now = hysteria2_opts(tr_now)
-            if dial_now == "amneziawg":
-                udp_port = int((awg_now or {}).get("port") or 0)
-            elif dial_now == "hysteria2":
-                udp_port = int((hy_now or {}).get("port") or 0)
-            else:
-                udp_port = 0
+            udp_port = int((awg_now or {}).get("port") or 0) if dial_now == "amneziawg" else 0
         except Exception:  # noqa: BLE001
-            dial_now, udp_port = "hysteria2", 0
-        proto = "AmneziaWG" if dial_now == "amneziawg" else "Hysteria2"
+            dial_now, udp_port = "amneziawg", 0
+        proto = "AmneziaWG" if dial_now == "amneziawg" else "VLESS+Reality"
         if udp_port and udp_port != 443:
             live = foreign_vpn_live()
             if live:
@@ -182,17 +175,15 @@ class ProbeOps:
             office = bool(resolve_corporate_proxy(cfg))
             tr = require_transport(cfg)
             dial_now = choose_dial(tr, office=office)
-            hy = hysteria2_opts(tr)
             awg = amneziawg_opts(tr)
         except Exception:  # noqa: BLE001
-            office, hy, awg, dial_now = False, None, None, "vless-reality"
-        if not office and not hy and not awg and dial_now == "vless-reality":
-            self._exit_probe_hint = "need-hy2"
+            office, awg, dial_now = False, None, "vless-reality"
+        if not office and not awg and dial_now == "vless-reality":
+            self._exit_probe_hint = "need-awg"
             self.log(
                 "домашний DPI съел Reality: TCP до VPS живой, "
-                "внутри туннеля — тишина. Без Hysteria2 или AmneziaWG дома интернет "
-                "не заработает. На VPS: bash modes/vps/enable_hysteria2.sh "
-                "или bash modes/vps/enable_amneziawg.sh"
+                "внутри туннеля — тишина. Без AmneziaWG дома интернет "
+                "не заработает. На VPS: bash modes/vps/enable_amneziawg.sh"
             )
 
     def _on_exit_probe_ok(self, probe_host: str) -> None:

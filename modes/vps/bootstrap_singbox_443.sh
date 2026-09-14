@@ -181,11 +181,6 @@ EOF
 systemctl daemon-reload
 systemctl enable --now sing-box.service
 
-if [[ -f "$ROOT/modes/vps/enable_hysteria2.sh" ]]; then
-  echo "==> Hysteria2 (UDP :443) for home Wi-Fi"
-  bash "$ROOT/modes/vps/enable_hysteria2.sh" || true
-fi
-
 if command -v ufw >/dev/null 2>&1; then
   ufw allow 443/tcp || true
 fi
@@ -210,7 +205,7 @@ cat <<EOF
 
 ========================================================================
 OK: sing-box VLESS+Reality listening on :443
-Один файл на ПК: $STATE_DIR/client.json (Reality + Hy2 + AWG, если уже включён).
+Один файл на ПК: $STATE_DIR/client.json (Reality + AWG, если уже включён).
 В клиенте: Настройки → Из файла.
 
   ./ergoms-secure-connection.sh on

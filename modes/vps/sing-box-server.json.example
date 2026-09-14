@@ -28,26 +28,6 @@
           "short_id": ["", "REPLACE_SHORT_ID"]
         }
       }
-    },
-    {
-      "type": "hysteria2",
-      "tag": "hy2-in",
-      "listen": "::",
-      "listen_port": 8443,
-      "users": [
-        {
-          "name": "ergoms",
-          "password": "REPLACE_HY2_PASSWORD"
-        }
-      ],
-      "tls": {
-        "enabled": true,
-        "server_name": "www.cloudflare.com",
-        "alpn": ["h3"],
-        "certificate_path": "/etc/sing-box/hy2.crt",
-        "key_path": "/etc/sing-box/hy2.key"
-      },
-      "masquerade": "https://www.cloudflare.com"
     }
   ],
   "outbounds": [
@@ -58,11 +38,6 @@
   ],
   "route": {
     "rules": [
-      {
-        "inbound": ["hy2-in"],
-        "action": "sniff",
-        "timeout": "1s"
-      },
       {
         "inbound": ["vless-in"],
         "action": "sniff",

@@ -7,7 +7,6 @@ Item {
     id: root
 
     readonly property bool tunOn: Boolean(bridge.settings.tunAuto) || Boolean(bridge.settings.killSwitch)
-    readonly property bool hy2Dial: String(bridge.settings.trDial) === "hysteria2"
     readonly property bool awgDial: String(bridge.settings.trDial) === "amneziawg"
     readonly property bool settingsIncomplete: {
         var host = String(bridge.settings.serverHost || "").replace(/^\s+|\s+$/g, "")
@@ -16,9 +15,6 @@ Item {
         if (root.awgDial) {
             return !String(bridge.settings.awgPrivateKey || "").replace(/^\s+|\s+$/g, "")
                 || !String(bridge.settings.awgPeerPublicKey || "").replace(/^\s+|\s+$/g, "")
-        }
-        if (root.hy2Dial) {
-            return !String(bridge.settings.hy2Password || "").replace(/^\s+|\s+$/g, "")
         }
         return !String(bridge.settings.trUuid || "").replace(/^\s+|\s+$/g, "")
             || !String(bridge.settings.trPublicKey || "").replace(/^\s+|\s+$/g, "")
@@ -214,7 +210,6 @@ Item {
                             value: String(bridge.settings.trDial || (bridge.corporate ? "vless-reality" : "amneziawg"))
                             model: [
                                 { label: "Reality", value: "vless-reality" },
-                                { label: "Hy2", value: "hysteria2" },
                                 { label: "AWG", value: "amneziawg" }
                             ]
                             onActivated: (v) => { bridge.settings.trDial = v }
@@ -223,13 +218,13 @@ Item {
                 }
 
                 SectionLabel {
-                    visible: !root.hy2Dial && !root.awgDial
+                    visible: !root.awgDial
                     height: visible ? implicitHeight : 0
                     text: "ПОДКЛЮЧЕНИЕ"
                     topPadding: 8
                 }
                 Card {
-                    visible: !root.hy2Dial && !root.awgDial
+                    visible: !root.awgDial
                     height: visible ? implicitHeight : 0
                     width: parent.width
                     implicitHeight: visible ? realityCol.implicitHeight + 24 : 0
@@ -245,7 +240,7 @@ Item {
                             visible: bridge.corporate
                             width: parent.width
                             height: visible ? implicitHeight : 0
-                            text: "В офисе по умолчанию Reality через Squid. Можно выбрать Hy2 или AWG — они идут минуя прокси."
+                            text: "В офисе по умолчанию Reality через Squid. Можно выбрать AWG — он идёт минуя прокси."
                             color: T.muted
                             font.pixelSize: 11
                             font.family: T.fontUi
@@ -257,44 +252,6 @@ Item {
                                 { label: "Public key", key: "trPublicKey", password: true },
                                 { label: "Short ID", key: "trShortId" },
                                 { label: "SNI (dest)", key: "trServerName" }
-                            ]
-                        }
-                    }
-                }
-
-                SectionLabel {
-                    visible: root.hy2Dial
-                    height: visible ? implicitHeight : 0
-                    text: "ПОДКЛЮЧЕНИЕ"
-                    topPadding: 8
-                }
-                Card {
-                    visible: root.hy2Dial
-                    height: visible ? implicitHeight : 0
-                    width: parent.width
-                    implicitHeight: visible ? hy2Col.implicitHeight + 24 : 0
-                    Column {
-                        id: hy2Col
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.top: parent.top
-                        anchors.margins: 14
-                        spacing: 10
-
-                        Text {
-                            width: parent.width
-                            text: "Параметры выбранного способа подключения."
-                            color: T.muted
-                            font.pixelSize: 11
-                            font.family: T.fontUi
-                            wrapMode: Text.WordWrap
-                        }
-                        TransportFields {
-                            fields: [
-                                { label: "Пароль", key: "hy2Password", password: true },
-                                { label: "UDP порт", key: "hy2Port" },
-                                { label: "SNI", key: "hy2ServerName" },
-                                { label: "Обфускация", key: "hy2Obfs", password: true }
                             ]
                         }
                     }

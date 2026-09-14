@@ -63,13 +63,13 @@ def present_status(
     socks_port = int(st.get("socks_port") or 1080)
     toast: str | None = None
     if singbox and socks_up and probe_err:
-        if probe_hint == "need-hy2":
+        if probe_hint == "need-awg":
             title, sub, color = (
                 "Нет выхода",
-                "Reality не дал выход. Интернет закрыт — Hy2/AWG или отключите VPN",
+                "Reality не дал выход. Интернет закрыт — AWG или отключите VPN",
                 C_DANGER,
             )
-        elif probe_hint == "hy2-udp":
+        elif probe_hint == "udp-timeout":
             title, sub, color = (
                 "Нет выхода",
                 "UDP не дошёл. Интернет закрыт — проверьте порт на VPS или отключите VPN",
