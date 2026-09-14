@@ -278,8 +278,8 @@ def wait_tun_iface(*, timeout: float = 20.0) -> int | None:
     return None
 
 
-def underlay_ifaces() -> list[tuple[int, str]]:
-    """Up IPv4 NICs except loopback and our TUN: (if_index, alias)."""
+def underlay_ifaces() -> list[tuple[int, int, str]]:
+    """Up IPv4 NICs except loopback and our TUN: (if_index, metric, alias)."""
     if sys.platform != "win32":
         return []
     try:
@@ -293,20 +293,20 @@ def underlay_ifaces() -> list[tuple[int, str]]:
         )
     except (OSError, subprocess.TimeoutExpired):
         return []
-    out: list[tuple[int, str]] = []
+    out: list[tuple[int, int, str]] = []
     for line in (r.stdout or "").splitlines():
-        m = re.match(r"^\s*(\d+)\s+\d+\s+\d+\s+(\S+)\s+(.+?)\s*$", line)
+        m = re.match(r"^\s*(\d+)\s+(\d+)\s+\d+\s+(\S+)\s+(.+?)\s*$", line)
         if not m:
             continue
-        if m.group(2).lower() not in _IFACE_UP:
+        if m.group(3).lower() not in _IFACE_UP:
             continue
-        name = m.group(3).strip()
+        name = m.group(4).strip()
         low = name.lower()
         if "loopback" in low or "петл" in low:
             continue
         if _is_tun_iface(name):
             continue
-        out.append((int(m.group(1)), name))
+        out.append((int(m.group(1)), int(m.group(2)), name))
     return out
 
 
@@ -337,10 +337,10 @@ def _win_if_index_by_alias(alias: str) -> int | None:
 
 
 def install_tun_split_default(
-    if_idx: int, *, metric: int = 5, hop: str = "0.0.0.0"
+    if_idx: int, *, metric: int = 5, hop: str = "172.19.0.1"
 ) -> list[str]:
-    """Send 0.0.0.0/1 + 128.0.0.0/1 into our TUN without auto_route."""
-    gw = hop or "0.0.0.0"
+    """Send 0.0.0.0/1 + 128.0.0.0/1 into our TUN (same hop as the working build)."""
+    gw = hop or "172.19.0.1"
     return [
         f"route delete 0.0.0.0 mask 128.0.0.0 if {if_idx}",
         f"route delete 128.0.0.0 mask 128.0.0.0 if {if_idx}",
@@ -395,7 +395,7 @@ def tun_split_installed(if_idx: int) -> bool:
 
 
 def ensure_tun_split_default(if_idx: int, *, metric: int = 5) -> tuple[bool, str]:
-    """Install /1+/1 on TUN; try on-link then 172.19.0.2 / .1."""
+    """Install /1+/1 on TUN; hop 172.19.0.1 first (same as the working build)."""
     from desktop.kill_switch import lift_ipv4_blackhole_commands
 
     for line in lift_ipv4_blackhole_commands():
@@ -411,7 +411,7 @@ def ensure_tun_split_default(if_idx: int, *, metric: int = 5) -> tuple[bool, str
             )
         except (OSError, subprocess.TimeoutExpired):
             pass
-    hops = ("0.0.0.0", "172.19.0.2", "172.19.0.1")
+    hops = ("172.19.0.1", "172.19.0.2")
     last = ""
     for hop in hops:
         for line in install_tun_split_default(if_idx, metric=metric, hop=hop):

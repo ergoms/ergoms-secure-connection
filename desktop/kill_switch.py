@@ -439,16 +439,65 @@ def suppress_underlay_ipv6(*, var_dir: Path, log: LogFn = noop) -> None:
         return
     cmds = [
         f"netsh interface ipv6 set interface {idx} admin=disabled"
-        for idx, _name in ifaces
+        for idx, _met, _name in ifaces
     ]
     if procutil.is_admin():
         _run_lines_now(cmds, ignore_fail=True)
     else:
         _run_privileged_lines(cmds, log=log, ignore_fail=True)
     st = _load_state(var_dir)
-    st["ipv6_disabled"] = [idx for idx, _name in ifaces]
+    st["ipv6_disabled"] = [idx for idx, _met, _name in ifaces]
     _save_state(var_dir, st)
-    log("kill switch: IPv6 выкл на " + ", ".join(name for _i, name in ifaces))
+    log("kill switch: IPv6 выкл на " + ", ".join(name for _i, _m, name in ifaces))
+
+
+def prefer_tun_ipv4(tun_idx: int, *, var_dir: Path, log: LogFn = noop) -> None:
+    """Make Windows pick TUN as the default NIC (dual Wi-Fi+Ethernet otherwise leaks)."""
+    if sys.platform != "win32" or not tun_idx:
+        return
+    from desktop.tun import underlay_ifaces
+
+    saved: list[dict[str, int | str]] = []
+    cmds = [f"netsh interface ipv4 set interface {int(tun_idx)} metric=1"]
+    for idx, metric, name in underlay_ifaces():
+        saved.append({"idx": idx, "metric": metric, "name": name})
+        cmds.append(f"netsh interface ipv4 set interface {idx} metric=5000")
+    if procutil.is_admin():
+        _run_lines_now(cmds, ignore_fail=True)
+    else:
+        _run_privileged_lines(cmds, log=log, ignore_fail=True)
+    st = _load_state(var_dir)
+    st["ipv4_metrics"] = saved
+    st["tun_idx"] = int(tun_idx)
+    _save_state(var_dir, st)
+    names = ", ".join(str(x["name"]) for x in saved)
+    log(f"TUN if {tun_idx} metric=1, underlay metric=5000 ({names or 'нет'})")
+
+
+def restore_underlay_ipv4_metrics(*, var_dir: Path, log: LogFn = noop) -> None:
+    if sys.platform != "win32":
+        return
+    st = _load_state(var_dir)
+    rows = st.get("ipv4_metrics") or []
+    cmds: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            idx = int(row.get("idx") or 0)
+            metric = int(row.get("metric") or 25)
+        except (TypeError, ValueError):
+            continue
+        if idx:
+            cmds.append(f"netsh interface ipv4 set interface {idx} metric={metric}")
+    if cmds:
+        if procutil.is_admin():
+            _run_lines_now(cmds, ignore_fail=True)
+        else:
+            _run_privileged_lines(cmds, log=log, ignore_fail=True)
+        log("kill switch: метрики underlay IPv4 вернул")
+    st["ipv4_metrics"] = []
+    _save_state(var_dir, st)
 
 
 def restore_underlay_ipv6(*, var_dir: Path, log: LogFn = noop) -> None:
@@ -571,6 +620,7 @@ def apply(
 
 def clear(*, var_dir: Path, log: LogFn = noop) -> None:
     restore_underlay_ipv6(var_dir=var_dir, log=log)
+    restore_underlay_ipv4_metrics(var_dir=var_dir, log=log)
     st = _load_state(var_dir)
     allow = [str(x) for x in (st.get("allow") or []) if x]
     gw = str(st.get("gw") or "") or None
