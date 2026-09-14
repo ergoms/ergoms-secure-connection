@@ -2,5 +2,5 @@
 
 from desktop.branding import APP_NAME, APP_ID
 
-__version__ = "1.0.0"
+__version__ = "1.2.1"
 __all__ = ["APP_NAME", "APP_ID", "__version__"]

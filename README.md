@@ -225,3 +225,12 @@ ERGOMS SECURE CONNECTION/
 Только папка без Setup: `.\.vscode\setup.ps1 -Target pyinstaller`. Только Setup (после сборки): `-Target installer`. Если Inno Setup нет — ставится через `winget` (`JRSoftware.InnoSetup`).
 
 Linux: `./.vscode/setup.sh build` → `dist/ERGOMS SECURE CONNECTION/ERGOMS SECURE CONNECTION`.
+
+### GitHub Release
+
+Тег `vX.Y.Z` (должен совпадать с `__version__` в `desktop/__init__.py`) запускает GitHub Actions: Windows Setup + zip и Linux tar.gz публикуются в [GitHub Releases](https://github.com/DohaoSTR/ergoms-secure-connection/releases). Папка `dist/` в git не коммитится.
+
+```bash
+git tag v1.2.1
+git push origin v1.2.1
+```

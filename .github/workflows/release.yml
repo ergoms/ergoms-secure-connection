@@ -1,0 +1,145 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: ver
+        name: Read and check version
+        run: |
+          set -euo pipefail
+          APP_VERSION="$(sed -n 's/^__version__ = "\([^"]*\)"/\1/p' desktop/__init__.py | head -n 1)"
+          if [[ -z "$APP_VERSION" ]]; then
+            echo "Could not read __version__ from desktop/__init__.py" >&2
+            exit 1
+          fi
+          echo "version=$APP_VERSION" >> "$GITHUB_OUTPUT"
+          echo "App version: $APP_VERSION"
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            TAG="${{ github.ref_name }}"
+            TAG_VERSION="${TAG#v}"
+            if [[ "$TAG_VERSION" != "$APP_VERSION" ]]; then
+              echo "Tag $TAG does not match __version__ $APP_VERSION" >&2
+              exit 1
+            fi
+          fi
+
+  windows:
+    needs: version
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Inno Setup
+        run: choco install innosetup --yes --no-progress
+      - name: Build Windows client and installer
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & "$env:GITHUB_WORKSPACE\.vscode\setup.ps1" -Target build
+      - name: Package Windows artifacts
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ver = '${{ needs.version.outputs.version }}'
+          $srcSetup = Join-Path $env:GITHUB_WORKSPACE 'dist\ERGOMS SECURE CONNECTION-Setup.exe'
+          $srcDir = Join-Path $env:GITHUB_WORKSPACE 'dist\ERGOMS SECURE CONNECTION'
+          if (-not (Test-Path -LiteralPath $srcSetup)) { throw "missing $srcSetup" }
+          if (-not (Test-Path -LiteralPath $srcDir)) { throw "missing $srcDir" }
+          $out = Join-Path $env:GITHUB_WORKSPACE 'artifacts'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          Copy-Item -LiteralPath $srcSetup -Destination (Join-Path $out "ERGOMS-SECURE-CONNECTION-$ver-windows-x64-setup.exe")
+          Compress-Archive -Path $srcDir -DestinationPath (Join-Path $out "ERGOMS-SECURE-CONNECTION-$ver-windows-x64.zip")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: artifacts/*
+          if-no-files-found: error
+
+  linux:
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install Qt / PyInstaller system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            binutils \
+            patchelf \
+            libgl1 \
+            libegl1 \
+            libglib2.0-0 \
+            libdbus-1-3 \
+            libfontconfig1 \
+            libx11-6 \
+            libxext6 \
+            libxkbcommon0 \
+            libxkbcommon-x11-0 \
+            libxcb1 \
+            libxcb-cursor0 \
+            libxcb-icccm4 \
+            libxcb-image0 \
+            libxcb-keysyms1 \
+            libxcb-randr0 \
+            libxcb-render-util0 \
+            libxcb-shape0 \
+            libxcb-xfixes0 \
+            libxcb-xinerama0
+      - name: Build Linux client
+        run: |
+          chmod +x .vscode/setup.sh
+          ./.vscode/setup.sh build
+      - name: Package Linux artifact
+        run: |
+          set -euo pipefail
+          VER='${{ needs.version.outputs.version }}'
+          SRC='dist/ERGOMS SECURE CONNECTION'
+          BIN="$SRC/ERGOMS SECURE CONNECTION"
+          if [[ ! -x "$BIN" ]]; then
+            echo "missing executable: $BIN" >&2
+            exit 1
+          fi
+          mkdir -p artifacts
+          tar -C dist -czf "artifacts/ERGOMS-SECURE-CONNECTION-${VER}-linux-x64.tar.gz" \
+            "ERGOMS SECURE CONNECTION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: artifacts/*
+          if-no-files-found: error
+
+  release:
+    needs: [version, windows, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.version.outputs.version }}
+          name: ERGOMS SECURE CONNECTION ${{ needs.version.outputs.version }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: artifacts/*
