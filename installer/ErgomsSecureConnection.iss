@@ -106,11 +106,15 @@ end;
 procedure WipeLeftovers;
 var
   ResultCode: Integer;
+  InstallDir: String;
 begin
+  { Data dir only. Do not delete Local\Programs\app when it is DestDir. }
   DelTree(ExpandConstant('{localappdata}\{#AppName}'), True, True, True);
   DelTree(ExpandConstant('{localappdata}\ERGOMS VPN'), True, True, True);
   DelTree(ExpandConstant('{localappdata}\ops-content'), True, True, True);
-  DelTree(ExpandConstant('{localappdata}\Programs\{#AppName}'), True, True, True);
+  InstallDir := ExpandConstant('{localappdata}\Programs\{#AppName}');
+  if CompareText(InstallDir, ExpandConstant('{app}')) <> 0 then
+    DelTree(InstallDir, True, True, True);
   Exec(ExpandConstant('{sys}\netsh.exe'), 'advfirewall firewall delete rule name="ERGOMS SECURE CONNECTION (sing-box)"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Exec(ExpandConstant('{sys}\schtasks.exe'), '/Delete /TN "ERGOMS SECURE CONNECTION" /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Exec(ExpandConstant('{sys}\schtasks.exe'), '/Delete /TN "ERGOMS SECURE CONNECTION (автозапуск)" /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
@@ -143,33 +147,13 @@ end;
 
 procedure UninstallPrevious;
 var
-  Uninst, Flags: String;
+  Uninst: String;
   ResultCode: Integer;
-  ShowCmd: Integer;
 begin
   Uninst := ExtractUninstallExe(GetUninstallString());
   if Uninst = '' then
     Exit;
-  if WizardSilent then
-  begin
-    Flags := '/VERYSILENT /NORESTART /SUPPRESSMSGBOXES';
-    ShowCmd := SW_HIDE;
-  end
-  else
-  begin
-    Flags := '/SILENT /NORESTART';
-    ShowCmd := SW_SHOWNORMAL;
-    WizardForm.Hide;
-  end;
-  try
-    Exec(Uninst, Flags, '', ShowCmd, ewWaitUntilTerminated, ResultCode);
-  finally
-    if not WizardSilent then
-    begin
-      WizardForm.Show;
-      WizardForm.Refresh;
-    end;
-  end;
+  Exec(Uninst, '/VERYSILENT /NORESTART /SUPPRESSMSGBOXES', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
 function UpdateReadyMemo(Space, NewLine, MemoUserInfoInfo, MemoDirInfo,
@@ -177,8 +161,7 @@ function UpdateReadyMemo(Space, NewLine, MemoUserInfoInfo, MemoDirInfo,
 begin
   Result := '';
   if GetUninstallString() <> '' then
-    Result := Result + 'Удаление предыдущей версии' + NewLine +
-      Space + 'Сначала откроется окно удаления со шкалой прогресса, затем установка.' + NewLine + NewLine;
+    Result := Result + 'Предыдущая версия будет удалена в этом же окне, затем пойдёт установка.' + NewLine + NewLine;
   if MemoDirInfo <> '' then
     Result := Result + MemoDirInfo + NewLine + NewLine;
   if MemoGroupInfo <> '' then
@@ -195,10 +178,10 @@ begin
   KillAppProcesses;
   if GetUninstallString() <> '' then
   begin
-    SetWizardStatus('Удаление предыдущей версии…', 'Сейчас откроется окно удаления');
+    SetWizardStatus('Удаление предыдущей версии…', '');
     UninstallPrevious;
   end;
-  SetWizardStatus('Очистка остатков предыдущей версии…', ExpandConstant('{localappdata}\{#AppName}'));
+  SetWizardStatus('Очистка данных предыдущей версии…', '');
   WipeLeftovers;
   SetWizardStatus('Установка файлов…', '');
 end;

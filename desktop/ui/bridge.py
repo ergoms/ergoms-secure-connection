@@ -364,9 +364,6 @@ class GuiBridge(QObject):
     def toggleConnection(self) -> None:
         if self._busy:
             return
-        if not self._config_ready and not self._active:
-            self.importConfigFile()
-            return
         if self._active or self._kill_switch_on:
             if self._handoff_if_needed("off"):
                 return
@@ -545,7 +542,7 @@ class GuiBridge(QObject):
             None,
             "Конфиг ERGOMS SECURE CONNECTION",
             "",
-            "Config (*.json *.enc *.conf);;JSON (*.json);;Encrypted (*.enc);;AmneziaWG (*.conf);;All files (*)",
+            "Config (*.json *.enc);;JSON (*.json);;Encrypted (*.enc);;All files (*)",
         )
         if not path:
             return
@@ -591,56 +588,9 @@ class GuiBridge(QObject):
         save_config(self.paths.config_path, cfg)
         apply_config(self.paths.config_path, force=True)
         self.loadSettings()
-        self._enqueue_log(f"Конфиг загружен из {src}")
-        self.toast.emit("Конфиг загружен — Reality, Hy2 и AWG в одном файле", "info")
+        self._enqueue_log("Конфиг загружен")
+        self.toast.emit("Конфиг загружен", "info")
         self._refresh_status(force=True)
-
-    @Slot()
-    def importAwgConf(self) -> None:
-        if self._busy or self._active:
-            self.toast.emit("Дождитесь окончания операции или отключите VPN", "warn")
-            return
-        path, _ = QFileDialog.getOpenFileName(
-            None,
-            "AmneziaWG / WireGuard",
-            "",
-            "Config (*.conf);;All files (*)",
-        )
-        text = ""
-        if path:
-            try:
-                text = Path(path).read_text(encoding="utf-8-sig")
-            except OSError as exc:
-                self.toast.emit(str(exc), "error")
-                return
-        else:
-            text, ok = QInputDialog.getMultiLineText(
-                None,
-                "ERGOMS SECURE CONNECTION",
-                "Вставьте содержимое .conf:",
-            )
-            if not ok or not str(text or "").strip():
-                return
-        try:
-            parsed = parse_amnezia_conf(text)
-            if not parsed.get("private_key") or not parsed.get("peer_public_key"):
-                raise ValueError("В .conf нет PrivateKey или PublicKey пира")
-            existing = (
-                load_config(self.paths.config_path)
-                if self.paths.config_path.is_file()
-                else default_config_template()
-            )
-            cfg = apply_amnezia_to_config(existing, parsed)
-            cfg["transport"]["dial"] = "amneziawg"
-            self.paths.ensure_dirs()
-            save_config(self.paths.config_path, cfg)
-            apply_config(self.paths.config_path, force=True)
-            self.loadSettings()
-            self._enqueue_log("AmneziaWG записан в config.json (остальные протоколы на месте)")
-            self.toast.emit("AmneziaWG в общем config.json", "info")
-            self._refresh_status(force=True)
-        except Exception as exc:  # noqa: BLE001
-            self.toast.emit(str(exc), "error")
 
     @Slot()
     def exportConfigFile(self) -> None:
@@ -681,8 +631,8 @@ class GuiBridge(QObject):
             self.configReadyChanged.emit()
         if not ready and not self._active and not self._busy:
             self._status_title = "Нет конфига"
-            self._status_sub = "Загрузите один config.json (Reality + Hy2 + AWG)"
-            self._power_text = "Загрузить конфиг"
+            self._status_sub = "Загрузите конфиг"
+            self._power_text = "Подключить"
             self.statusTitleChanged.emit()
             self.statusSubChanged.emit()
             self.powerTextChanged.emit()
@@ -1139,11 +1089,11 @@ class GuiBridge(QObject):
             power = "Отключить"
         else:
             title, sub, color = (
-                ("Нет конфига", "Загрузите один config.json (Reality + Hy2 + AWG)", _C_MUTED)
+                ("Нет конфига", "Загрузите конфиг", _C_MUTED)
                 if not self._config_ready
                 else ("Отключено", "", _C_MUTED)
             )
-            power = "Загрузить конфиг" if not self._config_ready else "Подключить"
+            power = "Подключить"
 
         self._status_title = title
         self._status_sub = sub
