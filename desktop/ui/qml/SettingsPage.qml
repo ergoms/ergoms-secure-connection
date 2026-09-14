@@ -358,16 +358,11 @@ Item {
 
                         Text {
                             width: parent.width
-                            text: "Дом: UDP с обфускацией handshake. Ключи живут в общем config.json вместе с Reality и Hy2. Отдельный .conf не обязателен."
+                            text: "Дом: UDP с обфускацией handshake. Офисный Squid этот протокол не проводит."
                             color: T.muted
                             font.pixelSize: 11
                             font.family: T.fontUi
                             wrapMode: Text.WordWrap
-                        }
-                        PrimaryButton {
-                            width: parent.width
-                            text: "Вставить .conf"
-                            onClicked: bridge.importAwgConf()
                         }
                         SettingField {
                             label: "Private key"
