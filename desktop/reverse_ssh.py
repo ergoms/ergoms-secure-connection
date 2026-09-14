@@ -127,7 +127,7 @@ class ReverseSshManager:
         if old:
             targets.append(old)
         self.pid_path.unlink(missing_ok=True)
-        if scan_cmdline and old:
+        if scan_cmdline:
             found = procutil.pids_cmdline_match_many(
                 ("connect_socks.py", "connect-socks"), cache=False
             )
@@ -136,6 +136,7 @@ class ReverseSshManager:
         killed = procutil.kill_pids(targets, exclude=os.getpid())
         for pid in killed:
             self.log(f"reverse-ssh pid={pid} stopped")
+        (self.paths.var_dir / "reverse-ssh.txt").unlink(missing_ok=True)
 
     def start(self, cfg: dict[str, Any]) -> None:
         rev = get_reverse_ssh(cfg)

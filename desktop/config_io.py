@@ -36,11 +36,39 @@ LogFn = Callable[[str], None]
 
 
 AWG_CONF_NAME = "amneziawg.conf"
+AWG_SOURCE_NAME = "amneziawg.conf.name"
 
 
 def awg_conf_path(config_path: Path) -> Path:
     """AmneziaWG lives next to config.json, never inside it."""
     return Path(config_path).parent / AWG_CONF_NAME
+
+
+def awg_source_name_path(config_path: Path) -> Path:
+    return Path(config_path).parent / AWG_SOURCE_NAME
+
+
+def read_awg_source_name(config_path: Path) -> str:
+    path = awg_source_name_path(config_path)
+    if not path.is_file():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8").strip().splitlines()[0].strip()
+    except OSError:
+        return ""
+
+
+def write_awg_source_name(config_path: Path, name: str) -> None:
+    label = Path(str(name or "").strip()).name
+    dest = awg_source_name_path(config_path)
+    if not label:
+        if dest.is_file():
+            try:
+                dest.unlink()
+            except OSError:
+                pass
+        return
+    dest.write_text(label + "\n", encoding="utf-8")
 
 
 def parse_amnezia_conf(text: str) -> dict[str, Any]:
@@ -264,13 +292,16 @@ def migrate_legacy_awg_json(cfg: dict[str, Any], conf_path: Path) -> bool:
     return True
 
 
-def install_amnezia_conf(config_path: Path, text: str) -> dict[str, Any]:
+def install_amnezia_conf(
+    config_path: Path, text: str, *, source_name: str = ""
+) -> dict[str, Any]:
     """Save a client .conf and switch dial to AmneziaWG. JSON keys stay empty."""
     parsed = parse_amnezia_conf(text)
     if not amnezia_keys_ready(parsed):
         raise ValueError("В .conf нет PrivateKey или PublicKey пира")
     path = Path(config_path)
     _write_awg_conf(awg_conf_path(path), text)
+    write_awg_source_name(path, source_name)
     if path.is_file():
         cfg = load_config(path, force=True)
     else:

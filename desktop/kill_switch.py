@@ -256,10 +256,13 @@ def _cmds_win_install(
 
 def _cmds_win_remove(allow: list[str], gw: str | None) -> list[str]:
     del gw
+    from desktop.tun import remove_tun_split_default
+
     cmds: list[str] = []
     for dest, mask in BLACKHOLE_V4:
         cmds.append(f"route delete {dest} mask {mask} 127.0.0.1")
         cmds.append(f"route delete {dest} mask {mask} {BLACKHOLE_GW}")
+    cmds.extend(remove_tun_split_default(windows=True))
     for ip in allow:
         cmds.append(f"route delete {ip} mask 255.255.255.255")
     cmds.append("netsh interface ipv6 delete route ::/1 interface=1")
@@ -292,12 +295,15 @@ def _cmds_linux_install(
 
 def _cmds_linux_remove(allow: list[str], gw: str | None) -> list[str]:
     del gw
+    from desktop.tun import remove_tun_split_default
+
     cmds = [
         "ip route del 0.0.0.0/1 dev lo",
         "ip route del 128.0.0.0/1 dev lo",
         "ip -6 route del ::/1 dev lo",
         "ip -6 route del 8000::/1 dev lo",
     ]
+    cmds.extend(remove_tun_split_default(windows=False))
     for ip in allow:
         cmds.append(f"ip route del {ip}/32")
     return cmds

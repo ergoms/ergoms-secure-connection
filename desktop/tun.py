@@ -285,6 +285,9 @@ def _win_if_index_by_alias(alias: str) -> int | None:
     return None
 
 
+TUN_SPLIT_HOPS = ("172.19.0.1", "172.19.0.2")
+
+
 def install_tun_split_default(
     if_idx: int, *, metric: int = 5, hop: str = "172.19.0.1"
 ) -> list[str]:
@@ -296,6 +299,28 @@ def install_tun_split_default(
         f"route add 0.0.0.0 mask 128.0.0.0 {gw} metric {metric} if {if_idx}",
         f"route add 128.0.0.0 mask 128.0.0.0 {gw} metric {metric} if {if_idx}",
     ]
+
+
+def remove_tun_split_default(*, windows: bool | None = None) -> list[str]:
+    """Drop our 0.0.0.0/1 + 128.0.0.0/1 after sing-box exits (adapter may linger)."""
+    win = sys.platform == "win32" if windows is None else windows
+    cmds: list[str] = []
+    if win:
+        for hop in TUN_SPLIT_HOPS:
+            cmds.append(f"route delete 0.0.0.0 mask 128.0.0.0 {hop}")
+            cmds.append(f"route delete 128.0.0.0 mask 128.0.0.0 {hop}")
+        return cmds
+    for hop in TUN_SPLIT_HOPS:
+        cmds.append(f"ip route del 0.0.0.0/1 via {hop}")
+        cmds.append(f"ip route del 128.0.0.0/1 via {hop}")
+    return cmds
+
+
+def our_tun_split_leftover() -> bool:
+    """True if our TUN /1 halves are still in the IPv4 table."""
+    if sys.platform != "win32":
+        return False
+    return any(TUN_ADDR_PREFIX in row for row in tun_split_rows())
 
 
 def tun_split_rows() -> list[str]:
@@ -337,7 +362,7 @@ def ensure_tun_split_default(if_idx: int, *, metric: int = 5) -> tuple[bool, str
     from desktop.kill_switch import lift_ipv4_blackhole_commands
 
     run_route_lines(lift_ipv4_blackhole_commands())
-    hops = ("172.19.0.1", "172.19.0.2")
+    hops = TUN_SPLIT_HOPS
     last = ""
     for hop in hops:
         run_route_lines(install_tun_split_default(if_idx, metric=metric, hop=hop))

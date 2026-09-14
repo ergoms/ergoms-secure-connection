@@ -278,7 +278,7 @@ Item {
 
                         Text {
                             width: parent.width
-                            text: "AmneziaWG только из файла .conf. Ключи в config.json не хранятся."
+                            text: "Загрузка конфига AmneziaWG"
                             color: T.muted
                             font.pixelSize: 11
                             font.family: T.fontUi
@@ -287,7 +287,7 @@ Item {
                         Text {
                             width: parent.width
                             text: Boolean(bridge.settings.awgLoaded)
-                                  ? ("Загружен: " + String(bridge.settings.awgSummary || ""))
+                                  ? String(bridge.settings.awgSummary || "")
                                   : "Файл ещё не загружен."
                             color: Boolean(bridge.settings.awgLoaded) ? T.text : T.warn
                             font.pixelSize: 12

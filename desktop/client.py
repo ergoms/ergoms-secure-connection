@@ -212,19 +212,15 @@ class OpsClient(ConnectionOps, ProbeOps, IntegrationOps):
         self._watchdog.start()
 
     def stop_watchdog_daemon(self) -> None:
-        if self._watchdog is not None or self._inprocess_helpers:
-            self._stop_watchdog_inprocess()
-            if self._inprocess_helpers:
-                return
+        self._stop_watchdog_inprocess()
         targets: list[int] = []
         pid = pid_from_file(self.paths.watchdog_pid, unlink=True)
         if pid and pid != os.getpid():
             targets.append(pid)
-        if pid:
-            for extra in procutil.pids_cmdline_match_many(
-                ("watch --daemon", "-m desktop watch"), cache=False
-            ).values():
-                targets.extend(extra)
+        for extra in procutil.pids_cmdline_match_many(
+            ("watch --daemon", "-m desktop watch"), cache=False
+        ).values():
+            targets.extend(extra)
         killed = procutil.kill_pids(targets, exclude=os.getpid())
         for dead in killed:
             self.log(f"watchdog pid={dead} остановлен")

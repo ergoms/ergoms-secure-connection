@@ -46,6 +46,7 @@ from desktop.config_io import (
     looks_like_wg_conf,
     merge_imported_config,
     migrate_legacy_awg_json,
+    read_awg_source_name,
     save_config,
 )
 from desktop.paths import Paths, gui_command
@@ -384,6 +385,10 @@ class GuiBridge(QObject):
         self._mode_label = "Корпоративный" if self._corporate else "VPN"
         for key, value in cfg_to_settings(cfg).items():
             self._settings.insert(key, value)
+        loaded = bool(self._settings.value("awgLoaded"))
+        source = read_awg_source_name(self.paths.config_path)
+        if loaded:
+            self._settings.insert("awgSummary", source or "amneziawg.conf")
         self._sync_config_ready()
 
     def _set_corporate(self, on: bool) -> None:
@@ -478,7 +483,7 @@ class GuiBridge(QObject):
             return
         text = raw.decode("utf-8-sig")
         if looks_like_wg_conf(text) or src.suffix.lower() == ".conf":
-            self._import_awg_conf_text(text)
+            self._import_awg_conf_text(text, source_name=src.name)
             return
         try:
             same_live = src.resolve() == self.paths.config_path.resolve()
@@ -513,12 +518,13 @@ class GuiBridge(QObject):
         if not path:
             return
         try:
-            self._import_awg_conf_text(Path(path).read_text(encoding="utf-8-sig"))
+            src = Path(path)
+            self._import_awg_conf_text(src.read_text(encoding="utf-8-sig"), source_name=src.name)
         except Exception as exc:  # noqa: BLE001
             self.toast.emit(str(exc), "error")
 
-    def _import_awg_conf_text(self, text: str) -> None:
-        install_amnezia_conf(self.paths.config_path, text)
+    def _import_awg_conf_text(self, text: str, *, source_name: str = "") -> None:
+        install_amnezia_conf(self.paths.config_path, text, source_name=source_name)
         apply_config(self.paths.config_path, force=True)
         self.loadSettings()
         self._enqueue_log("AmneziaWG .conf загружен")

@@ -6,6 +6,7 @@ from typing import Any, Callable
 
 from desktop.config.model import AppConfig
 from desktop.config_io import (
+    AWG_CONF_NAME,
     AWG_DEFAULT_ADDRESS,
     AWG_DEFAULT_MTU,
     AWG_DEFAULT_PORT,
@@ -127,10 +128,8 @@ def cfg_to_settings(cfg: dict[str, Any]) -> dict[str, Any]:
         }
     )
     host = str(server.get("host") or "").strip()
-    port = str(awg.get("port") or AWG_DEFAULT_PORT)
-    address = str(awg.get("address") or AWG_DEFAULT_ADDRESS)
     if out["awgLoaded"]:
-        out["awgSummary"] = f"{host}:{port} · {address}" if host else f":{port} · {address}"
+        out["awgSummary"] = AWG_CONF_NAME
     return out
 
 

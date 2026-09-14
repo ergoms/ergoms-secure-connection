@@ -2,6 +2,7 @@
 config.json
 config.json.enc
 amneziawg.conf
+amneziawg.conf.name
 *.enc
 
 # Tooling

@@ -57,7 +57,7 @@ def test_normalize_dial_aliases() -> None:
 
 
 def test_tun_split_cmds_cover_both_halves() -> None:
-    from desktop.tun import install_tun_split_default
+    from desktop.tun import install_tun_split_default, remove_tun_split_default
 
     cmds = install_tun_split_default(53)
     joined = "\n".join(cmds)
@@ -66,6 +66,13 @@ def test_tun_split_cmds_cover_both_halves() -> None:
     assert "if 53" in joined
     onlink = "\n".join(install_tun_split_default(53, hop="0.0.0.0"))
     assert "route add 0.0.0.0 mask 128.0.0.0 0.0.0.0" in onlink
+    removed = "\n".join(remove_tun_split_default(windows=True))
+    assert "route delete 0.0.0.0 mask 128.0.0.0 172.19.0.1" in removed
+    assert "route delete 128.0.0.0 mask 128.0.0.0 172.19.0.1" in removed
+    assert "route delete 0.0.0.0 mask 128.0.0.0 172.19.0.2" in removed
+    linux = "\n".join(remove_tun_split_default(windows=False))
+    assert "ip route del 0.0.0.0/1 via 172.19.0.1" in linux
+    assert "ip route del 128.0.0.0/1 via 172.19.0.2" in linux
 
 
 def test_win_kill_switch_blackhole_is_onlink_loopback() -> None:
@@ -79,6 +86,18 @@ def test_win_kill_switch_blackhole_is_onlink_loopback() -> None:
     live = _cmds_win_install(["203.0.113.10"], "10.193.0.1", blackhole=False)
     assert any("route delete 0.0.0.0 mask 128.0.0.0" in c for c in live)
     assert not any(c.startswith("route add 0.0.0.0 mask 128") for c in live)
+
+
+def test_win_kill_switch_remove_drops_tun_split() -> None:
+    from desktop.kill_switch import _cmds_linux_remove, _cmds_win_remove
+
+    win = _cmds_win_remove(["203.0.113.10"], "10.193.0.1")
+    joined = "\n".join(win)
+    assert "route delete 0.0.0.0 mask 128.0.0.0 172.19.0.1" in joined
+    assert "route delete 128.0.0.0 mask 128.0.0.0 172.19.0.2" in joined
+    linux = "\n".join(_cmds_linux_remove(["203.0.113.10"], "10.193.0.1"))
+    assert "ip route del 0.0.0.0/1 via 172.19.0.1" in linux
+    assert "ip route del 0.0.0.0/1 dev lo" in linux
 
 
 def test_choose_dial_defaults_and_office_choice() -> None:
@@ -289,7 +308,12 @@ def test_apply_settings_empty_form_keeps_disk() -> None:
 
 
 def test_awg_conf_is_outside_json(tmp_path: Path) -> None:
-    from desktop.config_io import install_amnezia_conf, load_config, parse_amnezia_conf
+    from desktop.config_io import (
+        install_amnezia_conf,
+        load_config,
+        parse_amnezia_conf,
+        read_awg_source_name,
+    )
 
     text = (
         "[Interface]\n"
@@ -313,7 +337,7 @@ def test_awg_conf_is_outside_json(tmp_path: Path) -> None:
     assert parsed["port"] == 51821
     path = tmp_path / "config.json"
     save_config(path, default_config_template())
-    cfg = install_amnezia_conf(path, text)
+    cfg = install_amnezia_conf(path, text, source_name="pc.conf")
     disk = json.loads(path.read_text(encoding="utf-8"))
     assert "amneziawg" not in disk["transport"]
     assert disk["transport"]["dial"] == "amneziawg"
@@ -322,6 +346,7 @@ def test_awg_conf_is_outside_json(tmp_path: Path) -> None:
     assert loaded["transport"]["amneziawg"]["private_key"] == "client-priv"
     assert loaded["transport"]["amneziawg"]["jc"] == 10
     assert loaded["server"]["host"] == "203.0.113.10"
+    assert read_awg_source_name(path) == "pc.conf"
 
 
 def test_save_config_empty_payload_keeps_disk(tmp_path: Path) -> None:

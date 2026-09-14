@@ -54,6 +54,7 @@ from desktop.tun import (
     ensure_tun_split_default,
     leftover_vpn_default_cmds,
     leftover_vpn_ifaces,
+    our_tun_split_leftover,
     stale_default_cmds,
     wait_tun_iface,
 )
@@ -227,10 +228,10 @@ class ConnectionOps:
         ).start()
 
 
-    def _stop_session_core(self) -> Exception | None:
+    def _stop_session_core(self, *, scan_helpers: bool = False) -> Exception | None:
         stop_err: Exception | None = None
         try:
-            self.reverse_ssh.stop(scan_cmdline=False)
+            self.reverse_ssh.stop(scan_cmdline=scan_helpers)
         except Exception as exc:  # noqa: BLE001
             self.log(f"reverse-ssh stop: {exc}")
         try:
@@ -239,6 +240,10 @@ class ConnectionOps:
             stop_err = exc
             self.log(f"sing-box не остановился: {exc}")
         self.stop_pac_server()
+        try:
+            self.stop_http_bridge()
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"http-bridge stop: {exc}")
         return stop_err
 
     def stop_singbox_mode(self, *, teardown: bool = True) -> None:
@@ -306,11 +311,12 @@ class ConnectionOps:
             self.log(f"leftover pid={pid} stopped")
 
 
-    def _reap_helpers(self) -> None:
-        """Stop leftover helper children. Skip cmdline scan unless pid files remain."""
+    def _reap_helpers(self, *, scan_cmdline: bool = False) -> None:
+        """Stop leftover helper children. Cmdline scan only when asked or pid files remain."""
         ports: list[int] = []
         if self._pac_server is None:
             ports.append(get_pac_listen_port())
+        ports.append(get_http_bridge_port())
         by_port = (
             procutil.pids_listening_on_many(ports, cache=False) if ports else {}
         )
@@ -328,7 +334,7 @@ class ConnectionOps:
                 targets.append(pid)
         for pids in by_port.values():
             targets.extend(pids)
-        if had_pid:
+        if had_pid or scan_cmdline:
             for extra in procutil.pids_cmdline_match_many(
                 HELPER_CMDLINE, cache=False
             ).values():
@@ -507,15 +513,23 @@ class ConnectionOps:
         self._exit_probe_error = None
         self._exit_probe_hint = None
         self._fail_closed = False
-        self._stop_watchdog_inprocess()
-        stop_err = self._stop_session_core()
+        try:
+            self.stop_watchdog_daemon()
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"watchdog stop: {exc}")
+        stop_err = self._stop_session_core(scan_helpers=True)
         try:
             self.tun.stop()
         except Exception as exc:  # noqa: BLE001
             self.log(f"legacy TUN: {exc}")
 
         ks_thread: threading.Thread | None = None
-        if kill_switch_state_path(self.paths.var_dir).is_file():
+        need_routes = (
+            kill_switch_state_path(self.paths.var_dir).is_file()
+            or kill_switch_is_applied(force=True)
+            or our_tun_split_leftover()
+        )
+        if need_routes:
             def _clear_ks() -> None:
                 try:
                     clear_kill_switch(var_dir=self.paths.var_dir, log=self.log)
@@ -527,9 +541,9 @@ class ConnectionOps:
             )
             ks_thread.start()
 
-        self.teardown_overrides_if_dirty()
+        self.teardown_overrides()
         self.paths.state_path.unlink(missing_ok=True)
-        self._reap_helpers()
+        self._reap_helpers(scan_cmdline=True)
         if ks_thread is not None:
             ks_thread.join(timeout=8.0)
 
@@ -543,5 +557,7 @@ class ConnectionOps:
         if stop_err:
             raise stop_err
         self._atexit_done = True
-        self.log("VPN отключён: sing-box остановлен, PAC/git/Docker сброшены")
+        self.log(
+            "VPN отключён: sing-box, watchdog, PAC/git/Docker и маршруты сброшены"
+        )
 
