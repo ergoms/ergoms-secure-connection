@@ -364,6 +364,9 @@ class GuiBridge(QObject):
     def toggleConnection(self) -> None:
         if self._busy:
             return
+        if not self._config_ready and not self._active and not self._kill_switch_on:
+            self.toast.emit("Загрузите конфиг", "warn")
+            return
         if self._active or self._kill_switch_on:
             if self._handoff_if_needed("off"):
                 return
@@ -376,6 +379,9 @@ class GuiBridge(QObject):
     @Slot()
     def enableConnection(self) -> None:
         if self._busy:
+            return
+        if not self._config_ready:
+            self.toast.emit("Загрузите конфиг", "warn")
             return
         if self._handoff_if_needed("on"):
             return
@@ -709,12 +715,16 @@ class GuiBridge(QObject):
             if not isinstance(hy, dict):
                 hy = {}
                 cfg["transport"]["hysteria2"] = hy
-            hy["password"] = str(s.value("hy2Password") or "").strip()
+            hy_pw = str(s.value("hy2Password") or "").strip()
+            if hy_pw:
+                hy["password"] = hy_pw
             hy["port"] = int(str(s.value("hy2Port") or "8443").strip() or "8443")
             hy["server_name"] = normalize_hy2_sni(s.value("hy2ServerName"))
-            hy["obfs_password"] = str(
-                s.value("hy2Obfs") or hy.get("obfs_password") or ""
-            ).strip()
+            hy_obfs = str(s.value("hy2Obfs") or "").strip()
+            if hy_obfs:
+                hy["obfs_password"] = hy_obfs
+            elif "obfs_password" not in hy:
+                hy["obfs_password"] = str(hy.get("obfs_password") or "")
             hy["insecure"] = bool(hy.get("insecure", True))
             awg = cfg["transport"].setdefault("amneziawg", {})
             if not isinstance(awg, dict):
@@ -1040,23 +1050,23 @@ class GuiBridge(QObject):
                 pass
 
         socks_s = f"SOCKS :{self._socks_port}"
-        if singbox and tun and socks_up and probe_err:
+        if singbox and socks_up and probe_err:
             if probe_hint == "need-hy2":
                 title, sub, color = (
                     "Нет выхода",
-                    "Нет выхода через Reality — в Настройках выберите Hysteria2",
+                    "Reality не дал выход. Интернет закрыт — Hy2/AWG или отключите VPN",
                     _C_DANGER,
                 )
             elif probe_hint == "hy2-udp":
                 title, sub, color = (
                     "Нет выхода",
-                    "Hysteria2 не дошёл по UDP — проверьте порт 8443 на VPS",
+                    "UDP не дошёл. Интернет закрыт — проверьте порт на VPS или отключите VPN",
                     _C_DANGER,
                 )
             else:
                 title, sub, color = (
                     "Нет выхода",
-                    "Туннель поднялся, интернет через него не идёт — смотрите журнал",
+                    "Туннель без выхода. Интернет закрыт — отключите VPN, чтобы снять блок",
                     _C_DANGER,
                 )
             power = "Отключить"

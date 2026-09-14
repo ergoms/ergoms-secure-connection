@@ -200,6 +200,7 @@ class OpsClient:
         self._pending_win_tun = False
         self._defer_win_tun = False
         self._defer_win_ks = False
+        self._fail_closed = False
         self._hold_watchdog = False
         self._want_watchdog = False
         self._box_boot: dict[str, Any] = {}
@@ -740,8 +741,11 @@ class OpsClient:
         defer_win = sys.platform == "win32" and not bool(office_proxy)
         # Hy2 QUIC dies if TUN is up first. AWG binds underlay — TUN inbound
         # (auto_route off) can start immediately; split/KS after HTTPS.
+        # Reality: apply KS immediately so a failed handshake cannot leak.
         self._defer_win_tun = bool(defer_win and enable_tun and dial == "hysteria2")
-        self._defer_win_ks = bool(defer_win and kill_switch)
+        self._defer_win_ks = bool(
+            defer_win and kill_switch and dial in ("hysteria2", "amneziawg")
+        )
         self._hold_watchdog = True
         self._box_boot = {
             "server_host": host,
@@ -756,7 +760,11 @@ class OpsClient:
         }
         start_tun = enable_tun and not self._defer_win_tun
         start_ks = kill_switch and not self._defer_win_ks
-        if self._defer_win_ks and kill_switch_is_applied():
+        if (
+            self._defer_win_ks
+            and kill_switch_is_applied()
+            and not getattr(self, "_fail_closed", False)
+        ):
             self.log(
                 "kill switch: снимаю до проверки выхода — иначе UDP до VPS не проходит"
             )
@@ -1309,14 +1317,13 @@ class OpsClient:
         finally:
             self._hold_watchdog = False
             probe_ok = not getattr(self, "_exit_probe_error", None)
-            if getattr(self, "_want_watchdog", False) and probe_ok:
+            if not probe_ok and get_kill_switch():
+                self._seal_on_dead_exit()
+            if getattr(self, "_want_watchdog", False):
                 try:
                     self.ensure_watchdog_daemon()
                 except Exception as exc:  # noqa: BLE001
                     self.log(f"watchdog: {exc}")
-            elif getattr(self, "_want_watchdog", False) and not probe_ok:
-                self._want_watchdog = False
-                self.log("watchdog не стартую — выход не прошёл, kill switch не ставлю")
 
     def _probe_exit_body(self, socks_port: int, delay: float = 0.0) -> None:
         try:
@@ -1327,6 +1334,7 @@ class OpsClient:
         if delay > 0:
             time.sleep(delay)
         if not self.singbox.running():
+            self._exit_probe_error = self._exit_probe_error or "sing-box stopped"
             return
         self.log(f"проверка выхода через SOCKS :{socks_port} → 1.1.1.1:443…")
         home_udp = bool(getattr(self, "_defer_win_tun", False))
@@ -1342,6 +1350,7 @@ class OpsClient:
         err: str | None = None
         for attempt in range(attempts):
             if not self.singbox.running():
+                self._exit_probe_error = self._exit_probe_error or "sing-box stopped"
                 return
             if attempt:
                 self.log(f"проверка выхода: повтор {attempt + 1}/{attempts}")
@@ -1350,6 +1359,7 @@ class OpsClient:
             if not err:
                 break
         if not self.singbox.running():
+            self._exit_probe_error = self._exit_probe_error or "sing-box stopped"
             return
         if err:
             connect_err = socks_probe(socks_port, timeout=6.0)
@@ -1427,6 +1437,7 @@ class OpsClient:
             return
         self._exit_probe_error = None
         self._exit_probe_hint = None
+        self._fail_closed = False
         self.log("проверка выхода: OK (HTTPS через SOCKS)")
         if getattr(self, "_defer_win_tun", False):
             self._defer_win_tun = False
@@ -1450,6 +1461,36 @@ class OpsClient:
             self._maybe_start_reverse_ssh()
         except Exception as exc:  # noqa: BLE001
             self.log(f"reverse-ssh после проверки: {exc}")
+
+    def _seal_on_dead_exit(self) -> None:
+        """Fail-closed: no working exit → block underlay except the VPS."""
+        if getattr(self, "_exit_probe_error", None) == "dns-timeout":
+            return
+        try:
+            cfg = self.config()
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"kill switch: нет конфига ({exc})")
+            return
+        allow = list(getattr(self, "_pending_allow", None) or [])
+        if not allow:
+            allow = self._kill_switch_hosts(cfg)
+        self._fail_closed = True
+        self._defer_win_ks = False
+        if getattr(self, "_pending_win_tun", False) and procutil.is_admin() and allow:
+            try:
+                self.log("выхода нет — трафик в TUN, чтобы не шёл мимо")
+                self._install_win_tun_routes(allow)
+            except Exception as exc:  # noqa: BLE001
+                self.log(f"TUN split при обрыве: {exc}")
+            self._pending_win_tun = False
+        if kill_switch_is_applied():
+            self.log("kill switch: уже стоит — интернет закрыт, пока нет выхода")
+            return
+        self.log("kill switch: выхода нет — закрываю интернет кроме VPS")
+        try:
+            apply_kill_switch(allow, var_dir=self.paths.var_dir, log=self.log)
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"kill switch при обрыве: {exc}")
 
     def _kill_switch_hosts(self, cfg: dict[str, Any]) -> list[str]:
         hosts = [get_server_host(cfg)]
@@ -1527,6 +1568,7 @@ class OpsClient:
         self.log("отключение VPN…")
         self._exit_probe_error = None
         self._exit_probe_hint = None
+        self._fail_closed = False
         self._stop_watchdog_inprocess()
         stop_err: Exception | None = None
         try:
