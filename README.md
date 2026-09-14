@@ -49,6 +49,31 @@ bash modes/vps/enable_amneziawg.sh
 
 ## Клиент (Windows / Linux)
 
+Релиз: [GitHub Releases](https://github.com/DohaoSTR/ergoms-secure-connection/releases) — Windows `*-Setup.exe`, Linux x64 `*-linux-x64.tar.gz`.
+
+### Linux (tar.gz)
+
+Архив сам не запускается. Распаковать и запустить бинарник (пробелы в имени — кавычки обязательны). Папку `_internal` не удалять и не отделять от программы.
+
+```bash
+cd ~/Downloads
+tar -xzf ERGOMS-SECURE-CONNECTION-*-linux-x64.tar.gz
+cd "ERGOMS SECURE CONNECTION"
+chmod +x "ERGOMS SECURE CONNECTION"
+./"ERGOMS SECURE CONNECTION"                 # окно
+# CLI (нет DISPLAY или без GUI):
+./"ERGOMS SECURE CONNECTION" init
+# вставить server.host + transport из bootstrap, либо:
+./"ERGOMS SECURE CONNECTION" decrypt share.enc
+./"ERGOMS SECURE CONNECTION" on
+./"ERGOMS SECURE CONNECTION" status
+./"ERGOMS SECURE CONNECTION" off
+```
+
+`on` спросит sudo (TUN / kill switch). Конфиг: `~/AppData/Local/ERGOMS SECURE CONNECTION/config.json` (своё место — `ERGOMS_SC_DATA`). Служба systemd — только из репозитория (`./ergoms-secure-connection.sh install-service`), в tar.gz её нет.
+
+### Из репозитория
+
 ```powershell
 .\ergoms-secure-connection.ps1 init
 # в config.json: server.host + transport из bootstrap
@@ -224,7 +249,7 @@ ERGOMS SECURE CONNECTION/
 
 Только папка без Setup: `.\.vscode\setup.ps1 -Target pyinstaller`. Только Setup (после сборки): `-Target installer`. Если Inno Setup нет — ставится через `winget` (`JRSoftware.InnoSetup`).
 
-Linux: `./.vscode/setup.sh build` → `dist/ERGOMS SECURE CONNECTION/ERGOMS SECURE CONNECTION`.
+Linux: `./.vscode/setup.sh build` → `dist/ERGOMS SECURE CONNECTION/ERGOMS SECURE CONNECTION` (релизный `*-linux-x64.tar.gz` — см. [Linux (tar.gz)](#linux-targz)).
 
 ### GitHub Release (локально)
 

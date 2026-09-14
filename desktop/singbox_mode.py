@@ -483,6 +483,10 @@ def _vless_outbound(
     return outbound
 
 
+def _ssh_port_match(ports: list[int]) -> int | list[int]:
+    return ports if len(ports) > 1 else ports[0]
+
+
 def _build_route_rules(
     *,
     server_host: str,
@@ -490,23 +494,34 @@ def _build_route_rules(
     vpn_port: int,
     vps_proxy_ports: list[int] | None,
     bypass_hosts: list[str],
+    via_proxy: bool = False,
 ) -> tuple[list[dict[str, Any]], list[str], list[str]]:
     rules: list[dict[str, Any]] = []
     vps_ip = resolve_host(server_host)
+    ssh_ports = [int(p) for p in (vps_proxy_ports or [22]) if 1 <= int(p) <= 65535]
     if vps_ip:
         rules.append({"ip_cidr": [f"{vps_ip}/32"], "port": vpn_port, "outbound": "direct"})
         rules.append(
             {"ip_cidr": [f"{vps_ip}/32"], "port": RUSTDESK_PORTS, "outbound": "proxy"}
         )
-        ssh_ports = [int(p) for p in (vps_proxy_ports or [22]) if 1 <= int(p) <= 65535]
         if ssh_ports:
+            # Reverse SSH = SOCKS ProxyCommand → VLESS (офисный Squid рвёт :22).
             rules.append(
                 {
+                    "inbound": ["socks-in", "http-in"],
                     "ip_cidr": [f"{vps_ip}/32"],
-                    "port": ssh_ports if len(ssh_ports) > 1 else ssh_ports[0],
+                    "port": _ssh_port_match(ssh_ports),
                     "outbound": "proxy",
                 }
             )
+            if via_proxy:
+                rules.append(
+                    {
+                        "ip_cidr": [f"{vps_ip}/32"],
+                        "port": _ssh_port_match(ssh_ports),
+                        "outbound": "proxy",
+                    }
+                )
     if exclude_ips:
         rules.append({"ip_cidr": [f"{ip}/32" for ip in exclude_ips], "outbound": "direct"})
     bypass_suffixes, bypass_domains = bypass_to_singbox(bypass_hosts)
@@ -683,6 +698,7 @@ class SingboxModeManager:
             vpn_port=vpn_port,
             vps_proxy_ports=vps_proxy_ports,
             bypass_hosts=bypass_hosts or [],
+            via_proxy=use_office_proxy,
         )
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         inbounds: list[dict[str, Any]] = local_inbounds(socks_port, http_port)

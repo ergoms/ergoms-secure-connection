@@ -123,6 +123,35 @@ def test_build_config_home_vless_with_tun() -> None:
     assert "http" not in types
 
 
+def _ssh_port_rules(box: dict[str, Any]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for rule in box["route"]["rules"]:
+        port = rule.get("port")
+        if port == 22 or (isinstance(port, list) and 22 in port):
+            out.append(rule)
+    return out
+
+
+def test_home_ssh_to_vps_is_direct() -> None:
+    box = _build(dial="vless-reality", office=False, enable_tun=True)
+    ssh = _ssh_port_rules(box)
+    assert any(
+        r.get("inbound") == ["socks-in", "http-in"] and r.get("outbound") == "proxy"
+        for r in ssh
+    )
+    assert not any(r.get("outbound") == "proxy" and not r.get("inbound") for r in ssh)
+    assert any(
+        "203.0.113.10/32" in (r.get("ip_cidr") or []) and r.get("outbound") == "direct"
+        for r in box["route"]["rules"]
+    )
+
+
+def test_office_ssh_to_vps_via_proxy() -> None:
+    box = _build(dial="vless-reality", office=True, enable_tun=True)
+    ssh = _ssh_port_rules(box)
+    assert any(r.get("outbound") == "proxy" and not r.get("inbound") for r in ssh)
+
+
 def test_build_config_office_awg_with_tun() -> None:
     box = _build(dial="amneziawg", office=True, awg=True, enable_tun=True)
     assert "endpoints" in box

@@ -629,7 +629,12 @@ def get_reverse_ssh_enabled(cfg: dict[str, Any] | None = None) -> bool:
 
 
 def get_vps_proxy_ports(cfg: dict[str, Any] | None = None) -> list[int]:
-    """TCP ports on the VPS IP that must go via VLESS (office RST on :22)."""
+    """SSH ports on the VPS IP.
+
+    Office TUN sends them via VLESS (Squid RST on :22). Home leaves them on the
+    underlay so ``ssh user@vps`` works while VPN is up. Reverse SSH always
+    dials the same ports through local SOCKS → VLESS.
+    """
     rev = _app(cfg).reverse_ssh
     ports = {22, rev.vps_port}
     return sorted(p for p in ports if 1 <= p <= 65535)
