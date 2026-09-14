@@ -504,7 +504,7 @@ class OpsClient(ConnectionOps, ProbeOps, IntegrationOps):
                 lines.append(
                     f"hysteria2       = udp :{hy['port']} sni={hy['server_name']}"
                     f"{' obfs=salamander' if hy.get('obfs_password') else ''} "
-                    f"(дом={'вкл' if dial == 'hysteria2' else 'офис → Reality'})"
+                    f"(выбран={'да' if dial == 'hysteria2' else 'нет'})"
                 )
             if awg:
                 lines.append(

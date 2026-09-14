@@ -12,7 +12,7 @@ from desktop.config_io import (
     resolve_corporate_proxy,
 )
 from desktop.kill_switch import apply as apply_kill_switch
-from desktop.kill_switch import is_applied as kill_switch_is_applied
+from desktop.kill_switch import is_sealed as kill_switch_is_sealed
 from desktop.singbox_mode import (
     amneziawg_opts,
     choose_dial,
@@ -63,7 +63,11 @@ class ProbeOps:
 
     def _probe_exit_body(self, socks_port: int, delay: float = 0.0) -> None:
         try:
-            from desktop.watchdog import socks_https_probe, socks_probe
+            from desktop.watchdog import (
+                exit_probe_target,
+                socks_https_probe,
+                socks_probe,
+            )
         except Exception as exc:  # noqa: BLE001
             self.log(f"проверка выхода: не удалось импортировать probe ({exc})")
             return
@@ -72,16 +76,18 @@ class ProbeOps:
         if not self.singbox.running():
             self._exit_probe_error = self._exit_probe_error or "sing-box stopped"
             return
-        self.log(f"проверка выхода через SOCKS :{socks_port} → 1.1.1.1:443…")
         home_udp = bool(getattr(self, "_defer_win_tun", False))
+        probe_host, probe_path = "github.com", "/"
         try:
             cfg_now = self.config()
             office = bool(resolve_corporate_proxy(cfg_now))
+            probe_host, probe_path = exit_probe_target(office=office)
             tr_now = require_transport(cfg_now)
             dial_now = choose_dial(tr_now, office=office)
-            home_udp = home_udp or (dial_now in ("hysteria2", "amneziawg") and not office)
+            home_udp = home_udp or dial_now in ("hysteria2", "amneziawg")
         except Exception:  # noqa: BLE001
-            pass
+            office = False
+        self.log(f"проверка выхода через SOCKS :{socks_port} → {probe_host}:443…")
         attempts = 3 if home_udp else 1
         err: str | None = None
         for attempt in range(attempts):
@@ -91,7 +97,13 @@ class ProbeOps:
             if attempt:
                 self.log(f"проверка выхода: повтор {attempt + 1}/{attempts}")
                 time.sleep(0.6)
-            err = socks_https_probe(socks_port, timeout=12.0)
+            err = socks_https_probe(
+                socks_port,
+                host=probe_host,
+                sni=probe_host,
+                path=probe_path,
+                timeout=12.0,
+            )
             if not err:
                 break
         if not self.singbox.running():
@@ -115,11 +127,12 @@ class ProbeOps:
                     dial_now = choose_dial(tr_now, office=office_now)
                     awg_now = amneziawg_opts(tr_now)
                     hy_now = hysteria2_opts(tr_now)
-                    udp_port = int(
-                        (awg_now or {}).get("port")
-                        or (hy_now or {}).get("port")
-                        or 0
-                    )
+                    if dial_now == "amneziawg":
+                        udp_port = int((awg_now or {}).get("port") or 0)
+                    elif dial_now == "hysteria2":
+                        udp_port = int((hy_now or {}).get("port") or 0)
+                    else:
+                        udp_port = 0
                 except Exception:  # noqa: BLE001
                     dial_now, udp_port = "hysteria2", 0
                 proto = "AmneziaWG" if dial_now == "amneziawg" else "Hysteria2"
@@ -174,7 +187,7 @@ class ProbeOps:
         self._exit_probe_error = None
         self._exit_probe_hint = None
         self._fail_closed = False
-        self.log("проверка выхода: OK (HTTPS через SOCKS)")
+        self.log(f"проверка выхода: OK (HTTPS {probe_host} через SOCKS)")
         if getattr(self, "_defer_win_tun", False):
             self._defer_win_tun = False
             self._bring_up_win_tun()
@@ -185,9 +198,13 @@ class ProbeOps:
             self._install_win_tun_routes(allow)
             if getattr(self, "_defer_win_ks", False):
                 apply_kill_switch(
-                    allow, var_dir=self.paths.var_dir, log=self.log
+                    allow,
+                    var_dir=self.paths.var_dir,
+                    log=self.log,
+                    blackhole=False,
                 )
                 self._defer_win_ks = False
+        self._check_tun_owns_default()
         try:
             cfg = self.config()
             self.set_git_singbox(cfg, get_http_bridge_port())
@@ -197,6 +214,25 @@ class ProbeOps:
             self._maybe_start_reverse_ssh()
         except Exception as exc:  # noqa: BLE001
             self.log(f"reverse-ssh после проверки: {exc}")
+
+
+    def _check_tun_owns_default(self) -> None:
+        """Loopback /1 next to TUN /1 blackholes the browser. TUN must win."""
+        from desktop.kill_switch import lift_ipv4_blackholes
+        from desktop.tun import tun_split_rows
+
+        rows = tun_split_rows()
+        loop = [r for r in rows if "127.0.0.1" in r]
+        tun = [r for r in rows if "172.19." in r]
+        if loop:
+            self.log("чёрные /1 на loopback мешают TUN — снимаю, чтобы браузер шёл в VPN")
+            lift_ipv4_blackholes(log=self.log)
+            rows = tun_split_rows()
+            tun = [r for r in rows if "172.19." in r]
+        if tun:
+            self.log("TUN владеет default: " + " | ".join(tun[:2]))
+        else:
+            self.log("TUN не владеет 0.0.0.0/1 — браузер пойдёт мимо VPN")
 
 
     def _seal_on_dead_exit(self) -> None:
@@ -220,12 +256,14 @@ class ProbeOps:
             except Exception as exc:  # noqa: BLE001
                 self.log(f"TUN split при обрыве: {exc}")
             self._pending_win_tun = False
-        if kill_switch_is_applied():
+        if kill_switch_is_sealed():
             self.log("kill switch: уже стоит — интернет закрыт, пока нет выхода")
             return
         self.log("kill switch: выхода нет — закрываю интернет кроме VPS")
         try:
-            apply_kill_switch(allow, var_dir=self.paths.var_dir, log=self.log)
+            apply_kill_switch(
+                allow, var_dir=self.paths.var_dir, log=self.log, blackhole=True
+            )
         except Exception as exc:  # noqa: BLE001
             self.log(f"kill switch при обрыве: {exc}")
 

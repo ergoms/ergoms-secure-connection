@@ -9,6 +9,7 @@ import pytest
 
 from desktop.config_io import default_config_template, normalize_dial
 from desktop.net_host import resolve_host
+from desktop.singbox_mode import choose_dial
 from desktop.ui.settings_map import apply_settings_to_cfg, cfg_to_settings, settings_defaults
 from lib.http_connect import parse_proxy
 from lib.netutil import port_open
@@ -42,8 +43,56 @@ def test_normalize_dial_aliases() -> None:
     assert normalize_dial("reality") == "vless-reality"
     assert normalize_dial("hy2") == "hysteria2"
     assert normalize_dial("awg") == "amneziawg"
-    assert normalize_dial("auto") == "hysteria2"
-    assert normalize_dial("") == "hysteria2"
+    assert normalize_dial("auto") == "amneziawg"
+    assert normalize_dial("") == "amneziawg"
+
+
+def test_tun_split_cmds_cover_both_halves() -> None:
+    from desktop.tun import install_tun_split_default
+
+    cmds = install_tun_split_default(53, hop="0.0.0.0")
+    joined = "\n".join(cmds)
+    assert "route add 0.0.0.0 mask 128.0.0.0 0.0.0.0" in joined
+    assert "route add 128.0.0.0 mask 128.0.0.0 0.0.0.0" in joined
+    assert "if 53" in joined
+
+
+def test_win_kill_switch_blackhole_is_onlink_loopback() -> None:
+    from desktop.kill_switch import _cmds_win_install
+
+    cmds = _cmds_win_install(["203.0.113.10"], "10.193.0.1", blackhole=True)
+    adds = [c for c in cmds if c.startswith("route add 0.0.0.0") or c.startswith("route add 128.")]
+    assert adds
+    assert all(" 0.0.0.0 metric 512 if " in c for c in adds)
+    assert not any("127.0.0.1 metric" in c for c in adds)
+    live = _cmds_win_install(["203.0.113.10"], "10.193.0.1", blackhole=False)
+    assert any("route delete 0.0.0.0 mask 128.0.0.0" in c for c in live)
+    assert not any(c.startswith("route add 0.0.0.0 mask 128") for c in live)
+
+
+def test_choose_dial_defaults_and_office_choice() -> None:
+    assert choose_dial({}, office=False) == "amneziawg"
+    assert choose_dial({}, office=True) == "vless-reality"
+    assert choose_dial({"dial": "amneziawg"}, office=True) == "amneziawg"
+    assert choose_dial({"dial": "vless-reality"}, office=False) == "vless-reality"
+    assert choose_dial({"dial": "hysteria2"}, office=True) == "hysteria2"
+
+
+def test_underlay_ifaces_skips_loopback() -> None:
+    from desktop.tun import underlay_ifaces
+
+    rows = underlay_ifaces()
+    assert isinstance(rows, list)
+    for idx, name in rows:
+        assert idx > 0
+        assert "loopback" not in name.lower()
+
+
+def test_exit_probe_target_by_mode() -> None:
+    from desktop.watchdog import exit_probe_target
+
+    assert exit_probe_target(office=True) == ("1.1.1.1", "/cdn-cgi/trace")
+    assert exit_probe_target(office=False) == ("1.1.1.1", "/cdn-cgi/trace")
 
 
 def test_port_open_closed_port() -> None:
@@ -139,3 +188,11 @@ def test_settings_map_roundtrip() -> None:
     assert out["server"]["host"] == "vps.example"
     assert out["transport"]["uuid"] == "u-1"
     assert out["transport"]["dial"] == "hysteria2"
+    assert default_config_template()["transport"]["dial"] == "amneziawg"
+    assert settings_defaults()["trDial"] == "amneziawg"
+
+    settings["trDial"] = "amneziawg"
+    office = apply_settings_to_cfg(default_config_template(), get, corporate=True)
+    assert office["corporate"] is True
+    assert office["transport"]["dial"] == "amneziawg"
+    assert office["socks_scope"] == "full"

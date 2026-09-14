@@ -459,7 +459,8 @@ class GuiBridge(QObject):
             return
         self._set_corporate(on)
         if on:
-            self._settings.insert("socksScope", "github")
+            tun = bool(self._settings.value("tunAuto") or self._settings.value("killSwitch"))
+            self._settings.insert("socksScope", "full" if tun else "github")
             self._settings.insert("useProxy", True)
             self._settings.insert("corporateProxy", CORPORATE_PROXY_PRESET)
             self._settings.insert("proxyBypass", ", ".join(CORPORATE_BYPASS_PRESET))
@@ -471,7 +472,7 @@ class GuiBridge(QObject):
             self._settings.insert("corporateProxy", "")
             self._settings.insert("proxyBypass", ", ".join(STANDARD_BYPASS_PRESET))
             self._settings.insert("proxyBypassVia", "direct")
-            self._settings.insert("trDial", "hysteria2")
+            self._settings.insert("trDial", "amneziawg")
         self._settings.insert("gitProxy", on)
         self._settings.insert("dockerProxy", on)
         self._mode_label = "Корпоративный" if on else "VPN"

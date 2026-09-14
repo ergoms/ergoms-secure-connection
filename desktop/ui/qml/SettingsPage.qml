@@ -7,8 +7,8 @@ Item {
     id: root
 
     readonly property bool tunOn: Boolean(bridge.settings.tunAuto) || Boolean(bridge.settings.killSwitch)
-    readonly property bool hy2Dial: !bridge.corporate && String(bridge.settings.trDial) === "hysteria2"
-    readonly property bool awgDial: !bridge.corporate && String(bridge.settings.trDial) === "amneziawg"
+    readonly property bool hy2Dial: String(bridge.settings.trDial) === "hysteria2"
+    readonly property bool awgDial: String(bridge.settings.trDial) === "amneziawg"
     readonly property bool settingsIncomplete: {
         var host = String(bridge.settings.serverHost || "").replace(/^\s+|\s+$/g, "")
         if (!host || host.indexOf("YOUR_VPS") >= 0)
@@ -256,8 +256,7 @@ Item {
                         Text { text: "Протокол"; color: T.muted; font.pixelSize: 11; font.weight: Font.Medium; font.family: T.fontUi }
                         Segmented {
                             width: parent.width
-                            enabled: !bridge.corporate
-                            value: bridge.corporate ? "vless-reality" : String(bridge.settings.trDial || "hysteria2")
+                            value: String(bridge.settings.trDial || (bridge.corporate ? "vless-reality" : "amneziawg"))
                             model: [
                                 { label: "Reality", value: "vless-reality" },
                                 { label: "Hy2", value: "hysteria2" },
@@ -291,7 +290,7 @@ Item {
                             visible: bridge.corporate
                             width: parent.width
                             height: visible ? implicitHeight : 0
-                            text: "В этой сети доступен только выбранный способ подключения."
+                            text: "В офисе по умолчанию Reality через Squid. Можно выбрать Hy2 или AWG — они идут минуя прокси."
                             color: T.muted
                             font.pixelSize: 11
                             font.family: T.fontUi

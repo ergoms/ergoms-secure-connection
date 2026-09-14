@@ -463,7 +463,13 @@ def _probes(
 ) -> None:
     err = socks_probe(socks_port, timeout=min(8.0, timeout))
     report(not err, "SOCKS CONNECT :443", err or "1.1.1.1:443")
-    err = socks_https_probe(socks_port, timeout=timeout)
+    err = socks_https_probe(
+        socks_port,
+        timeout=timeout,
+        host="1.1.1.1",
+        sni="1.1.1.1",
+        path="/cdn-cgi/trace",
+    )
     report(not err, "HTTPS 1.1.1.1/trace", err or "cdn-cgi/trace 200")
     err = socks_https_probe(
         socks_port,
@@ -475,6 +481,8 @@ def _probes(
     report(not err, "HTTPS example.com", err or "VLESS+DNS")
     err = socks_https_probe(
         socks_port,
+        host="1.1.1.1",
+        sni="1.1.1.1",
         path="/dns-query?name=example.com&type=A",
         timeout=timeout,
     )
@@ -489,7 +497,13 @@ def _hy2_probes(
 ) -> tuple[bool, bool]:
     conn_err = socks_probe(socks_port, timeout=min(8.0, timeout))
     report(not conn_err, "hy2 CONNECT :443", conn_err or "1.1.1.1:443")
-    https_err = socks_https_probe(socks_port, timeout=timeout)
+    https_err = socks_https_probe(
+        socks_port,
+        timeout=timeout,
+        host="1.1.1.1",
+        sni="1.1.1.1",
+        path="/cdn-cgi/trace",
+    )
     report(not https_err, "hy2 HTTPS", https_err or "cdn-cgi/trace 200")
     return (not conn_err), (not https_err)
 

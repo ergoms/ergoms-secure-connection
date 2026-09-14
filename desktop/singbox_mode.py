@@ -375,10 +375,11 @@ def _udp_bind(bind_iface: str) -> dict[str, Any]:
 
 
 def choose_dial(transport: dict[str, Any], *, office: bool) -> str:
-    """Office always Reality (Squid has no UDP). Home: explicit dial."""
-    if office:
-        return "vless-reality"
-    return normalize_dial((transport or {}).get("dial"))
+    """Honor explicit dial. Empty: Reality in office, AmneziaWG at home."""
+    raw = str((transport or {}).get("dial") or "").strip()
+    if raw:
+        return normalize_dial(raw)
+    return "vless-reality" if office else "amneziawg"
 
 
 def require_transport(cfg: dict[str, Any]) -> dict[str, Any]:
@@ -578,10 +579,13 @@ class SingboxModeManager:
             or transport.get("port")
             or 443
         )
+        place = "офис" if office else "дом"
         if dial == "amneziawg" and awg:
-            self.log(f"дом: AmneziaWG UDP :{awg['port']}")
+            extra = " (минуя Squid)" if office else ""
+            self.log(f"{place}: AmneziaWG UDP :{awg['port']}{extra}")
         elif dial == "hysteria2" and hy:
-            self.log(f"дом: Hysteria2 UDP :{hy['port']} (Reality на этом Wi-Fi режет DPI)")
+            extra = " (минуя Squid)" if office else " (Reality на этом Wi-Fi режет DPI)"
+            self.log(f"{place}: Hysteria2 UDP :{hy['port']}{extra}")
         elif office:
             self.log("офис: VLESS+Reality через Squid")
         vps_ip = resolve_host(server_host)
@@ -935,7 +939,7 @@ class SingboxModeManager:
             dest = f"VLESS {server_host}:{transport['port']}"
         self.log(
             f"Starting MODE=singbox → {dest}"
-            f"{' via proxy' if office else ''}"
+            f"{' via proxy' if office and dial == 'vless-reality' else ''}"
             f"; socks=:{socks_port} http=:{http_port} tun={int(enable_tun)}"
             f" kill_switch={int(kill_switch)}"
         )

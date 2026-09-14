@@ -278,6 +278,38 @@ def wait_tun_iface(*, timeout: float = 20.0) -> int | None:
     return None
 
 
+def underlay_ifaces() -> list[tuple[int, str]]:
+    """Up IPv4 NICs except loopback and our TUN: (if_index, alias)."""
+    if sys.platform != "win32":
+        return []
+    try:
+        r = subprocess.run(
+            ["netsh", "interface", "ipv4", "show", "interfaces"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    out: list[tuple[int, str]] = []
+    for line in (r.stdout or "").splitlines():
+        m = re.match(r"^\s*(\d+)\s+\d+\s+\d+\s+(\S+)\s+(.+?)\s*$", line)
+        if not m:
+            continue
+        if m.group(2).lower() not in _IFACE_UP:
+            continue
+        name = m.group(3).strip()
+        low = name.lower()
+        if "loopback" in low or "петл" in low:
+            continue
+        if _is_tun_iface(name):
+            continue
+        out.append((int(m.group(1)), name))
+    return out
+
+
 def _win_if_index_by_alias(alias: str) -> int | None:
     want = (alias or "").strip().lower()
     if not want:
@@ -304,13 +336,103 @@ def _win_if_index_by_alias(alias: str) -> int | None:
     return None
 
 
-def install_tun_split_default(if_idx: int, *, metric: int = 5) -> list[str]:
+def install_tun_split_default(
+    if_idx: int, *, metric: int = 5, hop: str = "0.0.0.0"
+) -> list[str]:
     """Send 0.0.0.0/1 + 128.0.0.0/1 into our TUN without auto_route."""
-    hop = "172.19.0.1"
+    gw = hop or "0.0.0.0"
     return [
-        f"route add 0.0.0.0 mask 128.0.0.0 {hop} metric {metric} if {if_idx}",
-        f"route add 128.0.0.0 mask 128.0.0.0 {hop} metric {metric} if {if_idx}",
+        f"route delete 0.0.0.0 mask 128.0.0.0 if {if_idx}",
+        f"route delete 128.0.0.0 mask 128.0.0.0 if {if_idx}",
+        f"route add 0.0.0.0 mask 128.0.0.0 {gw} metric {metric} if {if_idx}",
+        f"route add 128.0.0.0 mask 128.0.0.0 {gw} metric {metric} if {if_idx}",
     ]
+
+
+def tun_split_rows() -> list[str]:
+    """IPv4 /1 rows that steal default (TUN or leftover)."""
+    if sys.platform != "win32":
+        return []
+    try:
+        r = subprocess.run(
+            ["route", "print", "-4"],
+            capture_output=True,
+            text=True,
+            timeout=8,
+            check=False,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    out: list[str] = []
+    for raw in (r.stdout or "").splitlines():
+        if re.match(r"^\s*(0\.0\.0\.0|128\.0\.0\.0)\s+128\.0\.0\.0\s+", raw):
+            out.append(" ".join(raw.split()))
+    return out
+
+
+def tun_split_installed(if_idx: int) -> bool:
+    """True if both IPv4 /1 halves point at this TUN index or 172.19.*."""
+    rows = tun_split_rows()
+    lo = hi = False
+    token = str(if_idx)
+    for row in rows:
+        parts = row.split()
+        if len(parts) < 4:
+            continue
+        dest, _mask, hop, iface = parts[0], parts[1], parts[2], parts[3]
+        ours = (
+            hop.startswith(TUN_ADDR_PREFIX)
+            or iface.startswith(TUN_ADDR_PREFIX)
+            or iface == token
+            or row.endswith(f" {token}")
+        )
+        if dest == "0.0.0.0" and ours:
+            lo = True
+        if dest == "128.0.0.0" and ours:
+            hi = True
+    return lo and hi
+
+
+def ensure_tun_split_default(if_idx: int, *, metric: int = 5) -> tuple[bool, str]:
+    """Install /1+/1 on TUN; try on-link then 172.19.0.2 / .1."""
+    from desktop.kill_switch import lift_ipv4_blackhole_commands
+
+    for line in lift_ipv4_blackhole_commands():
+        args = [p for p in line.split(" ") if p]
+        try:
+            subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                timeout=8,
+                check=False,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    hops = ("0.0.0.0", "172.19.0.2", "172.19.0.1")
+    last = ""
+    for hop in hops:
+        for line in install_tun_split_default(if_idx, metric=metric, hop=hop):
+            args = [p for p in line.split(" ") if p]
+            try:
+                subprocess.run(
+                    args,
+                    capture_output=True,
+                    text=True,
+                    timeout=8,
+                    check=False,
+                    creationflags=subprocess.CREATE_NO_WINDOW,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        if tun_split_installed(if_idx):
+            rows = " | ".join(tun_split_rows()[:4])
+            return True, f"TUN split: {rows}"
+        last = hop
+    rows = " | ".join(tun_split_rows()[:4]) or "нет /1 в таблице"
+    return False, f"TUN split не встал (последний hop={last}): {rows}"
 
 
 def iface_ipv4s(alias: str) -> list[str]:
