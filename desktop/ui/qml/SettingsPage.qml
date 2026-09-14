@@ -9,6 +9,20 @@ Item {
     readonly property bool tunOn: Boolean(bridge.settings.tunAuto) || Boolean(bridge.settings.killSwitch)
     readonly property bool hy2Dial: !bridge.corporate && String(bridge.settings.trDial) === "hysteria2"
     readonly property bool awgDial: !bridge.corporate && String(bridge.settings.trDial) === "amneziawg"
+    readonly property bool settingsIncomplete: {
+        var host = String(bridge.settings.serverHost || "").replace(/^\s+|\s+$/g, "")
+        if (!host || host.indexOf("YOUR_VPS") >= 0)
+            return true
+        if (root.awgDial) {
+            return !String(bridge.settings.awgPrivateKey || "").replace(/^\s+|\s+$/g, "")
+                || !String(bridge.settings.awgPeerPublicKey || "").replace(/^\s+|\s+$/g, "")
+        }
+        if (root.hy2Dial) {
+            return !String(bridge.settings.hy2Password || "").replace(/^\s+|\s+$/g, "")
+        }
+        return !String(bridge.settings.trUuid || "").replace(/^\s+|\s+$/g, "")
+            || !String(bridge.settings.trPublicKey || "").replace(/^\s+|\s+$/g, "")
+    }
     property bool awgAdvanced: false
 
     ColumnLayout {
@@ -45,6 +59,21 @@ Item {
                     font.pixelSize: 12
                     font.family: T.fontUi
                     wrapMode: Text.WordWrap
+                }
+
+                Text {
+                    visible: root.settingsIncomplete && !bridge.active && !bridge.busy
+                    width: parent.width
+                    text: "Не хватает данных для подключения. Загрузите конфиг."
+                    color: T.warn
+                    font.pixelSize: 12
+                    font.family: T.fontUi
+                    wrapMode: Text.WordWrap
+                    MouseArea {
+                        anchors.fill: parent
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: bridge.importConfigFile()
+                    }
                 }
 
                 SectionLabel { text: "VPN" }
@@ -86,8 +115,8 @@ Item {
                         Text {
                             width: parent.width
                             text: root.tunOn
-                                  ? "Весь интернет идёт через виртуальный адаптер. Системный прокси Windows не ставится — PAC ломает Hysteria2."
-                                  : "Без TUN браузеры сами в VPN не попадут. При подключении ставится PAC на 127.0.0.1:1088."
+                                  ? "Весь трафик устройства идёт через VPN."
+                                  : "Без этого режима часть приложений может ходить в интернет напрямую."
                             color: T.muted
                             font.pixelSize: 11
                             font.family: T.fontUi
@@ -106,8 +135,8 @@ Item {
                         Text {
                             width: parent.width
                             text: root.tunOn
-                                  ? "Заблокировано, пока TUN включён. Это не прокси офиса."
-                                  : "PAC — это наш локальный прокси, не Squid офиса. Включается сам при Подключить."
+                                  ? "Не используется, пока включён полный туннель."
+                                  : "Включается автоматически при подключении."
                             color: T.muted
                             font.pixelSize: 11
                             font.family: T.fontUi
@@ -129,7 +158,7 @@ Item {
                         }
                         Text {
                             width: parent.width
-                            text: "Если туннель упадёт, интернет закроется, пока не нажмёте Отключить. Утечки мимо VPN не будет."
+                            text: "При обрыве VPN интернет будет недоступен, пока вы не отключитесь."
                             color: T.muted
                             font.pixelSize: 11
                             font.family: T.fontUi
@@ -148,7 +177,7 @@ Item {
                         Text {
                             visible: bridge.corporate
                             height: visible ? implicitHeight : 0
-                            text: "Прокси офиса (выход на VPS)"
+                            text: "Прокси организации"
                             color: T.muted
                             font.pixelSize: 11
                             font.weight: Font.Medium
@@ -157,7 +186,7 @@ Item {
                         SettingField {
                             visible: bridge.corporate
                             height: visible ? implicitHeight : 0
-                            label: "Адрес (не системный прокси Windows)"
+                            label: "Адрес прокси"
                             settingKey: "corporateProxy"
                         }
                     }
@@ -242,7 +271,7 @@ Item {
                 SectionLabel {
                     visible: !root.hy2Dial && !root.awgDial
                     height: visible ? implicitHeight : 0
-                    text: "VLESS + REALITY"
+                    text: "ПОДКЛЮЧЕНИЕ"
                     topPadding: 8
                 }
                 Card {
@@ -262,7 +291,7 @@ Item {
                             visible: bridge.corporate
                             width: parent.width
                             height: visible ? implicitHeight : 0
-                            text: "В офисе только Reality: Squid не проводит UDP (Hysteria2 / AmneziaWG)."
+                            text: "В этой сети доступен только выбранный способ подключения."
                             color: T.muted
                             font.pixelSize: 11
                             font.family: T.fontUi
@@ -292,7 +321,7 @@ Item {
                 SectionLabel {
                     visible: root.hy2Dial
                     height: visible ? implicitHeight : 0
-                    text: "HYSTERIA2"
+                    text: "ПОДКЛЮЧЕНИЕ"
                     topPadding: 8
                 }
                 Card {
@@ -310,7 +339,7 @@ Item {
 
                         Text {
                             width: parent.width
-                            text: "Дом: UDP + salamander. Reality SNI сюда не подставляется."
+                            text: "Параметры выбранного способа подключения."
                             color: T.muted
                             font.pixelSize: 11
                             font.family: T.fontUi
@@ -330,7 +359,7 @@ Item {
                             settingKey: "hy2ServerName"
                         }
                         SettingField {
-                            label: "Obfuscation (salamander)"
+                            label: "Обфускация"
                             password: true
                             settingKey: "hy2Obfs"
                         }
@@ -340,7 +369,7 @@ Item {
                 SectionLabel {
                     visible: root.awgDial
                     height: visible ? implicitHeight : 0
-                    text: "AMNEZIAWG"
+                    text: "ПОДКЛЮЧЕНИЕ"
                     topPadding: 8
                 }
                 Card {
@@ -358,7 +387,7 @@ Item {
 
                         Text {
                             width: parent.width
-                            text: "Дом: UDP с обфускацией handshake. Офисный Squid этот протокол не проводит."
+                            text: "Параметры выбранного способа подключения."
                             color: T.muted
                             font.pixelSize: 11
                             font.family: T.fontUi
@@ -516,13 +545,13 @@ Item {
 
                         Text {
                             width: parent.width
-                            text: "С VPS можно зайти на этот ПК, пока VPN включён. Нужен OpenSSH Server и ключ в creds/."
+                            text: "Удалённый доступ к этому компьютеру, пока VPN включён."
                             color: T.muted
                             font.pixelSize: 11
                             font.family: T.fontUi
                             wrapMode: Text.WordWrap
                         }
-                        Text { text: "SSH с VPS на этот ПК"; color: T.muted; font.pixelSize: 11; font.weight: Font.Medium; font.family: T.fontUi }
+                        Text { text: "Доступ с сервера на этот ПК"; color: T.muted; font.pixelSize: 11; font.weight: Font.Medium; font.family: T.fontUi }
                         Segmented {
                             width: parent.width
                             value: bridge.settings.reverseSsh ? "1" : "0"
@@ -535,19 +564,19 @@ Item {
                         SettingField {
                             visible: Boolean(bridge.settings.reverseSsh)
                             height: visible ? implicitHeight : 0
-                            label: "Порт на VPS (127.0.0.1)"
+                            label: "Порт на сервере"
                             settingKey: "reverseSshListen"
                         }
                         SettingField {
                             visible: Boolean(bridge.settings.reverseSsh)
                             height: visible ? implicitHeight : 0
-                            label: "Пользователь SSH на VPS"
+                            label: "Пользователь SSH"
                             settingKey: "reverseSshVpsUser"
                         }
                         SettingField {
                             visible: Boolean(bridge.settings.reverseSsh)
                             height: visible ? implicitHeight : 0
-                            label: "Порт sshd на VPS"
+                            label: "Порт SSH на сервере"
                             settingKey: "reverseSshVpsPort"
                         }
                     }
