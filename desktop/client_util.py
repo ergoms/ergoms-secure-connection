@@ -15,6 +15,8 @@ HELPER_CMDLINE = (
     "-m desktop watch",
     "connect_socks.py",
     "connect-socks",
+    "connect.py",
+    "connect_proxy.py",
 )
 
 

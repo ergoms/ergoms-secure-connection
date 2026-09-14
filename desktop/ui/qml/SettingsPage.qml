@@ -88,27 +88,17 @@ Item {
                         anchors.margins: 14
                         spacing: 10
 
-                        Text { text: "Корпоративный VPN"; color: T.muted; font.pixelSize: 11; font.weight: Font.Medium; font.family: T.fontUi }
-                        Segmented {
-                            width: parent.width
-                            value: bridge.corporate ? "1" : "0"
-                            model: [
-                                { label: "Выкл", value: "0" },
-                                { label: "Вкл", value: "1" }
-                            ]
-                            onActivated: (v) => { bridge.applyCorporateMode(v === "1") }
+                        BoolSegmented {
+                            label: "Корпоративный VPN"
+                            on: bridge.corporate
+                            onToggled: (v) => bridge.applyCorporateMode(v)
                         }
-                        Text { text: "TUN (весь трафик)"; color: T.muted; font.pixelSize: 11; font.weight: Font.Medium; font.family: T.fontUi }
-                        Segmented {
-                            width: parent.width
-                            value: bridge.settings.tunAuto ? "1" : "0"
-                            model: [
-                                { label: "Выкл", value: "0" },
-                                { label: "Вкл", value: "1" }
-                            ]
-                            onActivated: (v) => {
-                                bridge.settings.tunAuto = (v === "1")
-                                if (v === "0")
+                        BoolSegmented {
+                            label: "TUN (весь трафик)"
+                            on: bridge.settings.tunAuto
+                            onToggled: (v) => {
+                                bridge.settings.tunAuto = v
+                                if (!v)
                                     bridge.settings.killSwitch = false
                             }
                         }
@@ -142,17 +132,12 @@ Item {
                             font.family: T.fontUi
                             wrapMode: Text.WordWrap
                         }
-                        Text { text: "Защита при обрыве"; color: T.muted; font.pixelSize: 11; font.weight: Font.Medium; font.family: T.fontUi }
-                        Segmented {
-                            width: parent.width
-                            value: bridge.settings.killSwitch ? "1" : "0"
-                            model: [
-                                { label: "Выкл", value: "0" },
-                                { label: "Вкл", value: "1" }
-                            ]
-                            onActivated: (v) => {
-                                bridge.settings.killSwitch = (v === "1")
-                                if (v === "1")
+                        BoolSegmented {
+                            label: "Защита при обрыве"
+                            on: bridge.settings.killSwitch
+                            onToggled: (v) => {
+                                bridge.settings.killSwitch = v
+                                if (v)
                                     bridge.settings.tunAuto = true
                             }
                         }
@@ -164,15 +149,10 @@ Item {
                             font.family: T.fontUi
                             wrapMode: Text.WordWrap
                         }
-                        Text { text: "Автозапуск с компьютером"; color: T.muted; font.pixelSize: 11; font.weight: Font.Medium; font.family: T.fontUi }
-                        Segmented {
-                            width: parent.width
-                            value: bridge.autostart ? "1" : "0"
-                            model: [
-                                { label: "Выкл", value: "0" },
-                                { label: "Вкл", value: "1" }
-                            ]
-                            onActivated: (v) => { bridge.setAutostart(v === "1") }
+                        BoolSegmented {
+                            label: "Автозапуск с компьютером"
+                            on: bridge.autostart
+                            onToggled: (v) => bridge.setAutostart(v)
                         }
                         Text {
                             visible: bridge.corporate
@@ -192,41 +172,17 @@ Item {
                     }
                 }
 
-                SectionLabel {
-                    text: "ИНТЕГРАЦИИ"
-                    topPadding: 8
-                }
-                Card {
-                    width: parent.width
-                    implicitHeight: integCol.implicitHeight + 24
-                    Column {
-                        id: integCol
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.top: parent.top
-                        anchors.margins: 14
-                        spacing: 10
-
-                        Text { text: "Git через VPN"; color: T.muted; font.pixelSize: 11; font.weight: Font.Medium; font.family: T.fontUi }
-                        Segmented {
-                            width: parent.width
-                            value: bridge.settings.gitProxy ? "1" : "0"
-                            model: [
-                                { label: "Выкл", value: "0" },
-                                { label: "Вкл", value: "1" }
-                            ]
-                            onActivated: (v) => { bridge.settings.gitProxy = (v === "1") }
-                        }
-                        Text { text: "Docker через VPN"; color: T.muted; font.pixelSize: 11; font.weight: Font.Medium; font.family: T.fontUi }
-                        Segmented {
-                            width: parent.width
-                            value: bridge.settings.dockerProxy ? "1" : "0"
-                            model: [
-                                { label: "Выкл", value: "0" },
-                                { label: "Вкл", value: "1" }
-                            ]
-                            onActivated: (v) => { bridge.settings.dockerProxy = (v === "1") }
-                        }
+                SettingsSection {
+                    title: "ИНТЕГРАЦИИ"
+                    BoolSegmented {
+                        label: "Git через VPN"
+                        on: bridge.settings.gitProxy
+                        onToggled: (v) => { bridge.settings.gitProxy = v }
+                    }
+                    BoolSegmented {
+                        label: "Docker через VPN"
+                        on: bridge.settings.dockerProxy
+                        onToggled: (v) => { bridge.settings.dockerProxy = v }
                     }
                 }
 
@@ -296,23 +252,13 @@ Item {
                             font.family: T.fontUi
                             wrapMode: Text.WordWrap
                         }
-                        SettingField {
-                            label: "UUID"
-                            password: true
-                            settingKey: "trUuid"
-                        }
-                        SettingField {
-                            label: "Public key"
-                            password: true
-                            settingKey: "trPublicKey"
-                        }
-                        SettingField {
-                            label: "Short ID"
-                            settingKey: "trShortId"
-                        }
-                        SettingField {
-                            label: "SNI (dest)"
-                            settingKey: "trServerName"
+                        TransportFields {
+                            fields: [
+                                { label: "UUID", key: "trUuid", password: true },
+                                { label: "Public key", key: "trPublicKey", password: true },
+                                { label: "Short ID", key: "trShortId" },
+                                { label: "SNI (dest)", key: "trServerName" }
+                            ]
                         }
                     }
                 }
@@ -344,23 +290,13 @@ Item {
                             font.family: T.fontUi
                             wrapMode: Text.WordWrap
                         }
-                        SettingField {
-                            label: "Пароль"
-                            password: true
-                            settingKey: "hy2Password"
-                        }
-                        SettingField {
-                            label: "UDP порт"
-                            settingKey: "hy2Port"
-                        }
-                        SettingField {
-                            label: "SNI"
-                            settingKey: "hy2ServerName"
-                        }
-                        SettingField {
-                            label: "Обфускация"
-                            password: true
-                            settingKey: "hy2Obfs"
+                        TransportFields {
+                            fields: [
+                                { label: "Пароль", key: "hy2Password", password: true },
+                                { label: "UDP порт", key: "hy2Port" },
+                                { label: "SNI", key: "hy2ServerName" },
+                                { label: "Обфускация", key: "hy2Obfs", password: true }
+                            ]
                         }
                     }
                 }
@@ -392,28 +328,14 @@ Item {
                             font.family: T.fontUi
                             wrapMode: Text.WordWrap
                         }
-                        SettingField {
-                            label: "Private key"
-                            password: true
-                            settingKey: "awgPrivateKey"
-                        }
-                        SettingField {
-                            label: "Peer public key"
-                            password: true
-                            settingKey: "awgPeerPublicKey"
-                        }
-                        SettingField {
-                            label: "Адрес туннеля"
-                            settingKey: "awgAddress"
-                        }
-                        SettingField {
-                            label: "UDP порт"
-                            settingKey: "awgPort"
-                        }
-                        SettingField {
-                            label: "Preshared key"
-                            password: true
-                            settingKey: "awgPresharedKey"
+                        TransportFields {
+                            fields: [
+                                { label: "Private key", key: "awgPrivateKey", password: true },
+                                { label: "Peer public key", key: "awgPeerPublicKey", password: true },
+                                { label: "Адрес туннеля", key: "awgAddress" },
+                                { label: "UDP порт", key: "awgPort" },
+                                { label: "Preshared key", key: "awgPresharedKey", password: true }
+                            ]
                         }
                         Text {
                             width: parent.width
@@ -428,65 +350,20 @@ Item {
                                 onClicked: root.awgAdvanced = !root.awgAdvanced
                             }
                         }
-                        SettingField {
-                            visible: root.awgAdvanced
-                            height: visible ? implicitHeight : 0
-                            label: "MTU"
-                            settingKey: "awgMtu"
-                        }
-                        SettingField {
-                            visible: root.awgAdvanced
-                            height: visible ? implicitHeight : 0
-                            label: "Jc"
-                            settingKey: "awgJc"
-                        }
-                        SettingField {
-                            visible: root.awgAdvanced
-                            height: visible ? implicitHeight : 0
-                            label: "Jmin"
-                            settingKey: "awgJmin"
-                        }
-                        SettingField {
-                            visible: root.awgAdvanced
-                            height: visible ? implicitHeight : 0
-                            label: "Jmax"
-                            settingKey: "awgJmax"
-                        }
-                        SettingField {
-                            visible: root.awgAdvanced
-                            height: visible ? implicitHeight : 0
-                            label: "S1"
-                            settingKey: "awgS1"
-                        }
-                        SettingField {
-                            visible: root.awgAdvanced
-                            height: visible ? implicitHeight : 0
-                            label: "S2"
-                            settingKey: "awgS2"
-                        }
-                        SettingField {
-                            visible: root.awgAdvanced
-                            height: visible ? implicitHeight : 0
-                            label: "H1"
-                            settingKey: "awgH1"
-                        }
-                        SettingField {
-                            visible: root.awgAdvanced
-                            height: visible ? implicitHeight : 0
-                            label: "H2"
-                            settingKey: "awgH2"
-                        }
-                        SettingField {
-                            visible: root.awgAdvanced
-                            height: visible ? implicitHeight : 0
-                            label: "H3"
-                            settingKey: "awgH3"
-                        }
-                        SettingField {
-                            visible: root.awgAdvanced
-                            height: visible ? implicitHeight : 0
-                            label: "H4"
-                            settingKey: "awgH4"
+                        TransportFields {
+                            showAdvanced: root.awgAdvanced
+                            fields: [
+                                { label: "MTU", key: "awgMtu", advanced: true },
+                                { label: "Jc", key: "awgJc", advanced: true },
+                                { label: "Jmin", key: "awgJmin", advanced: true },
+                                { label: "Jmax", key: "awgJmax", advanced: true },
+                                { label: "S1", key: "awgS1", advanced: true },
+                                { label: "S2", key: "awgS2", advanced: true },
+                                { label: "H1", key: "awgH1", advanced: true },
+                                { label: "H2", key: "awgH2", advanced: true },
+                                { label: "H3", key: "awgH3", advanced: true },
+                                { label: "H4", key: "awgH4", advanced: true }
+                            ]
                         }
                     }
                 }
@@ -527,57 +404,38 @@ Item {
                     }
                 }
 
-                SectionLabel {
-                    text: "SSH С СЕРВЕРА"
-                    topPadding: 8
-                }
-                Card {
-                    width: parent.width
-                    implicitHeight: sshCol.implicitHeight + 24
-                    Column {
-                        id: sshCol
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.top: parent.top
-                        anchors.margins: 14
-                        spacing: 10
-
-                        Text {
-                            width: parent.width
-                            text: "Удалённый доступ к этому компьютеру, пока VPN включён."
-                            color: T.muted
-                            font.pixelSize: 11
-                            font.family: T.fontUi
-                            wrapMode: Text.WordWrap
-                        }
-                        Text { text: "Доступ с сервера на этот ПК"; color: T.muted; font.pixelSize: 11; font.weight: Font.Medium; font.family: T.fontUi }
-                        Segmented {
-                            width: parent.width
-                            value: bridge.settings.reverseSsh ? "1" : "0"
-                            model: [
-                                { label: "Выкл", value: "0" },
-                                { label: "Вкл", value: "1" }
-                            ]
-                            onActivated: (v) => { bridge.settings.reverseSsh = (v === "1") }
-                        }
-                        SettingField {
-                            visible: Boolean(bridge.settings.reverseSsh)
-                            height: visible ? implicitHeight : 0
-                            label: "Порт на сервере"
-                            settingKey: "reverseSshListen"
-                        }
-                        SettingField {
-                            visible: Boolean(bridge.settings.reverseSsh)
-                            height: visible ? implicitHeight : 0
-                            label: "Пользователь SSH"
-                            settingKey: "reverseSshVpsUser"
-                        }
-                        SettingField {
-                            visible: Boolean(bridge.settings.reverseSsh)
-                            height: visible ? implicitHeight : 0
-                            label: "Порт SSH на сервере"
-                            settingKey: "reverseSshVpsPort"
-                        }
+                SettingsSection {
+                    title: "SSH С СЕРВЕРА"
+                    Text {
+                        width: parent.width
+                        text: "Удалённый доступ к этому компьютеру, пока VPN включён."
+                        color: T.muted
+                        font.pixelSize: 11
+                        font.family: T.fontUi
+                        wrapMode: Text.WordWrap
+                    }
+                    BoolSegmented {
+                        label: "Доступ с сервера на этот ПК"
+                        on: bridge.settings.reverseSsh
+                        onToggled: (v) => { bridge.settings.reverseSsh = v }
+                    }
+                    SettingField {
+                        visible: Boolean(bridge.settings.reverseSsh)
+                        height: visible ? implicitHeight : 0
+                        label: "Порт на сервере"
+                        settingKey: "reverseSshListen"
+                    }
+                    SettingField {
+                        visible: Boolean(bridge.settings.reverseSsh)
+                        height: visible ? implicitHeight : 0
+                        label: "Пользователь SSH"
+                        settingKey: "reverseSshVpsUser"
+                    }
+                    SettingField {
+                        visible: Boolean(bridge.settings.reverseSsh)
+                        height: visible ? implicitHeight : 0
+                        label: "Порт SSH на сервере"
+                        settingKey: "reverseSshVpsPort"
                     }
                 }
 

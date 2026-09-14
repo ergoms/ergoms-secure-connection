@@ -47,14 +47,10 @@ def _has_display() -> bool:
     return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 
 
-def _run_connect_socks(argv: list[str]) -> int:
-    if len(argv) != 2:
-        print("usage: ergoms-secure-connection connect-socks <host> <port>", file=sys.stderr)
-        return 2
-    import lib.connect_socks as connect_socks
+def _run_connect(argv: list[str], *, via: str = "socks") -> int:
+    from lib.connect import main as connect_main
 
-    sys.argv = ["connect_socks.py", argv[0], argv[1]]
-    return int(connect_socks.main())
+    return int(connect_main(argv, via=via))
 
 
 def _show_help() -> int:
@@ -293,14 +289,14 @@ _RESUME_FLAGS = {
 
 def _elevate_cli_if_needed(client: object, action: str, rest: list[str]) -> bool:
     """Relaunch CLI elevated once. True = this process should exit."""
-    from desktop import procutil
     from desktop.paths import self_command
+    from desktop.services.elevation import ElevationService
 
-    needs = getattr(client, "needs_elevation", None)
-    if not callable(needs) or not needs(action=action):
+    elev = ElevationService(client)
+    if not elev.needed(action):
         return False
     args = [*self_command(), action, *rest]
-    ok = procutil.relaunch_as_admin(args, cwd=str(client.paths.root))  # type: ignore[attr-defined]
+    ok = elev.relaunch(args, cwd=str(client.paths.root))  # type: ignore[attr-defined]
     if not ok:
         print(
             "[ERGOMS SECURE CONNECTION] нужны права администратора (TUN / kill switch)",
@@ -387,7 +383,11 @@ def main(argv: list[str] | None = None) -> int:
 
     head = argv[0].lower()
     if head in ("connect-socks", "socks-command"):
-        return _run_connect_socks(argv[1:])
+        return _run_connect(argv[1:], via="socks")
+    if head in ("connect-proxy", "connect-http"):
+        return _run_connect(argv[1:], via="http")
+    if head == "connect":
+        return _run_connect(argv[1:])
     if head == "pac-serve":
         from desktop.pac_serve import main as pac_main
 

@@ -62,6 +62,22 @@
         "isDefault": true
       },
       "problemMatcher": []
+    },
+    {
+      "label": "ERGOMS SECURE CONNECTION: lint",
+      "detail": "ruff check desktop lib tests + mypy desktop.config",
+      "type": "shell",
+      "command": "python -m ruff check desktop lib tests && python -m mypy desktop/config",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "focus": false,
+        "showReuseMessage": false
+      },
+      "problemMatcher": ["$python"]
     }
   ]
 }

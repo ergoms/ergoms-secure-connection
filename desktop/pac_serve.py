@@ -18,7 +18,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from desktop.logutil import noop  # noqa: E402
-from lib.http_via_socks import build_pac  # noqa: E402
+from lib.pac import build_pac  # noqa: E402
 
 LogFn = Callable[[str], None]
 

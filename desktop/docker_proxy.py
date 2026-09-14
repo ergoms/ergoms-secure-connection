@@ -42,18 +42,9 @@ def _cli_config_path() -> Path:
 
 
 def _noproxy() -> str:
-    return ",".join(
-        [
-            "localhost",
-            "127.0.0.1",
-            "::1",
-            "host.docker.internal",
-            "192.168.65.0/24",
-            "192.168.65.254",
-            "10.0.0.0/8",
-            "172.16.0.0/12",
-        ]
-    )
+    from desktop.sys.constants import DOCKER_NO_PROXY
+
+    return ",".join(DOCKER_NO_PROXY)
 
 
 def _container_proxy_url(http_port: int) -> str:
@@ -64,7 +55,9 @@ def _container_proxy_url(http_port: int) -> str:
     if host.startswith(("10.", "100.")):
         host = ""
     if not host:
-        host = "192.168.65.254"
+        from desktop.sys.constants import DOCKER_DESKTOP_HOST_GATEWAY
+
+        host = DOCKER_DESKTOP_HOST_GATEWAY
     return f"http://{host}:{int(http_port)}"
 
 

@@ -18,8 +18,9 @@ from desktop.config_io import (
 from desktop.net_host import resolve_host
 from desktop.singbox_mode import choose_dial
 from desktop.ui.settings_map import apply_settings_to_cfg, cfg_to_settings, settings_defaults
+from lib.connect import allowed_target
 from lib.http_connect import parse_proxy
-from lib.netutil import port_open
+from lib.netutil import parse_endpoint, port_open
 from lib.socks5 import consume_bind_addr, handshake
 
 
@@ -155,6 +156,19 @@ def test_parse_proxy() -> None:
     assert parse_proxy("192.0.2.10:3128") == ("192.0.2.10", 3128)
     assert parse_proxy("http://proxy.local") == ("proxy.local", 3128)
     assert parse_proxy("https://proxy.local:8080/") == ("proxy.local", 8080)
+
+
+def test_parse_endpoint_and_allowlist(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert parse_endpoint("socks5://127.0.0.1:1080", 1080, default_host="127.0.0.1") == (
+        "127.0.0.1",
+        1080,
+    )
+    monkeypatch.delenv("ERGOMS_SC_CONNECT_ALLOW", raising=False)
+    monkeypatch.delenv("OPS_CONTENT_CONNECT_ALLOW", raising=False)
+    assert allowed_target("vps.example", 22)
+    monkeypatch.setenv("ERGOMS_SC_CONNECT_ALLOW", "vps.example:22")
+    assert allowed_target("vps.example", 22)
+    assert not allowed_target("other.example", 22)
 
 
 def test_default_config_has_blocked_hosts() -> None:

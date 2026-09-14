@@ -378,30 +378,7 @@ class OpsClient(ConnectionOps, ProbeOps, IntegrationOps):
             lines.append(f"git http.proxy  = {info['git_http_proxy']}")
             lines.append(f"git https.proxy = {info['git_https_proxy']}")
 
-        info["singbox_running"] = self.singbox.running()
-        info["singbox_pid"] = self.singbox.pid()
-        try:
-            socks_port = get_local_socks_port()
-        except Exception:  # noqa: BLE001
-            socks_port = 1080
-        info["socks_port"] = socks_port
-        info["socks_up"] = port_open("127.0.0.1", socks_port)
-        info["http_up"] = port_open("127.0.0.1", int(info["http_port"]))
-        info["pac_up"] = port_open("127.0.0.1", int(info["pac_port"]))
-        if info["singbox_running"]:
-            lines.append(f"singbox mode pid={info['singbox_pid']} running")
-            if info["socks_up"]:
-                lines.append(f"singbox SOCKS    = 127.0.0.1:{socks_port}")
-            else:
-                lines.append(f"WARN: процесс есть, SOCKS :{socks_port} не слушает")
-            if info["http_up"]:
-                lines.append(f"singbox HTTP     = 127.0.0.1:{info['http_port']}")
-            else:
-                lines.append(f"WARN: HTTP :{info['http_port']} не слушает")
-            if info["pac_up"]:
-                lines.append(
-                    f"PAC             = http://127.0.0.1:{info['pac_port']}/proxy.pac"
-                )
+        self._status_fill_ports(info, lines)
 
         # TUN inbound inside sing-box
         info["tun_running"] = bool(info["singbox_running"] and get_tun_enabled())
@@ -477,43 +454,7 @@ class OpsClient(ConnectionOps, ProbeOps, IntegrationOps):
             lines.append("state: (invalid)")
 
         if self.paths.config_path.is_file():
-            cfg = self.config()
-            info["corporate_proxy"] = resolve_corporate_proxy(cfg)
-            host = get_server_host(cfg)
-            port = int(get_server(cfg).get("port") or 443)
-            info["server_target"] = f"{host}:{port}"
-            info["ssh_target"] = info["server_target"]  # GUI compat
-            info["proxy_bypass_n"] = len(cfg.get("proxy_bypass") or [])
-            info["sing_box_path"] = get_sing_box_path(cfg)
-            tr = cfg.get("transport") or {}
-            info["transport_type"] = str(tr.get("type") or "")
-            lines.append(f"corporate_proxy = {info['corporate_proxy']}")
-            lines.append(f"server          = {info['server_target']}")
-            uuid = str(tr.get("uuid") or "")
-            uuid_show = (uuid[:8] + "…") if len(uuid) > 8 else (uuid or "(empty)")
-            hy = hysteria2_opts(tr)
-            awg = amneziawg_opts(tr) if isinstance(tr, dict) else None
-            office = bool(info["corporate_proxy"])
-            dial = choose_dial(tr if isinstance(tr, dict) else {}, office=office)
-            lines.append(
-                f"transport       = {info['transport_type'] or 'vless-reality'} "
-                f"uuid={uuid_show} sni={tr.get('server_name') or ''} "
-                f"dial={dial}"
-            )
-            if hy:
-                lines.append(
-                    f"hysteria2       = udp :{hy['port']} sni={hy['server_name']}"
-                    f"{' obfs=salamander' if hy.get('obfs_password') else ''} "
-                    f"(выбран={'да' if dial == 'hysteria2' else 'нет'})"
-                )
-            if awg:
-                lines.append(
-                    f"amneziawg       = udp :{awg['port']} {awg.get('address') or ''} "
-                    f"(дом={'вкл' if dial == 'amneziawg' else 'не выбран'})"
-                )
-            lines.append(f"proxy_bypass    = {info['proxy_bypass_n']} entries")
-            if info["sing_box_path"]:
-                lines.append(f"sing_box_path   = {info['sing_box_path']}")
+            self._status_fill_config(info, lines)
 
         if self.paths.docker_env.is_file():
             lines.append(f"docker.env      = {self.paths.docker_env}")
@@ -522,6 +463,70 @@ class OpsClient(ConnectionOps, ProbeOps, IntegrationOps):
 
         info["active"] = bool(info.get("singbox_running") or info.get("tun_running"))
         return info
+
+    def _status_fill_ports(self, info: dict[str, Any], lines: list[str]) -> None:
+        info["singbox_running"] = self.singbox.running()
+        info["singbox_pid"] = self.singbox.pid()
+        try:
+            socks_port = get_local_socks_port()
+        except Exception:  # noqa: BLE001
+            socks_port = 1080
+        info["socks_port"] = socks_port
+        info["socks_up"] = port_open("127.0.0.1", socks_port)
+        info["http_up"] = port_open("127.0.0.1", int(info["http_port"]))
+        info["pac_up"] = port_open("127.0.0.1", int(info["pac_port"]))
+        if not info["singbox_running"]:
+            return
+        lines.append(f"singbox mode pid={info['singbox_pid']} running")
+        if info["socks_up"]:
+            lines.append(f"singbox SOCKS    = 127.0.0.1:{socks_port}")
+        else:
+            lines.append(f"WARN: процесс есть, SOCKS :{socks_port} не слушает")
+        if info["http_up"]:
+            lines.append(f"singbox HTTP     = 127.0.0.1:{info['http_port']}")
+        else:
+            lines.append(f"WARN: HTTP :{info['http_port']} не слушает")
+        if info["pac_up"]:
+            lines.append(f"PAC             = http://127.0.0.1:{info['pac_port']}/proxy.pac")
+
+    def _status_fill_config(self, info: dict[str, Any], lines: list[str]) -> None:
+        cfg = self.config()
+        info["corporate_proxy"] = resolve_corporate_proxy(cfg)
+        host = get_server_host(cfg)
+        port = int(get_server(cfg).get("port") or 443)
+        info["server_target"] = f"{host}:{port}"
+        info["ssh_target"] = info["server_target"]
+        info["proxy_bypass_n"] = len(cfg.get("proxy_bypass") or [])
+        info["sing_box_path"] = get_sing_box_path(cfg)
+        tr = cfg.get("transport") or {}
+        info["transport_type"] = str(tr.get("type") or "")
+        lines.append(f"corporate_proxy = {info['corporate_proxy']}")
+        lines.append(f"server          = {info['server_target']}")
+        uuid = str(tr.get("uuid") or "")
+        uuid_show = (uuid[:8] + "…") if len(uuid) > 8 else (uuid or "(empty)")
+        hy = hysteria2_opts(tr)
+        awg = amneziawg_opts(tr) if isinstance(tr, dict) else None
+        office = bool(info["corporate_proxy"])
+        dial = choose_dial(tr if isinstance(tr, dict) else {}, office=office)
+        lines.append(
+            f"transport       = {info['transport_type'] or 'vless-reality'} "
+            f"uuid={uuid_show} sni={tr.get('server_name') or ''} "
+            f"dial={dial}"
+        )
+        if hy:
+            lines.append(
+                f"hysteria2       = udp :{hy['port']} sni={hy['server_name']}"
+                f"{' obfs=salamander' if hy.get('obfs_password') else ''} "
+                f"(выбран={'да' if dial == 'hysteria2' else 'нет'})"
+            )
+        if awg:
+            lines.append(
+                f"amneziawg       = udp :{awg['port']} {awg.get('address') or ''} "
+                f"(дом={'вкл' if dial == 'amneziawg' else 'не выбран'})"
+            )
+        lines.append(f"proxy_bypass    = {info['proxy_bypass_n']} entries")
+        if info["sing_box_path"]:
+            lines.append(f"sing_box_path   = {info['sing_box_path']}")
 
     def test_bypass(self) -> None:
         cfg = self.config()

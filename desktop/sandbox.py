@@ -26,7 +26,6 @@ from desktop.singbox_mode import (
 from desktop.tun import (
     bind_underlay_socket,
     default_route_lines,
-    foreign_vpn_live,
     foreign_vpn_processes,
     leftover_vpn_ifaces,
     underlay_bind_info,
@@ -436,13 +435,7 @@ def _awg_cfg(
 
 
 def _start_box(exe: Path, cfg_path: Path) -> subprocess.Popen:
-    return subprocess.Popen(
-        [str(exe), "run", "-c", str(cfg_path)],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        creationflags=procutil.creationflags(),
-    )
+    return procutil.popen([str(exe), "run", "-c", str(cfg_path)])
 
 
 def _stop_box(proc: subprocess.Popen | None) -> None:
@@ -517,28 +510,9 @@ def _dump_tail(log_path: Path, log: LogFn) -> None:
         log(f"    {ln}")
 
 
-def run_sandbox(client: SandboxHost, *, log: LogFn = noop) -> int:
-    """Protocol checks via underlay NIC. Does not touch TUN, KS, or Amnezia."""
-    cfg = client.config()
-    host = get_server_host(cfg)
-    transport = require_transport(cfg)
-    port = int(transport.get("port") or get_server(cfg).get("port") or 443)
-    failed = 0
-
-    def report(ok: bool, name: str, detail: str) -> None:
-        nonlocal failed
-        if not ok:
-            failed += 1
-        log(_line(ok, name, detail))
-
-    def note(ok: bool, name: str, detail: str) -> None:
-        log(_line(ok, name, detail))
-
+def _report_foreign_vpn(note: Callable[[bool, str, str], None]) -> None:
     leftover = leftover_vpn_ifaces()
     procs = foreign_vpn_processes()
-    live = foreign_vpn_live()
-    sni = str(transport.get("server_name") or "www.cloudflare.com")
-    log("песочница: трафик с Ethernet/Wi-Fi, TUN/Amnezia не трогаем, порты :18080/:18088")
     if leftover:
         note(
             True,
@@ -556,6 +530,16 @@ def run_sandbox(client: SandboxHost, *, log: LogFn = noop) -> int:
     for row in default_route_lines():
         note(True, "default 0.0.0.0/0", row)
 
+
+def _probe_underlay_layers(
+    host: str,
+    port: int,
+    sni: str,
+    *,
+    log: LogFn,
+    report: Callable[[bool, str, str], None],
+    note: Callable[[bool, str, str], None],
+) -> tuple[str, int] | None:
     bind_iface, bind_ip, if_index = underlay_bind_info(host)
     gw = underlay_gateway(host) or ""
     note(bool(bind_iface), "underlay NIC", bind_iface or "не определена")
@@ -563,15 +547,13 @@ def run_sandbox(client: SandboxHost, *, log: LogFn = noop) -> int:
         note(True, "underlay IP", f"{bind_ip} if={if_index or '—'}")
     if gw:
         note(True, "gateway", gw)
-
     ok, detail, local_ip = _tcp(host, port, bind_ip=bind_ip, if_index=if_index)
     if not bind_ip and local_ip:
         bind_ip = local_ip
     report(ok, "1 TCP python → VPS", detail)
     if not ok:
         log("  слой 1 мёртв: до VPS нет даже обычного TCP с python (мимо VPN)")
-        return 1
-
+        return None
     ref_ok, ref_detail = _tls(sni, 443, sni, bind_ip=bind_ip, if_index=if_index)
     note(ref_ok, f"2 TLS контроль → {sni}", ref_detail)
     http_ok, http_detail = _http(host, port, bind_ip=bind_ip, if_index=if_index)
@@ -588,7 +570,36 @@ def run_sandbox(client: SandboxHost, *, log: LogFn = noop) -> int:
             "  слой 2 мёртв: TCP есть, данных нет. На VPS: "
             "systemctl status sing-box; journalctl -u sing-box -n 50"
         )
+        return None
+    return bind_ip, if_index
+
+
+def run_sandbox(client: SandboxHost, *, log: LogFn = noop) -> int:
+    """Protocol checks via underlay NIC. Does not touch TUN, KS, or Amnezia."""
+    cfg = client.config()
+    host = get_server_host(cfg)
+    transport = require_transport(cfg)
+    port = int(transport.get("port") or get_server(cfg).get("port") or 443)
+    failed = 0
+
+    def report(ok: bool, name: str, detail: str) -> None:
+        nonlocal failed
+        if not ok:
+            failed += 1
+        log(_line(ok, name, detail))
+
+    def note(ok: bool, name: str, detail: str) -> None:
+        log(_line(ok, name, detail))
+
+    sni = str(transport.get("server_name") or "www.cloudflare.com")
+    log("песочница: трафик с Ethernet/Wi-Fi, TUN/Amnezia не трогаем, порты :18080/:18088")
+    _report_foreign_vpn(note)
+    underlay = _probe_underlay_layers(
+        host, port, sni, log=log, report=report, note=note
+    )
+    if underlay is None:
         return 1
+    bind_ip, if_index = underlay
 
     exe = client.singbox.find_sing_box(get_sing_box_path(cfg))
     if not exe:

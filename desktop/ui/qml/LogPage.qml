@@ -22,7 +22,7 @@ Item {
             return T.warn
         if (/\bok\b|готов|слушает|сохранен|скопирован/.test(s))
             return T.accent
-        return "#c9d0dc"
+        return T.muted
     }
 
     function reloadAll() {
