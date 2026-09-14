@@ -42,10 +42,16 @@ class WatchHost(Protocol):
     tun: Any
     reverse_ssh: Any
 
-# Public IP:443 — no DNS needed; not private (SSRF blocklist).
+# Liveness only. github/openai 403 their bots — that is not a dead tunnel.
 _PROBE_HOST = "1.1.1.1"
 _PROBE_PORT = 443
-_PROBE_TIMEOUT = 6.0
+_PROBE_TIMEOUT = 8.0
+
+
+def exit_probe_target(*, office: bool) -> tuple[str, str]:
+    """Stable HTTPS check (Cloudflare trace). Site 403 must not seal the KS."""
+    del office
+    return "1.1.1.1", "/cdn-cgi/trace"
 # Port-open is cheap; real CONNECT can flap once — require 2 fails.
 _PROBE_FAILS_BEFORE_RECONNECT = 2
 
@@ -102,7 +108,7 @@ def socks_https_probe(
     host: str = _PROBE_HOST,
     port: int = _PROBE_PORT,
     timeout: float = _PROBE_TIMEOUT,
-    sni: str = "1.1.1.1",
+    sni: str = "",
     path: str = "/cdn-cgi/trace",
 ) -> str | None:
     """CONNECT + TLS + HTTP GET. CONNECT-only can pass while sites stay dead."""
@@ -118,7 +124,7 @@ def socks_https_probe(
             encoding="ascii",
         )
         ctx = ssl.create_default_context()
-        tls = ctx.wrap_socket(s, server_hostname=sni)
+        tls = ctx.wrap_socket(s, server_hostname=sni or host)
         s = None
         host_hdr = host if ":" not in host else f"[{host}]"
         tls.sendall(
@@ -137,9 +143,16 @@ def socks_https_probe(
         tls.close()
         if b"HTTP/1." not in body[:32] and b"HTTP/2" not in body[:32]:
             return f"HTTPS empty/garbled: {body[:80]!r}"
-        if body.startswith(b"HTTP/1.") and b" 200" not in body.split(b"\r\n", 1)[0]:
-            status = body.split(b"\r\n", 1)[0].decode("ascii", "replace")
-            return f"HTTPS {status}"
+        if body.startswith(b"HTTP/1."):
+            status = body.split(b"\r\n", 1)[0]
+            parts = status.split()
+            try:
+                code = int(parts[1]) if len(parts) >= 2 else 0
+            except ValueError:
+                code = 0
+            # 403/404/429 = path is live (WAF). Only 5xx looks like a dead hop.
+            if code < 100 or code >= 500:
+                return f"HTTPS {status.decode('ascii', 'replace')}"
         return None
     except OSError as exc:
         msg = str(exc)
@@ -188,7 +201,15 @@ def health_problem(client: WatchHost, *, probe: bool = False) -> str | None:
     if probe and socks_up and (
         singbox_alive or tun_up or tun_wanted or client.paths.state_path.is_file()
     ):
-        err = socks_https_probe(socks, timeout=10.0)
+        office = False
+        try:
+            from desktop.config_io import resolve_corporate_proxy
+
+            office = bool(resolve_corporate_proxy(client.config()))
+        except Exception:  # noqa: BLE001
+            office = False
+        host, path = exit_probe_target(office=office)
+        err = socks_https_probe(socks, host=host, sni=host, path=path, timeout=10.0)
         if err:
             return f"SOCKS :{socks} zombie ({err})"
     # SOCKS alone is not enough for Docker Desktop: UDP/53 from the VM dies

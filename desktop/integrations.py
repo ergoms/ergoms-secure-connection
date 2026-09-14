@@ -96,7 +96,7 @@ class IntegrationOps:
     ) -> None:
         enable_browser_pac(
             http_port,
-            get_socks_scope(),
+            self._pac_mode(cfg),
             len(cfg.get("proxy_bypass") or []),
             self.paths.proxy_backup,
             log=self.log,
@@ -125,12 +125,19 @@ class IntegrationOps:
             self.log(f"pac-serve pid={pid} stopped")
 
 
+    def _pac_mode(self, cfg: dict[str, Any] | None = None) -> str:
+        """Office+TUN: whole browser via VLESS. github-only PAC sends the rest DIRECT."""
+        src = cfg
+        office = bool(resolve_corporate_proxy(src))
+        if office and get_tun_enabled(src):
+            return "full"
+        return "full" if get_socks_scope(src) == "full" else "github"
+
     def _start_pac_inprocess(self, cfg: dict[str, Any], *, proxy_port: int) -> str:
         from desktop.pac_serve import PacServer
         from lib.http_via_socks import build_pac
 
-        scope = get_socks_scope()
-        mode = "full" if scope == "full" else "github"
+        mode = self._pac_mode(cfg)
         pac_port = get_pac_listen_port()
         bypass_via = str(cfg.get("proxy_bypass_via") or "direct").strip().lower()
         if bypass_via not in ("direct", "corporate"):
@@ -158,8 +165,7 @@ class IntegrationOps:
         """Spawn PAC-only child; returns AutoConfigURL (PROXY line → proxy_port)."""
         if self._inprocess_helpers:
             return self._start_pac_inprocess(cfg, proxy_port=proxy_port)
-        scope = get_socks_scope()
-        mode = "full" if scope == "full" else "github"
+        mode = self._pac_mode(cfg)
         pac_port = get_pac_listen_port()
         bypass_via = str(cfg.get("proxy_bypass_via") or "direct").strip().lower()
         if bypass_via not in ("direct", "corporate"):
@@ -354,7 +360,8 @@ class IntegrationOps:
             tun_live = bool(wait_tun_iface(timeout=0.05))
         elif get_tun_enabled(cfg) and not getattr(self, "_defer_win_tun", False):
             tun_live = True
-        if tun_live:
+        office = bool(resolve_corporate_proxy(cfg))
+        if tun_live and not office:
             self.stop_pac_server()
             try:
                 disable_browser_proxy(self.paths.proxy_backup, log=self.log)
@@ -366,6 +373,8 @@ class IntegrationOps:
                 self.log(f"env proxy off (TUN): {exc}")
             self.log("системный прокси не ставится — трафик через TUN")
             return
+        if tun_live and office:
+            self.log("офис: PAC на весь трафик (не только GitHub) — браузер не умеет TUN")
         pac_url = self.start_pac_server(cfg, proxy_port=http_port)
         self._enable_browser_pac(cfg, http_port, pac_url=pac_url)
         enable_linux_env_proxy(

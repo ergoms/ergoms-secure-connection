@@ -41,7 +41,7 @@ def settings_defaults() -> dict[str, Any]:
         "trShortId": "",
         "trServerName": REALITY_DEFAULT_SNI,
         "trPort": "443",
-        "trDial": "hysteria2",
+        "trDial": "amneziawg",
         "hy2Password": "",
         "hy2Port": "8443",
         "hy2ServerName": HY2_DEFAULT_SNI,
@@ -140,7 +140,10 @@ def apply_settings_to_cfg(
     )
     if corporate:
         apply_corporate_profile(cfg)
-        cfg["socks_scope"] = str(get("socksScope") or "github").strip() or "github"
+        if bool(get("tunAuto") or get("killSwitch")):
+            cfg["socks_scope"] = "full"
+        else:
+            cfg["socks_scope"] = str(get("socksScope") or "github").strip() or "github"
         cfg["use_proxy"] = True
         cfg["corporate_proxy"] = str(get("corporateProxy") or "").strip()
     else:
@@ -169,10 +172,7 @@ def apply_settings_to_cfg(
     cfg["tun"]["sing_box_path"] = ""
     cfg.setdefault("transport", {})
     cfg["transport"]["type"] = "vless-reality"
-    if corporate:
-        cfg["transport"]["dial"] = "vless-reality"
-    else:
-        cfg["transport"]["dial"] = normalize_dial(get("trDial"))
+    cfg["transport"]["dial"] = normalize_dial(get("trDial"))
     cfg["transport"]["uuid"] = str(get("trUuid") or "").strip()
     cfg["transport"]["public_key"] = str(get("trPublicKey") or "").strip()
     cfg["transport"]["short_id"] = str(get("trShortId") or "").strip()

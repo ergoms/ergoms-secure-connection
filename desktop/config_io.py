@@ -39,15 +39,15 @@ _BLOCKED_HY2_SNI = frozenset(
 
 
 def normalize_dial(value: Any) -> str:
-    """Reality, Hysteria2, or AmneziaWG. Legacy `auto` becomes Hysteria2 (home)."""
+    """Reality, Hysteria2, or AmneziaWG. Empty / legacy `auto` → AmneziaWG."""
     raw = str(value or "").strip().lower()
     if raw in ("vless", "reality", "vless-reality"):
         return "vless-reality"
     if raw in ("hy2", "hysteria2"):
         return "hysteria2"
-    if raw in ("amneziawg", "awg", "wireguard", "wg"):
+    if raw in ("amneziawg", "awg", "wireguard", "wg", "auto", ""):
         return "amneziawg"
-    return "hysteria2"
+    return "amneziawg"
 
 
 def default_amneziawg_block() -> dict[str, Any]:
@@ -404,7 +404,7 @@ def default_config_template() -> dict[str, Any]:
         },
         "transport": {
             "type": "vless-reality",
-            "dial": "hysteria2",
+            "dial": "amneziawg",
             "uuid": "",
             "public_key": "",
             "short_id": "",
@@ -479,11 +479,15 @@ def infer_corporate(cfg: dict[str, Any] | None) -> bool:
 
 
 def apply_corporate_profile(cfg: dict[str, Any]) -> dict[str, Any]:
-    """Office defaults: GitHub+Cursor via proxy, university bypass."""
+    """Office defaults: VLESS via Squid, university bypass. TUN → all sites."""
     out = cfg
     out["corporate"] = True
     out["use_proxy"] = True
-    out["socks_scope"] = "github"
+    tun = out.get("tun") if isinstance(out.get("tun"), dict) else {}
+    if _as_bool(tun.get("enabled"), True) or _as_bool(out.get("kill_switch"), True):
+        out["socks_scope"] = "full"
+    else:
+        out["socks_scope"] = "github"
     out["corporate_proxy"] = CORPORATE_PROXY_PRESET
     out["proxy_bypass"] = list(CORPORATE_BYPASS_PRESET)
     out.setdefault("proxy_bypass_via", "direct")
@@ -504,6 +508,9 @@ def apply_standard_profile(cfg: dict[str, Any]) -> dict[str, Any]:
     out["corporate_proxy"] = ""
     out["proxy_bypass"] = list(STANDARD_BYPASS_PRESET)
     out["proxy_bypass_via"] = "direct"
+    tr = out.setdefault("transport", {})
+    if isinstance(tr, dict):
+        tr["dial"] = "amneziawg"
     return out
 
 

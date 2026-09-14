@@ -51,7 +51,7 @@ from desktop.tun import (
     foreign_vpn_live,
     foreign_vpn_processes,
     gateway_via_dest,
-    install_tun_split_default,
+    ensure_tun_split_default,
     leftover_vpn_default_cmds,
     leftover_vpn_ifaces,
     stale_default_cmds,
@@ -80,13 +80,13 @@ class ConnectionOps:
             raise RuntimeError("Hysteria2: укажите пароль в Настройках")
         if dial == "amneziawg" and not awg:
             raise RuntimeError("AmneziaWG: укажите ключи в Настройках")
-        if office_proxy:
+        if office_proxy and dial == "vless-reality":
             self.log(f"Probing CONNECT {host}:{port} via proxy...")
             if self.probe(host, port) != 0:
                 raise RuntimeError(
-                    f"CONNECT to {host}:{port} failed.\n"
-                    "On the VPS: bash modes/vps/bootstrap_singbox_443.sh "
-                    "(and disable sshd on :443)"
+                    f"Корпоративный прокси {office_proxy} не пустил CONNECT "
+                    f"{host}:{port}. Проверьте, что вы в сети организации, "
+                    "или выберите AWG / Hy2."
                 )
 
         # Avoid fighting leftover TUN processes
@@ -168,14 +168,13 @@ class ConnectionOps:
         # Home Windows: kill-switch /1 via 127.0.0.1 and TUN inbound both
         # kill Hysteria2 QUIC (CONNECT still looks fine). Bring Hy2 up on
         # the underlay first, then TUN + blackholes after HTTPS works.
-        defer_win = sys.platform == "win32" and not bool(office_proxy)
+        udp_dial = dial in ("hysteria2", "amneziawg")
+        defer_win = sys.platform == "win32" and (not bool(office_proxy) or udp_dial)
         # Hy2 QUIC dies if TUN is up first. AWG binds underlay — TUN inbound
         # (auto_route off) can start immediately; split/KS after HTTPS.
         # Reality: apply KS immediately so a failed handshake cannot leak.
         self._defer_win_tun = bool(defer_win and enable_tun and dial == "hysteria2")
-        self._defer_win_ks = bool(
-            defer_win and kill_switch and dial in ("hysteria2", "amneziawg")
-        )
+        self._defer_win_ks = bool(defer_win and kill_switch and udp_dial)
         self._hold_watchdog = True
         self._box_boot = {
             "server_host": host,
@@ -250,7 +249,7 @@ class ConnectionOps:
             f"sing-box готов: scope={get_socks_scope()} tun={int(start_tun)} "
             f"socks=127.0.0.1:{socks_port} http=127.0.0.1:{http_port}"
         )
-        if office_proxy:
+        if office_proxy and dial == "vless-reality":
             # Office blocks raw :443 to the VPS; CONNECT via Squid was already probed.
             self.log(
                 f"диагностика: прямой TCP {host}:{port} не проверяем — "
@@ -436,10 +435,13 @@ class ConnectionOps:
         for line in leftover_vpn_default_cmds():
             args = [p for p in line.split(" ") if p]
             procutil.run(args, timeout=8)
-        for line in install_tun_split_default(idx):
-            args = [p for p in line.split(" ") if p]
-            procutil.run(args, timeout=8)
-        self.log(f"TUN split default: 0.0.0.0/1 через if {idx} (auto_route выкл)")
+        ok, detail = ensure_tun_split_default(idx)
+        self.log(detail)
+        if not ok:
+            self.log(
+                "TUN split: маршруты /1 не в таблице — браузер пойдёт мимо VPN "
+                "(GitHub/IPv6/второй NIC)"
+            )
         pin_kill_switch_underlay(
             allow, var_dir=self.paths.var_dir, log=self.log, elevate=False
         )
@@ -498,7 +500,9 @@ class ConnectionOps:
             return
         self._install_win_tun_routes(allow)
         if want_ks:
-            apply_kill_switch(allow, var_dir=self.paths.var_dir, log=self.log)
+            apply_kill_switch(
+                allow, var_dir=self.paths.var_dir, log=self.log, blackhole=False
+            )
         try:
             raw = self.paths.state_path.read_text(encoding="utf-8")
             st = json.loads(raw) if raw else {}
@@ -535,7 +539,9 @@ class ConnectionOps:
         """Apply OS routes now if admin; otherwise return prelude for UAC wrapper."""
         allow = self._kill_switch_hosts(cfg)
         if procutil.is_admin() or kill_switch_is_applied():
-            apply_kill_switch(allow, var_dir=self.paths.var_dir, log=self.log)
+            apply_kill_switch(
+                allow, var_dir=self.paths.var_dir, log=self.log, blackhole=False
+            )
             return []
         cmds = kill_switch_install_cmds(allow)
         if cmds:

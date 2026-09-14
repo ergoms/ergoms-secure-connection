@@ -26,17 +26,23 @@ BLACKHOLE_V4 = (
     ("0.0.0.0", "128.0.0.0"),
     ("128.0.0.0", "128.0.0.0"),
 )
-BLACKHOLE_GW = "127.0.0.1"
+# 127.0.0.1 as next-hop is rejected on modern Windows; on-link via loopback works.
+BLACKHOLE_GW = "0.0.0.0"
 BLACKHOLE_METRIC = 512
 _SKIP_GW = frozenset({"on-link", "0.0.0.0", "127.0.0.1", "::", "::1"})
 _APPLIED_TTL = 10.0
 _ROUTE_PRINT_TTL = 0.8
 _applied_cache: tuple[float, bool] | None = None
 _route_print_cache: tuple[float, str] | None = None
-_WIN_BLACKHOLE = re.compile(
+_WIN_BLACKHOLE_LO = re.compile(
     r"0\.0\.0\.0\s+128\.0\.0\.0\s+\S+\s+127\.0\.0\.1",
     re.IGNORECASE,
 )
+_WIN_BLACKHOLE_HI = re.compile(
+    r"128\.0\.0\.0\s+128\.0\.0\.0\s+\S+\s+127\.0\.0\.1",
+    re.IGNORECASE,
+)
+_WIN_BLACKHOLE = _WIN_BLACKHOLE_LO
 
 
 def _host_open(host: str, port: int = 443, timeout: float = 2.5) -> bool:
@@ -166,12 +172,14 @@ def _gateway_win(dest: str) -> str | None:
     return preferred or (best[1] if best else None)
 
 
-def install_commands(allow: list[str], *, gw: str | None = None) -> list[str]:
-    """Privileged shell lines that install blackhole + host routes."""
+def install_commands(
+    allow: list[str], *, gw: str | None = None, blackhole: bool = False
+) -> list[str]:
+    """Host /32 pins + IPv6 block. IPv4 loopback /1 only when blackhole=True."""
     hop = gw or (underlay_gateway(allow[0]) if allow else None)
     if sys.platform == "win32":
-        return _cmds_win_install(allow, hop)
-    return _cmds_linux_install(allow, hop)
+        return _cmds_win_install(allow, hop, blackhole=blackhole)
+    return _cmds_linux_install(allow, hop, blackhole=blackhole)
 
 
 def remove_commands(allow: list[str], *, gw: str | None = None) -> list[str]:
@@ -200,14 +208,51 @@ def _iface_index_win(dest: str) -> int | None:
         return None
 
 
-def _cmds_win_install(allow: list[str], gw: str | None) -> list[str]:
+def _win_loopback_index() -> int:
+    try:
+        from desktop.tun import _win_if_index_by_alias
+    except Exception:
+        return 1
+    for name in ("Loopback Pseudo-Interface 1", "Псевдоинтерфейс петли 1"):
+        idx = _win_if_index_by_alias(name)
+        if idx:
+            return int(idx)
+    return 1
+
+
+def lift_ipv4_blackhole_commands() -> list[str]:
+    """Drop loopback /1 so TUN /1 can own the default without a blackhole race."""
+    cmds: list[str] = []
+    for dest, mask in BLACKHOLE_V4:
+        cmds.append(f"route delete {dest} mask {mask} 127.0.0.1")
+        cmds.append(f"route delete {dest} mask {mask} {BLACKHOLE_GW}")
+    return cmds
+
+
+def lift_ipv4_blackholes(*, log: LogFn = noop) -> None:
+    cmds = lift_ipv4_blackhole_commands()
+    if procutil.is_admin():
+        _run_lines_now(cmds, ignore_fail=True)
+    invalidate_applied_cache()
+    log("kill switch: снял чёрные IPv4 /1 с loopback — трафик идёт в TUN")
+
+
+def _cmds_win_install(
+    allow: list[str], gw: str | None, *, blackhole: bool = False
+) -> list[str]:
     cmds: list[str] = []
     if_idx = _iface_index_win(allow[0]) if allow else None
-    for dest, mask in BLACKHOLE_V4:
-        cmds.append(f"route delete {dest} mask {mask} {BLACKHOLE_GW}")
-        cmds.append(
-            f"route add {dest} mask {mask} {BLACKHOLE_GW} metric {BLACKHOLE_METRIC}"
-        )
+    lo = _win_loopback_index()
+    if blackhole:
+        for dest, mask in BLACKHOLE_V4:
+            cmds.append(f"route delete {dest} mask {mask} 127.0.0.1")
+            cmds.append(f"route delete {dest} mask {mask} {BLACKHOLE_GW}")
+            cmds.append(
+                f"route add {dest} mask {mask} {BLACKHOLE_GW} "
+                f"metric {BLACKHOLE_METRIC} if {lo}"
+            )
+    else:
+        cmds.extend(lift_ipv4_blackhole_commands())
     if gw:
         for ip in allow:
             line_change = f"route change {ip} mask 255.255.255.255 {gw} metric 1"
@@ -217,9 +262,11 @@ def _cmds_win_install(allow: list[str], gw: str | None) -> list[str]:
                 line_add += f" if {if_idx}"
             cmds.append(line_change)
             cmds.append(line_add)
-    cmds.append("netsh interface ipv6 add route ::/1 interface=1 metric=512 store=active")
     cmds.append(
-        "netsh interface ipv6 add route 8000::/1 interface=1 metric=512 store=active"
+        f"netsh interface ipv6 add route ::/1 interface={lo} metric=1 store=active"
+    )
+    cmds.append(
+        f"netsh interface ipv6 add route 8000::/1 interface={lo} metric=1 store=active"
     )
     return cmds
 
@@ -228,6 +275,7 @@ def _cmds_win_remove(allow: list[str], gw: str | None) -> list[str]:
     del gw
     cmds: list[str] = []
     for dest, mask in BLACKHOLE_V4:
+        cmds.append(f"route delete {dest} mask {mask} 127.0.0.1")
         cmds.append(f"route delete {dest} mask {mask} {BLACKHOLE_GW}")
     for ip in allow:
         cmds.append(f"route delete {ip} mask 255.255.255.255")
@@ -236,13 +284,23 @@ def _cmds_win_remove(allow: list[str], gw: str | None) -> list[str]:
     return cmds
 
 
-def _cmds_linux_install(allow: list[str], gw: str | None) -> list[str]:
+def _cmds_linux_install(
+    allow: list[str], gw: str | None, *, blackhole: bool = False
+) -> list[str]:
     cmds = [
-        "ip route replace 0.0.0.0/1 dev lo metric 512",
-        "ip route replace 128.0.0.0/1 dev lo metric 512",
         "ip -6 route replace ::/1 dev lo metric 512",
         "ip -6 route replace 8000::/1 dev lo metric 512",
     ]
+    if blackhole:
+        cmds[0:0] = [
+            "ip route replace 0.0.0.0/1 dev lo metric 512",
+            "ip route replace 128.0.0.0/1 dev lo metric 512",
+        ]
+    else:
+        cmds[0:0] = [
+            "ip route del 0.0.0.0/1 dev lo",
+            "ip route del 128.0.0.0/1 dev lo",
+        ]
     if gw:
         for ip in allow:
             cmds.append(f"ip route replace {ip}/32 via {gw}")
@@ -268,6 +326,28 @@ def invalidate_applied_cache() -> None:
     _route_print_cache = None
 
 
+def _win_sealed(text: str) -> bool:
+    return bool(_WIN_BLACKHOLE_LO.search(text) and _WIN_BLACKHOLE_HI.search(text))
+
+
+def _win_tun_split(text: str) -> bool:
+    return bool(
+        re.search(r"0\.0\.0\.0\s+128\.0\.0\.0\s+\S+\s+172\.19\.", text)
+        and re.search(r"128\.0\.0\.0\s+128\.0\.0\.0\s+\S+\s+172\.19\.", text)
+    )
+
+
+def is_sealed(*, force: bool = False) -> bool:
+    """True only if IPv4 loopback /1 blackholes are present (fail-closed)."""
+    if sys.platform == "win32":
+        return _win_sealed(_route_print_win(force=force))
+    try:
+        r = procutil.run(["ip", "-4", "route", "show", "0.0.0.0/1"], timeout=3)
+    except (OSError, FileNotFoundError):
+        return False
+    return "dev lo" in (r.stdout or "")
+
+
 def is_applied(*, force: bool = False) -> bool:
     global _applied_cache
     now = time.monotonic()
@@ -285,7 +365,7 @@ def is_applied(*, force: bool = False) -> bool:
 def _is_applied_uncached() -> bool:
     if sys.platform == "win32":
         text = _route_print_win(force=True)
-        return bool(_WIN_BLACKHOLE.search(text))
+        return _win_sealed(text) or _win_tun_split(text)
     try:
         r = procutil.run(["ip", "-4", "route", "show", "0.0.0.0/1"], timeout=3)
     except (OSError, FileNotFoundError):
@@ -348,6 +428,46 @@ def pin_commands(
     return [f"ip route replace {ip}/32 via {hop}" for ip in unique]
 
 
+def suppress_underlay_ipv6(*, var_dir: Path, log: LogFn = noop) -> None:
+    """Stop GitHub/Chrome Happy Eyeballs from skipping TUN over IPv6."""
+    if sys.platform != "win32":
+        return
+    from desktop.tun import underlay_ifaces
+
+    ifaces = underlay_ifaces()
+    if not ifaces:
+        return
+    cmds = [
+        f"netsh interface ipv6 set interface {idx} admin=disabled"
+        for idx, _name in ifaces
+    ]
+    if procutil.is_admin():
+        _run_lines_now(cmds, ignore_fail=True)
+    else:
+        _run_privileged_lines(cmds, log=log, ignore_fail=True)
+    st = _load_state(var_dir)
+    st["ipv6_disabled"] = [idx for idx, _name in ifaces]
+    _save_state(var_dir, st)
+    log("kill switch: IPv6 выкл на " + ", ".join(name for _i, name in ifaces))
+
+
+def restore_underlay_ipv6(*, var_dir: Path, log: LogFn = noop) -> None:
+    if sys.platform != "win32":
+        return
+    st = _load_state(var_dir)
+    raw = [x for x in (st.get("ipv6_disabled") or []) if x]
+    if not raw:
+        return
+    cmds = [f"netsh interface ipv6 set interface {idx} admin=enabled" for idx in raw]
+    if procutil.is_admin():
+        _run_lines_now(cmds, ignore_fail=True)
+    else:
+        _run_privileged_lines(cmds, log=log, ignore_fail=True)
+    st["ipv6_disabled"] = []
+    _save_state(var_dir, st)
+    log("kill switch: IPv6 на underlay включил обратно")
+
+
 def pin_underlay(
     allow: list[str],
     *,
@@ -379,10 +499,16 @@ def pin_underlay(
     return ok
 
 
-def apply(allow: list[str], *, var_dir: Path, log: LogFn = noop) -> bool:
-    """Install routes. Returns True if blackhole is present afterwards."""
+def apply(
+    allow: list[str],
+    *,
+    var_dir: Path,
+    log: LogFn = noop,
+    blackhole: bool = False,
+) -> bool:
+    """Pin VPS/Squid. IPv4 loopback /1 only when blackhole=True (fail-closed)."""
     unique = list(dict.fromkeys(allow))
-    if is_applied():
+    if is_applied() and not blackhole:
         hop = underlay_gateway(unique[0]) if unique else underlay_gateway("")
         idx = _iface_index_win(unique[0]) if sys.platform == "win32" and unique else None
         _save_state(
@@ -390,6 +516,7 @@ def apply(allow: list[str], *, var_dir: Path, log: LogFn = noop) -> bool:
             {"allow": unique, "gw": hop or "", "if_idx": idx, "applied": True},
         )
         log("kill switch: маршруты уже стоят")
+        suppress_underlay_ipv6(var_dir=var_dir, log=log)
         return True
     gw = underlay_gateway(unique[0]) if unique else underlay_gateway("")
     idx = _iface_index_win(unique[0]) if sys.platform == "win32" and unique else None
@@ -400,9 +527,11 @@ def apply(allow: list[str], *, var_dir: Path, log: LogFn = noop) -> bool:
         )
         return False
     reachable_before = _host_open(unique[0], 443) if unique else False
-    cmds = install_commands(unique, gw=gw)
+    cmds = install_commands(unique, gw=gw, blackhole=blackhole)
     log(f"kill switch: gw={gw} allow={', '.join(unique) or 'нет'}")
-    _run_privileged_lines(cmds, log=log, expect_applied=True)
+    _run_privileged_lines(
+        cmds, log=log, expect_applied=True if blackhole else None
+    )
     invalidate_applied_cache()
     present = is_applied(force=True)
     _save_state(
@@ -420,23 +549,28 @@ def apply(allow: list[str], *, var_dir: Path, log: LogFn = noop) -> bool:
         clear(var_dir=var_dir, log=log)
         return False
     host_ok = any(ip in text for ip in unique)
-    if present or host_ok:
-        log(
-            "kill switch: OK — VPS в таблице"
-            + ("" if present else " (чёрные 0.0.0.0/1 Windows не показывает, это нормально)")
-        )
+    if blackhole and present:
+        log("kill switch: OK — интернет закрыт (чёрные /1), кроме VPS")
         _save_state(
             var_dir, {"allow": unique, "gw": gw, "if_idx": idx, "applied": True}
         )
+        return True
+    if not blackhole and host_ok:
+        log("kill switch: VPS закреплён, чёрные IPv4 /1 не ставлю — их глушил браузер")
+        _save_state(
+            var_dir, {"allow": unique, "gw": gw, "if_idx": idx, "applied": True}
+        )
+        suppress_underlay_ipv6(var_dir=var_dir, log=log)
         return True
     if procutil.is_admin():
         log("kill switch: команды выполнены, но маршруты не видны")
     else:
         log("kill switch: не удалось поставить OS-маршруты (нужны права)")
-    return present
+    return present or host_ok
 
 
 def clear(*, var_dir: Path, log: LogFn = noop) -> None:
+    restore_underlay_ipv6(var_dir=var_dir, log=log)
     st = _load_state(var_dir)
     allow = [str(x) for x in (st.get("allow") or []) if x]
     gw = str(st.get("gw") or "") or None
