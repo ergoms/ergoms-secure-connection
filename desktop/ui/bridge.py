@@ -722,6 +722,18 @@ class GuiBridge(QObject):
             return
         self._apply_optimistic(waiting)
         self._refresh_status(force=True)
+        wait = (waiting or "").lower()
+        if "подключ" in wait or "включаю tun" in wait:
+            from desktop.leak_shield import consume_browser_toast
+
+            try:
+                if consume_browser_toast(self.paths.var_dir):
+                    self.toast.emit(
+                        "Перезапустите Chrome или Edge — иначе Secure DNS и WebRTC могут обойти туннель",
+                        "info",
+                    )
+            except Exception:  # noqa: BLE001
+                pass
 
     def _apply_optimistic(self, waiting: str) -> None:
         wait = (waiting or "").lower()

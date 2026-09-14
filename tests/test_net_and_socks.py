@@ -369,3 +369,97 @@ def test_save_config_empty_payload_keeps_disk(tmp_path: Path) -> None:
     text = conf.read_text(encoding="utf-8")
     assert "awg-priv" in text
     assert "awg-pub" in text
+
+
+def test_leak_shield_apply_restore_roundtrip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from desktop.leak_shield import (
+        HIVE_HKCU,
+        TYPE_SZ,
+        MemoryRegistry,
+        apply,
+        consume_browser_toast,
+        restore,
+        set_registry_backend,
+    )
+
+    chrome = r"Software\Policies\Google\Chrome"
+    reg = MemoryRegistry()
+    reg.set(HIVE_HKCU, chrome, "DnsOverHttpsMode", "automatic", TYPE_SZ)
+    set_registry_backend(reg)
+    monkeypatch.setattr("desktop.leak_shield._is_windows", lambda: True)
+    try:
+        assert apply(var_dir=tmp_path) is True
+        existed, val, _typ = reg.get(HIVE_HKCU, chrome, "DnsOverHttpsMode")
+        assert existed and val == "off"
+        existed, val, _typ = reg.get(HIVE_HKCU, chrome, "WebRtcIPHandling")
+        assert existed and val == "default_public_interface_only"
+        assert consume_browser_toast(tmp_path) is True
+        assert consume_browser_toast(tmp_path) is False
+        assert apply(var_dir=tmp_path) is False
+        restore(var_dir=tmp_path)
+        existed, val, _typ = reg.get(HIVE_HKCU, chrome, "DnsOverHttpsMode")
+        assert existed and val == "automatic"
+        existed, _val, _typ = reg.get(HIVE_HKCU, chrome, "WebRtcIPHandling")
+        assert not existed
+    finally:
+        set_registry_backend(None)
+
+
+def test_log_foreign_vpn_home_returns_leftover_when_not_admin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from desktop.connection import ConnectionOps
+
+    class Host(ConnectionOps):
+        def log(self, msg: str) -> None:
+            del msg
+
+    cmds = ["route delete 0.0.0.0 mask 0.0.0.0 if 12"]
+    monkeypatch.setattr("desktop.connection.leftover_vpn_ifaces", lambda: [(12, "Amnezia")])
+    monkeypatch.setattr("desktop.connection.leftover_vpn_default_cmds", lambda: list(cmds))
+    monkeypatch.setattr("desktop.connection.stale_default_cmds", lambda _gw: [])
+    monkeypatch.setattr("desktop.connection.gateway_via_dest", lambda _h: "10.0.0.1")
+    monkeypatch.setattr("desktop.connection.foreign_vpn_processes", lambda: [])
+    monkeypatch.setattr("desktop.connection.foreign_vpn_live", lambda: [])
+    monkeypatch.setattr("desktop.connection.default_route_lines", lambda: [])
+    monkeypatch.setattr("desktop.procutil.is_admin", lambda: False)
+    out = Host()._log_foreign_vpn("vps.example", "")
+    assert out == cmds
+
+    ran: list[list[str]] = []
+    monkeypatch.setattr("desktop.procutil.is_admin", lambda: True)
+    monkeypatch.setattr(
+        "desktop.connection.run_route_cmds",
+        lambda lines: ran.append(list(lines)) or lines,
+    )
+    out = Host()._log_foreign_vpn("vps.example", "")
+    assert out == []
+    assert ran and ran[0] == cmds
+
+
+def test_tun_owns_default_from_rows() -> None:
+    from desktop.tun import tun_owns_default
+
+    ours = [
+        "0.0.0.0 128.0.0.0 172.19.0.1 172.19.0.2 1",
+        "128.0.0.0 128.0.0.0 172.19.0.1 172.19.0.2 1",
+    ]
+    assert tun_owns_default(ours) is True
+    loop = [
+        "0.0.0.0 128.0.0.0 0.0.0.0 127.0.0.1 512",
+        "128.0.0.0 128.0.0.0 0.0.0.0 127.0.0.1 512",
+    ]
+    assert tun_owns_default(loop) is False
+    foreign = [
+        "0.0.0.0 128.0.0.0 10.13.13.2 10.13.13.2 5",
+        "128.0.0.0 128.0.0.0 10.13.13.2 10.13.13.2 5",
+        *ours,
+    ]
+    assert tun_owns_default(foreign) is True
+    worse = [
+        "0.0.0.0 128.0.0.0 10.13.13.2 10.13.13.2 1",
+        "128.0.0.0 128.0.0.0 10.13.13.2 10.13.13.2 1",
+        "0.0.0.0 128.0.0.0 172.19.0.1 172.19.0.2 25",
+        "128.0.0.0 128.0.0.0 172.19.0.1 172.19.0.2 25",
+    ]
+    assert tun_owns_default(worse) is False

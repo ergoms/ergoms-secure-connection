@@ -334,6 +334,76 @@ def tun_split_rows() -> list[str]:
     return out
 
 
+def _parse_split_row(row: str) -> tuple[str, str, str, str, int] | None:
+    parts = row.split()
+    if len(parts) < 4:
+        return None
+    dest, mask, hop, iface = parts[0], parts[1], parts[2], parts[3]
+    try:
+        metric = int(parts[4]) if len(parts) > 4 else 9999
+    except ValueError:
+        metric = 9999
+    return dest, mask, hop, iface, metric
+
+
+def tun_owns_default(rows: list[str] | None = None) -> bool:
+    """True if both /1 halves go via our TUN and no foreign /1 has a better metric."""
+    if rows is None:
+        if sys.platform != "win32":
+            return False
+        rows = tun_split_rows()
+    have_lo = have_hi = False
+    our_metrics: list[int] = []
+    foreign_metrics: list[int] = []
+    for row in rows:
+        parsed = _parse_split_row(row)
+        if not parsed:
+            continue
+        dest, mask, hop, iface, metric = parsed
+        if mask != "128.0.0.0":
+            continue
+        ours = hop.startswith(TUN_ADDR_PREFIX) or iface.startswith(TUN_ADDR_PREFIX)
+        loop = hop.startswith("127.") or iface.startswith("127.")
+        if ours:
+            if dest == "0.0.0.0":
+                have_lo = True
+            if dest == "128.0.0.0":
+                have_hi = True
+            our_metrics.append(metric)
+        elif not loop:
+            foreign_metrics.append(metric)
+    if not (have_lo and have_hi):
+        return False
+    if not foreign_metrics or not our_metrics:
+        return not foreign_metrics
+    return min(our_metrics) <= min(foreign_metrics)
+
+
+def run_route_cmds(cmds: list[str]) -> list[str]:
+    """Run `route`/`ip` lines, ignore per-line failures. Returns cmds attempted."""
+    for line in cmds:
+        args = [p for p in line.split(" ") if p]
+        try:
+            procutil.run(args, timeout=8)
+        except OSError:
+            continue
+    return list(cmds)
+
+
+def run_leftover_vpn_default_cmds() -> list[str]:
+    """Delete foreign 0.0.0.0/0 and /1. Returns commands that were attempted."""
+    return run_route_cmds(leftover_vpn_default_cmds())
+
+
+def reclaim_tun_default(if_idx: int | None = None) -> bool:
+    """Strip foreign defaults and reinstall our /1 split. True if TUN owns default."""
+    run_leftover_vpn_default_cmds()
+    idx = if_idx or wait_tun_iface(timeout=2.0)
+    if idx:
+        ensure_tun_split_default(idx)
+    return tun_owns_default()
+
+
 def tun_split_installed(if_idx: int) -> bool:
     """True if both IPv4 /1 halves point at this TUN index or 172.19.*."""
     rows = tun_split_rows()

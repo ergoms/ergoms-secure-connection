@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import ssl
+import sys
 import threading
 import time
 from datetime import datetime
@@ -348,6 +349,7 @@ class TunnelWatchdog:
             self._fail_streak = 0
             self._probe_fails = 0
             self._ensure_reverse_ssh()
+            self._ensure_tun_default()
             return
         else:
             # Hard failure (port closed / process dead) — reset soft probe counter
@@ -425,6 +427,41 @@ class TunnelWatchdog:
             self.client._maybe_start_reverse_ssh()  # noqa: SLF001
         except Exception as exc:  # noqa: BLE001
             self.log(f"watchdog: reverse-ssh: {exc}")
+
+    def _ensure_tun_default(self) -> None:
+        if sys.platform != "win32":
+            return
+        if not (get_tun_enabled() or get_kill_switch()):
+            return
+        from desktop.config_io import get_server_host, resolve_corporate_proxy
+        from desktop.kill_switch import allow_ips, apply as apply_kill_switch
+        from desktop.tun import reclaim_tun_default, tun_owns_default
+
+        if tun_owns_default():
+            return
+        self.log("watchdog: TUN не владеет default — снимаю чужой /1")
+        if reclaim_tun_default() and tun_owns_default():
+            self.log("watchdog: TUN снова владеет default")
+            return
+        self.log("watchdog: чужой VPN перекрыл TUN")
+        self._notify(
+            "Чужой VPN",
+            "Второй VPN перекрыл маршруты. Отключите его.",
+        )
+        try:
+            cfg = self.client.config()
+            hosts = [get_server_host(cfg)]
+            proxy = resolve_corporate_proxy(cfg)
+            if proxy:
+                hosts.append(proxy.split(":")[0])
+            apply_kill_switch(
+                allow_ips(*hosts),
+                var_dir=self.client.paths.var_dir,
+                log=self.log,
+                blackhole=True,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"watchdog: fail-closed: {exc}")
 
     def _notify(self, title: str, message: str) -> None:
         if self.on_notify:

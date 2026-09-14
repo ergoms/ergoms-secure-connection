@@ -219,7 +219,7 @@ class ProbeOps:
     def _check_tun_owns_default(self) -> None:
         """Loopback /1 next to TUN /1 blackholes the browser. TUN must win."""
         from desktop.kill_switch import lift_ipv4_blackholes
-        from desktop.tun import tun_split_rows
+        from desktop.tun import tun_owns_default, tun_split_rows
 
         rows = tun_split_rows()
         loop = [r for r in rows if "127.0.0.1" in r]
@@ -229,7 +229,7 @@ class ProbeOps:
             lift_ipv4_blackholes(log=self.log)
             rows = tun_split_rows()
             tun = [r for r in rows if "172.19." in r]
-        if tun:
+        if tun_owns_default(rows):
             self.log("TUN владеет default: " + " | ".join(tun[:2]))
         else:
             self.log("TUN не владеет 0.0.0.0/1 — браузер пойдёт мимо VPN")
@@ -252,7 +252,7 @@ class ProbeOps:
         if getattr(self, "_pending_win_tun", False) and procutil.is_admin() and allow:
             try:
                 self.log("выхода нет — трафик в TUN, чтобы не шёл мимо")
-                self._install_win_tun_routes(allow)
+                self._install_win_tun_routes(allow, strict=False)
             except Exception as exc:  # noqa: BLE001
                 self.log(f"TUN split при обрыве: {exc}")
             self._pending_win_tun = False

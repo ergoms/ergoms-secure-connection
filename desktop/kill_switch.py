@@ -69,6 +69,13 @@ def _save_state(var_dir: Path, data: dict) -> None:
     )
 
 
+def _update_state(var_dir: Path, **fields: object) -> dict:
+    st = _load_state(var_dir)
+    st.update(fields)
+    _save_state(var_dir, st)
+    return st
+
+
 def allow_ips(*hosts: str) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
@@ -365,14 +372,12 @@ def _is_applied_uncached() -> bool:
 def remember_plan(var_dir: Path, allow: list[str], *, gw: str | None = None) -> None:
     hop = gw or (underlay_gateway(allow[0]) if allow else "") or ""
     idx = _iface_index_win(allow[0]) if sys.platform == "win32" and allow else None
-    _save_state(
+    _update_state(
         var_dir,
-        {
-            "allow": list(allow),
-            "gw": hop,
-            "if_idx": idx,
-            "applied": is_applied(),
-        },
+        allow=list(allow),
+        gw=hop,
+        if_idx=idx,
+        applied=is_applied(),
     )
 
 
@@ -549,19 +554,19 @@ def apply(
     if is_applied() and not blackhole:
         hop = underlay_gateway(unique[0]) if unique else underlay_gateway("")
         idx = _iface_index_win(unique[0]) if sys.platform == "win32" and unique else None
-        _save_state(
-            var_dir,
-            {"allow": unique, "gw": hop or "", "if_idx": idx, "applied": True},
+        _update_state(
+            var_dir, allow=unique, gw=hop or "", if_idx=idx, applied=True
         )
         log("kill switch: маршруты уже стоят")
         suppress_underlay_ipv6(var_dir=var_dir, log=log)
+        _apply_leak_shield(var_dir=var_dir, log=log)
         return True
     gw = underlay_gateway(unique[0]) if unique else underlay_gateway("")
     idx = _iface_index_win(unique[0]) if sys.platform == "win32" and unique else None
     if not gw:
         log("kill switch: нет default gateway — OS-маршруты не ставлю (останется strict_route)")
-        _save_state(
-            var_dir, {"allow": unique, "gw": "", "if_idx": idx, "applied": False}
+        _update_state(
+            var_dir, allow=unique, gw="", if_idx=idx, applied=False
         )
         return False
     reachable_before = _host_open(unique[0], 443) if unique else False
@@ -572,8 +577,8 @@ def apply(
     )
     invalidate_applied_cache()
     present = is_applied(force=True)
-    _save_state(
-        var_dir, {"allow": unique, "gw": gw, "if_idx": idx, "applied": present}
+    _update_state(
+        var_dir, allow=unique, gw=gw, if_idx=idx, applied=present
     )
     text = _route_print_win(force=True) if sys.platform == "win32" else ""
     for ip in unique:
@@ -589,16 +594,18 @@ def apply(
     host_ok = any(ip in text for ip in unique)
     if blackhole and present:
         log("kill switch: OK — интернет закрыт (чёрные /1), кроме VPS")
-        _save_state(
-            var_dir, {"allow": unique, "gw": gw, "if_idx": idx, "applied": True}
+        _update_state(
+            var_dir, allow=unique, gw=gw, if_idx=idx, applied=True
         )
+        _apply_leak_shield(var_dir=var_dir, log=log)
         return True
     if not blackhole and host_ok:
         log("kill switch: VPS закреплён, чёрные IPv4 /1 не ставлю — их глушил браузер")
-        _save_state(
-            var_dir, {"allow": unique, "gw": gw, "if_idx": idx, "applied": True}
+        _update_state(
+            var_dir, allow=unique, gw=gw, if_idx=idx, applied=True
         )
         suppress_underlay_ipv6(var_dir=var_dir, log=log)
+        _apply_leak_shield(var_dir=var_dir, log=log)
         return True
     if procutil.is_admin():
         log("kill switch: команды выполнены, но маршруты не видны")
@@ -607,7 +614,22 @@ def apply(
     return present or host_ok
 
 
+def _apply_leak_shield(*, var_dir: Path, log: LogFn) -> None:
+    from desktop.leak_shield import apply as apply_leak_shield
+
+    try:
+        apply_leak_shield(var_dir=var_dir, log=log)
+    except Exception as exc:  # noqa: BLE001
+        log(f"leak shield: {exc}")
+
+
 def clear(*, var_dir: Path, log: LogFn = noop) -> None:
+    from desktop.leak_shield import restore as restore_leak_shield
+
+    try:
+        restore_leak_shield(var_dir=var_dir, log=log)
+    except Exception as exc:  # noqa: BLE001
+        log(f"leak shield off: {exc}")
     restore_underlay_ipv6(var_dir=var_dir, log=log)
     restore_underlay_ipv4_metrics(var_dir=var_dir, log=log)
     st = _load_state(var_dir)

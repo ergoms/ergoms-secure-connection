@@ -55,7 +55,10 @@ from desktop.tun import (
     leftover_vpn_default_cmds,
     leftover_vpn_ifaces,
     our_tun_split_leftover,
+    reclaim_tun_default,
+    run_route_cmds,
     stale_default_cmds,
+    tun_owns_default,
     wait_tun_iface,
 )
 from lib.netutil import port_open
@@ -355,6 +358,12 @@ class ConnectionOps:
 
     def disable_tun(self, *, persist: bool = True) -> None:
         self.reload_env()
+        from desktop.leak_shield import restore as restore_leak_shield
+
+        try:
+            restore_leak_shield(var_dir=self.paths.var_dir, log=self.log)
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"leak shield off: {exc}")
         if persist and get_kill_switch():
             update_config_key(self.paths.config_path, "kill_switch", False)
             self.log("kill switch выключен вместе с TUN")
@@ -369,7 +378,7 @@ class ConnectionOps:
             self.start_singbox_mode()
 
 
-    def _install_win_tun_routes(self, allow: list[str]) -> None:
+    def _install_win_tun_routes(self, allow: list[str], *, strict: bool = True) -> None:
         """After TUN adapter exists: steal traffic without auto_route."""
         idx = wait_tun_iface(timeout=20.0)
         if not idx:
@@ -378,9 +387,7 @@ class ConnectionOps:
         pin_kill_switch_underlay(
             allow, var_dir=self.paths.var_dir, log=self.log, elevate=False
         )
-        for line in leftover_vpn_default_cmds():
-            args = [p for p in line.split(" ") if p]
-            procutil.run(args, timeout=8)
+        run_leftover_vpn_default_cmds()
         ok, detail = ensure_tun_split_default(idx)
         self.log(detail)
         if not ok:
@@ -392,6 +399,27 @@ class ConnectionOps:
             prefer_tun_ipv4(idx, var_dir=self.paths.var_dir, log=self.log)
         pin_kill_switch_underlay(
             allow, var_dir=self.paths.var_dir, log=self.log, elevate=False
+        )
+        from desktop.leak_shield import apply as apply_leak_shield
+
+        try:
+            apply_leak_shield(var_dir=self.paths.var_dir, log=self.log)
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"leak shield: {exc}")
+        if tun_owns_default():
+            return
+        self.log("TUN не владеет default — снимаю чужой /1 и ставлю split снова")
+        reclaim_tun_default(idx)
+        if tun_owns_default():
+            return
+        self.log("чужой VPN перекрыл TUN — закрываю underlay")
+        apply_kill_switch(
+            allow, var_dir=self.paths.var_dir, log=self.log, blackhole=True
+        )
+        if not strict:
+            return
+        raise RuntimeError(
+            "Чужой VPN перекрыл маршруты TUN. Отключите второй VPN и подключитесь снова."
         )
 
 
@@ -417,14 +445,14 @@ class ConnectionOps:
         if leftover:
             names = ", ".join(name for _idx, name in leftover)
             self.log(
-                f"чужой туннель ещё поднят ({names}) — UDP с Ethernet, "
-                f"маршруты {keep_gw or 'underlay'} не трогаю"
+                f"чужой туннель ещё поднят ({names}) — снимаю его default, "
+                f"служба остаётся"
             )
         elif live:
             self.log(
                 "чужой туннель ещё поднят ("
                 + ", ".join(str(x) for x in live)
-                + ") — UDP с Ethernet"
+                + ") — снимаю его default"
             )
         elif idle_procs:
             self.log(
@@ -434,17 +462,14 @@ class ConnectionOps:
             )
         for row in default_route_lines():
             self.log(f"default: {row}")
-        home = not bool(office_proxy)
-        if stale and not home:
+        if stale:
             shown = [c for c in stale if "-p" not in c]
             self.log("лишний default второго VPN сниму: " + "; ".join(shown))
-        if leftover_cmds and procutil.is_admin() and not home:
-            for line in leftover_cmds:
-                args = [p for p in line.split(" ") if p]
-                procutil.run(args, timeout=8)
+        if leftover_cmds and procutil.is_admin():
+            run_route_cmds(leftover_cmds)
             leftover_cmds = []
-        if home:
-            leftover_cmds = []
+        elif leftover_cmds:
+            self.log("чужой default сниму вместе с UAC")
         return leftover_cmds
 
     def _kill_switch_hosts(self, cfg: dict[str, Any]) -> list[str]:
@@ -546,6 +571,13 @@ class ConnectionOps:
         self._reap_helpers(scan_cmdline=True)
         if ks_thread is not None:
             ks_thread.join(timeout=8.0)
+        else:
+            from desktop.leak_shield import restore as restore_leak_shield
+
+            try:
+                restore_leak_shield(var_dir=self.paths.var_dir, log=self.log)
+            except Exception as exc:  # noqa: BLE001
+                self.log(f"leak shield off: {exc}")
 
         procutil.invalidate_proc_cache()
         leftover = self.singbox.pid()

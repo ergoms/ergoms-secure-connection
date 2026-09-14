@@ -144,6 +144,14 @@ Item {
                             font.family: T.fontUi
                             wrapMode: Text.WordWrap
                         }
+                        Text {
+                            width: parent.width
+                            text: "Пока включён полный туннель, закрываются Secure DNS и WebRTC host-IP. Перезапустите Chrome или Edge. Чужой VPN с default-маршрутом будет снят."
+                            color: T.muted
+                            font.pixelSize: 11
+                            font.family: T.fontUi
+                            wrapMode: Text.WordWrap
+                        }
                         BoolSegmented {
                             label: "Автозапуск с компьютером"
                             on: bridge.autostart
