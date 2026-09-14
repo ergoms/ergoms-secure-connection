@@ -14,12 +14,13 @@ Item {
         hideTimer.restart()
     }
 
+    // Compact banner under the title, left side — does not cover log Copy
+    // or the settings footer.
     anchors.left: parent.left
-    anchors.right: parent.right
     anchors.top: parent.top
     anchors.leftMargin: 14
-    anchors.rightMargin: 14
-    anchors.topMargin: 60
+    anchors.topMargin: 58
+    width: Math.min(parent.width - 130, 268)
     height: shown ? box.height : 0
     visible: shown
     z: 20
@@ -33,7 +34,7 @@ Item {
     Rectangle {
         id: box
         width: parent.width
-        height: Math.max(44, toastText.implicitHeight + 20)
+        height: Math.max(40, toastText.implicitHeight + 18)
         radius: 12
         color: kind === "error" ? "#3a1d24" : (kind === "warn" ? "#3a3220" : T.surface2)
         border.width: 1
