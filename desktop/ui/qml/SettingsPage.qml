@@ -23,7 +23,6 @@ Item {
         return !String(bridge.settings.trUuid || "").replace(/^\s+|\s+$/g, "")
             || !String(bridge.settings.trPublicKey || "").replace(/^\s+|\s+$/g, "")
     }
-    property bool awgAdvanced: false
 
     ColumnLayout {
         anchors.fill: parent
@@ -72,7 +71,7 @@ Item {
                     MouseArea {
                         anchors.fill: parent
                         cursorShape: Qt.PointingHandCursor
-                        onClicked: bridge.importConfigFile()
+                        onClicked: root.awgDial ? bridge.importAwgConfFile() : bridge.importConfigFile()
                     }
                 }
 
@@ -322,48 +321,26 @@ Item {
 
                         Text {
                             width: parent.width
-                            text: "Параметры выбранного способа подключения."
+                            text: "AmneziaWG только из файла .conf. Ключи в config.json не хранятся."
                             color: T.muted
                             font.pixelSize: 11
                             font.family: T.fontUi
                             wrapMode: Text.WordWrap
                         }
-                        TransportFields {
-                            fields: [
-                                { label: "Private key", key: "awgPrivateKey", password: true },
-                                { label: "Peer public key", key: "awgPeerPublicKey", password: true },
-                                { label: "Адрес туннеля", key: "awgAddress" },
-                                { label: "UDP порт", key: "awgPort" },
-                                { label: "Preshared key", key: "awgPresharedKey", password: true }
-                            ]
-                        }
                         Text {
                             width: parent.width
-                            text: root.awgAdvanced ? "Обфускация ▾" : "Обфускация ▸"
-                            color: T.muted
-                            font.pixelSize: 11
-                            font.weight: Font.Medium
+                            text: Boolean(bridge.settings.awgLoaded)
+                                  ? ("Загружен: " + String(bridge.settings.awgSummary || ""))
+                                  : "Файл ещё не загружен."
+                            color: Boolean(bridge.settings.awgLoaded) ? T.text : T.warn
+                            font.pixelSize: 12
                             font.family: T.fontUi
-                            MouseArea {
-                                anchors.fill: parent
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: root.awgAdvanced = !root.awgAdvanced
-                            }
+                            wrapMode: Text.WordWrap
                         }
-                        TransportFields {
-                            showAdvanced: root.awgAdvanced
-                            fields: [
-                                { label: "MTU", key: "awgMtu", advanced: true },
-                                { label: "Jc", key: "awgJc", advanced: true },
-                                { label: "Jmin", key: "awgJmin", advanced: true },
-                                { label: "Jmax", key: "awgJmax", advanced: true },
-                                { label: "S1", key: "awgS1", advanced: true },
-                                { label: "S2", key: "awgS2", advanced: true },
-                                { label: "H1", key: "awgH1", advanced: true },
-                                { label: "H2", key: "awgH2", advanced: true },
-                                { label: "H3", key: "awgH3", advanced: true },
-                                { label: "H4", key: "awgH4", advanced: true }
-                            ]
+                        PrimaryButton {
+                            width: parent.width
+                            text: Boolean(bridge.settings.awgLoaded) ? "Заменить .conf" : "Загрузить .conf"
+                            onClicked: bridge.importAwgConfFile()
                         }
                     }
                 }

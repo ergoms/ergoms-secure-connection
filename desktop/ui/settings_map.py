@@ -66,6 +66,8 @@ def settings_defaults() -> dict[str, Any]:
         "awgH2": app.transport.amneziawg.h2,
         "awgH3": app.transport.amneziawg.h3,
         "awgH4": app.transport.amneziawg.h4,
+        "awgLoaded": False,
+        "awgSummary": "",
         "reverseSsh": app.reverse_ssh.enabled,
         "reverseSshListen": str(app.reverse_ssh.listen_port),
         "reverseSshVpsUser": app.reverse_ssh.vps_user,
@@ -124,12 +126,22 @@ def cfg_to_settings(cfg: dict[str, Any]) -> dict[str, Any]:
             "awgH2": str(awg.get("h2") or ""),
             "awgH3": str(awg.get("h3") or ""),
             "awgH4": str(awg.get("h4") or ""),
+            "awgLoaded": bool(
+                str(awg.get("private_key") or "").strip()
+                and str(awg.get("peer_public_key") or "").strip()
+            ),
+            "awgSummary": "",
             "reverseSsh": bool(rev.get("enabled", True)),
             "reverseSshListen": str(rev.get("listen_port") or 2222),
             "reverseSshVpsUser": str(rev.get("vps_user") or "root"),
             "reverseSshVpsPort": str(rev.get("vps_port") or 22),
         }
     )
+    host = str(server.get("host") or "").strip()
+    port = str(awg.get("port") or AWG_DEFAULT_PORT)
+    address = str(awg.get("address") or AWG_DEFAULT_ADDRESS)
+    if out["awgLoaded"]:
+        out["awgSummary"] = f"{host}:{port} · {address}" if host else f":{port} · {address}"
     return out
 
 
@@ -138,14 +150,6 @@ def _as_int(raw: Any, default: int) -> int:
         return int(str(raw or "").strip() or str(default))
     except ValueError:
         return default
-
-
-def _set_awg_int(awg: dict[str, Any], key: str, incoming: Any, default: int = 0) -> None:
-    """Keep a nonzero disk value when the form still has 0 / empty."""
-    val = _as_int(incoming, default)
-    cur = awg.get(key)
-    if val or not cur:
-        awg[key] = val
 
 
 def apply_settings_to_cfg(
@@ -230,25 +234,6 @@ def apply_settings_to_cfg(
         hy["server_name"] = normalize_hy2_sni(hy_sni)
     assign_filled(hy, "obfs_password", get("hy2Obfs"))
     hy["insecure"] = bool(hy.get("insecure", True))
-    awg = tr.get("amneziawg")
-    if not isinstance(awg, dict):
-        awg = {}
-        tr["amneziawg"] = awg
-    assign_filled(awg, "private_key", get("awgPrivateKey"))
-    assign_filled(awg, "peer_public_key", get("awgPeerPublicKey"))
-    assign_filled(awg, "pre_shared_key", get("awgPresharedKey"))
-    assign_filled(awg, "address", get("awgAddress") or AWG_DEFAULT_ADDRESS)
-    awg["port"] = _as_int(get("awgPort"), AWG_DEFAULT_PORT)
-    awg["mtu"] = _as_int(get("awgMtu"), AWG_DEFAULT_MTU)
-    _set_awg_int(awg, "jc", get("awgJc"))
-    _set_awg_int(awg, "jmin", get("awgJmin"))
-    _set_awg_int(awg, "jmax", get("awgJmax"))
-    _set_awg_int(awg, "s1", get("awgS1"))
-    _set_awg_int(awg, "s2", get("awgS2"))
-    assign_filled(awg, "h1", get("awgH1"))
-    assign_filled(awg, "h2", get("awgH2"))
-    assign_filled(awg, "h3", get("awgH3"))
-    assign_filled(awg, "h4", get("awgH4"))
     rev = cfg.get("reverse_ssh")
     if not isinstance(rev, dict):
         rev = {}

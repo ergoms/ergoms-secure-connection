@@ -69,24 +69,6 @@
       "server_name": "www.microsoft.com",
       "obfs_password": "",
       "insecure": true
-    },
-    "amneziawg": {
-      "port": 51820,
-      "private_key": "",
-      "peer_public_key": "",
-      "pre_shared_key": "",
-      "address": "10.66.66.2/32",
-      "mtu": 1280,
-      "jc": 0,
-      "jmin": 0,
-      "jmax": 0,
-      "s1": 0,
-      "s2": 0,
-      "h1": "",
-      "h2": "",
-      "h3": "",
-      "h4": "",
-      "keepalive": 25
     }
   },
   "reverse_ssh": {

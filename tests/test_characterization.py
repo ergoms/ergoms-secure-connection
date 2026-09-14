@@ -6,8 +6,8 @@ import json
 from typing import Any
 from unittest.mock import patch
 
+from desktop.config.model import default_amneziawg_block
 from desktop.config_io import (
-    default_amneziawg_block,
     default_config_template,
     ensure_config_defaults,
     normalize_dial,
@@ -276,11 +276,13 @@ def test_example_json_matches_app_config() -> None:
     from pathlib import Path
 
     from desktop.config.model import AppConfig
+    from desktop.config_io import persistable_config
 
     example = json.loads(
         (Path("config") / "config.example.json").read_text(encoding="utf-8")
     )
-    assert example == AppConfig().to_dict()
+    assert example == persistable_config(AppConfig().to_dict())
+    assert "amneziawg" not in example["transport"]
 
 
 def test_bypass_to_singbox_splits_suffix_and_domain() -> None:

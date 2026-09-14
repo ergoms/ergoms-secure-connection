@@ -111,30 +111,51 @@ def main() -> int:
     hy["server_name"] = hy2_sni
     hy["obfs_password"] = hy2_obfs
     hy["insecure"] = True
-    awg = cfg["transport"].setdefault("amneziawg", {})
-    awg["port"] = int(creds.get("AWG_PORT") or "51820")
-    awg["private_key"] = awg_priv
-    awg["peer_public_key"] = awg_pub
-    awg["pre_shared_key"] = creds.get("AWG_PSK") or ""
-    awg["address"] = creds.get("AWG_ADDRESS_CLIENT") or "10.66.66.2/32"
-    awg["jc"] = int(creds.get("AWG_JC") or "0")
-    awg["jmin"] = int(creds.get("AWG_JMIN") or "0")
-    awg["jmax"] = int(creds.get("AWG_JMAX") or "0")
-    awg["s1"] = int(creds.get("AWG_S1") or "0")
-    awg["s2"] = int(creds.get("AWG_S2") or "0")
-    awg["h1"] = creds.get("AWG_H1") or ""
-    awg["h2"] = creds.get("AWG_H2") or ""
-    awg["h3"] = creds.get("AWG_H3") or ""
-    awg["h4"] = creds.get("AWG_H4") or ""
+    tr = cfg.get("transport")
+    if isinstance(tr, dict):
+        tr.pop("amneziawg", None)
     STATE.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     try:
         os.chmod(OUT, 0o600)
     except OSError:
         pass
+    conf_path = STATE / "amneziawg.conf"
+    if awg_priv and awg_pub:
+        from desktop.config_io import render_amnezia_conf
+
+        conf_text = render_amnezia_conf(
+            {
+                "private_key": awg_priv,
+                "peer_public_key": awg_pub,
+                "pre_shared_key": creds.get("AWG_PSK") or "",
+                "address": creds.get("AWG_ADDRESS_CLIENT") or "10.66.66.2/32",
+                "port": int(creds.get("AWG_PORT") or "51820"),
+                "jc": int(creds.get("AWG_JC") or "0"),
+                "jmin": int(creds.get("AWG_JMIN") or "0"),
+                "jmax": int(creds.get("AWG_JMAX") or "0"),
+                "s1": int(creds.get("AWG_S1") or "0"),
+                "s2": int(creds.get("AWG_S2") or "0"),
+                "h1": creds.get("AWG_H1") or "",
+                "h2": creds.get("AWG_H2") or "",
+                "h3": creds.get("AWG_H3") or "",
+                "h4": creds.get("AWG_H4") or "",
+            },
+            host=host,
+        )
+        conf_path.write_text(conf_text, encoding="utf-8")
+        try:
+            os.chmod(conf_path, 0o600)
+        except OSError:
+            pass
     print(f"\n--- client config.json ({OUT}) ---")
     print(json.dumps(cfg, indent=2, ensure_ascii=False))
-    print("\nСкачайте этот файл на ПК и в клиенте: Настройки → Из файла.")
+    if awg_priv and awg_pub:
+        print(f"\n--- AmneziaWG .conf ({conf_path}) ---")
+        print(conf_path.read_text(encoding="utf-8"))
+        print("Скачайте config.json и amneziawg.conf. AWG в клиенте: Настройки → Загрузить .conf.")
+    else:
+        print("\nСкачайте этот файл на ПК и в клиенте: Настройки → Из файла.")
     return 0
 
 

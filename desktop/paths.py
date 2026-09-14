@@ -131,6 +131,7 @@ class Paths:
         self.var_dir = self.root / "var"
         self.tools_dir = self.root / "tools"
         self.config_path = self.root / "config.json"
+        self.awg_conf_path = self.root / "amneziawg.conf"
         self.env_path = self.root / ".env"
         self.known_hosts = self.creds_dir / "ssh_known_hosts"
         self.bridge_pid = self.var_dir / "bridge.pid"

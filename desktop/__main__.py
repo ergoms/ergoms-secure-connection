@@ -57,7 +57,7 @@ def _show_help() -> int:
     print(
         """ERGOMS SECURE CONNECTION — клиент VLESS+Reality (Windows / Linux)
 
-Конфиг: один файл config.json  (образец: config/config.example.json)
+Конфиг: config.json + amneziawg.conf  (образец: config/config.example.json)
 
 Команды (одинаковы везде):
   init                 создать config.json
@@ -154,7 +154,7 @@ def _run_service(cmd: str) -> int:
 
 
 def _run_encrypt(rest: list[str]) -> int:
-    from desktop.config_crypto import encrypt_file
+    from desktop.config_crypto import encrypt_config
     from desktop.config_io import apply_config, invoke_init
     from desktop.paths import Paths
 
@@ -167,8 +167,8 @@ def _run_encrypt(rest: list[str]) -> int:
     if not out.is_absolute():
         out = Path.cwd() / out
     password = password or _ask_password(confirm=True)
-    apply_config(paths.config_path, force=True, env_path=paths.env_path)
-    encrypt_file(paths.config_path, out, password)
+    cfg = apply_config(paths.config_path, force=True, env_path=paths.env_path)
+    out.write_bytes(encrypt_config(cfg, password))
     print(f"[ERGOMS SECURE CONNECTION] encrypted → {out}")
     return 0
 

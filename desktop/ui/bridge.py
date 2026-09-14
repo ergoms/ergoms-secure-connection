@@ -35,17 +35,17 @@ from desktop.config_io import (
     CORPORATE_BYPASS_PRESET,
     CORPORATE_PROXY_PRESET,
     STANDARD_BYPASS_PRESET,
-    apply_amnezia_to_config,
     apply_config,
     config_is_ready,
     default_config_template,
     ensure_config_defaults,
     get_tun_enabled,
     infer_corporate,
+    install_amnezia_conf,
     load_config,
     looks_like_wg_conf,
     merge_imported_config,
-    parse_amnezia_conf,
+    migrate_legacy_awg_json,
     save_config,
 )
 from desktop.paths import Paths, gui_command
@@ -70,6 +70,25 @@ _C_DANGER = "#f07178"
 
 def _scope_label(scope: str) -> str:
     return {"full": "Всё", "github": "GitHub"}.get(scope, scope or "—")
+
+
+def _json_has_awg(data: Any) -> bool:
+    if not isinstance(data, dict):
+        return False
+    if isinstance(data.get("amneziawg"), dict) and data["amneziawg"]:
+        return True
+    tr = data.get("transport")
+    return isinstance(tr, dict) and isinstance(tr.get("amneziawg"), dict) and bool(
+        tr.get("amneziawg")
+    )
+
+
+def _awg_import_note(migrated: bool, incoming: Any, conf_path: Path) -> str:
+    if migrated:
+        return " AmneziaWG сохранён в amneziawg.conf."
+    if _json_has_awg(incoming) and not conf_path.is_file():
+        return " AWG из JSON пропущен — загрузите .conf."
+    return ""
 
 
 class _BgTask(QRunnable):
@@ -424,7 +443,7 @@ class GuiBridge(QObject):
             None,
             "Конфиг ERGOMS SECURE CONNECTION",
             "",
-            "Config (*.json *.enc);;JSON (*.json);;Encrypted (*.enc);;All files (*)",
+            "Config (*.json *.enc *.conf);;JSON (*.json);;AmneziaWG (*.conf);;Encrypted (*.enc);;All files (*)",
         )
         if not path:
             return
@@ -451,38 +470,68 @@ class GuiBridge(QObject):
             if not ok or not password:
                 return
             incoming = decrypt_config(raw, password)
+            migrated = migrate_legacy_awg_json(incoming, self.paths.awg_conf_path)
             cfg = merge_imported_config(existing, incoming)
-        else:
-            text = raw.decode("utf-8-sig")
-            if looks_like_wg_conf(text) or src.suffix.lower() == ".conf":
-                parsed = parse_amnezia_conf(text)
-                if not parsed.get("private_key") or not parsed.get("peer_public_key"):
-                    raise ValueError("В .conf нет PrivateKey или PublicKey пира")
-                cfg = apply_amnezia_to_config(existing, parsed)
-                cfg["transport"]["dial"] = "amneziawg"
-            else:
-                try:
-                    same_live = src.resolve() == self.paths.config_path.resolve()
-                except OSError:
-                    same_live = False
-                if same_live:
-                    apply_config(self.paths.config_path, force=True)
-                    self.loadSettings()
-                    self._enqueue_log("Конфиг загружен")
-                    self.toast.emit("Конфиг загружен", "info")
-                    self._refresh_status(force=True)
-                    return
-                data = json.loads(text)
-                if not isinstance(data, dict):
-                    raise ValueError("Файл не JSON-объект")
-                cfg = merge_imported_config(existing, data)
+            extra = _awg_import_note(migrated, incoming, self.paths.awg_conf_path)
+            self._commit_imported_cfg(cfg, extra=extra)
+            return
+        text = raw.decode("utf-8-sig")
+        if looks_like_wg_conf(text) or src.suffix.lower() == ".conf":
+            self._import_awg_conf_text(text)
+            return
+        try:
+            same_live = src.resolve() == self.paths.config_path.resolve()
+        except OSError:
+            same_live = False
+        if same_live:
+            apply_config(self.paths.config_path, force=True)
+            self.loadSettings()
+            self._enqueue_log("Конфиг загружен")
+            self.toast.emit("Конфиг загружен", "info")
+            self._refresh_status(force=True)
+            return
+        data = json.loads(text)
+        if not isinstance(data, dict):
+            raise ValueError("Файл не JSON-объект")
+        migrated = migrate_legacy_awg_json(data, self.paths.awg_conf_path)
+        cfg = merge_imported_config(existing, data)
+        extra = _awg_import_note(migrated, data, self.paths.awg_conf_path)
+        self._commit_imported_cfg(cfg, extra=extra)
+
+    @Slot()
+    def importAwgConfFile(self) -> None:
+        if self._busy or self._active:
+            self.toast.emit("Дождитесь окончания операции или отключите VPN", "warn")
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            None,
+            "AmneziaWG .conf",
+            "",
+            "AmneziaWG (*.conf);;All files (*)",
+        )
+        if not path:
+            return
+        try:
+            self._import_awg_conf_text(Path(path).read_text(encoding="utf-8-sig"))
+        except Exception as exc:  # noqa: BLE001
+            self.toast.emit(str(exc), "error")
+
+    def _import_awg_conf_text(self, text: str) -> None:
+        install_amnezia_conf(self.paths.config_path, text)
+        apply_config(self.paths.config_path, force=True)
+        self.loadSettings()
+        self._enqueue_log("AmneziaWG .conf загружен")
+        self.toast.emit("AmneziaWG .conf загружен", "info")
+        self._refresh_status(force=True)
+
+    def _commit_imported_cfg(self, cfg: dict[str, Any], *, extra: str = "") -> None:
         cfg = ensure_config_defaults(cfg)
         self.paths.ensure_dirs()
         save_config(self.paths.config_path, cfg)
         apply_config(self.paths.config_path, force=True)
         self.loadSettings()
         self._enqueue_log("Конфиг загружен")
-        self.toast.emit("Конфиг загружен", "info")
+        self.toast.emit("Конфиг загружен" + extra, "info")
         self._refresh_status(force=True)
 
     @Slot()
@@ -505,7 +554,7 @@ class GuiBridge(QObject):
         try:
             save_config(dest, cfg)
             self._enqueue_log(f"Копия конфига → {dest}")
-            self.toast.emit("Один JSON на все протоколы сохранён", "info")
+            self.toast.emit("JSON сохранён. AmneziaWG — отдельный .conf", "info")
         except Exception as exc:  # noqa: BLE001
             self.toast.emit(str(exc), "error")
 

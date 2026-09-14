@@ -265,8 +265,9 @@ cat <<EOF
 
 ========================================================================
 OK: AmneziaWG UDP :${AWG_PORT} (sing-box Reality/Hy2 не трогали)
-Один файл на ПК: $STATE_DIR/client.json
-В клиенте: Настройки → Из файла. Reality, Hy2 и AWG уже внутри.
+JSON: $STATE_DIR/client.json
+AWG:  $STATE_DIR/amneziawg.conf
+В клиенте: Настройки → Из файла (JSON), затем Загрузить .conf.
 На VPS в панели хостинга откройте UDP ${AWG_PORT}.
 ========================================================================
 EOF

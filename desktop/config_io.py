@@ -23,7 +23,6 @@ from desktop.config.model import (
     AppConfig,
     as_bool as _as_bool,
     as_int as _as_int,
-    default_amneziawg_block,
     default_config_template,
     ensure_config_defaults,
     normalize_dial,
@@ -36,6 +35,14 @@ from desktop.paths import Paths, bundle_dir
 
 
 LogFn = Callable[[str], None]
+
+
+AWG_CONF_NAME = "amneziawg.conf"
+
+
+def awg_conf_path(config_path: Path) -> Path:
+    """AmneziaWG lives next to config.json, never inside it."""
+    return Path(config_path).parent / AWG_CONF_NAME
 
 
 def parse_amnezia_conf(text: str) -> dict[str, Any]:
@@ -114,8 +121,54 @@ def looks_like_wg_conf(text: str) -> bool:
     return "[interface]" in low and "privatekey" in low
 
 
+def amnezia_keys_ready(parsed: dict[str, Any] | None) -> bool:
+    if not isinstance(parsed, dict):
+        return False
+    priv = str(parsed.get("private_key") or "").strip()
+    pub = str(parsed.get("peer_public_key") or "").strip()
+    return bool(priv and pub and "REPLACE" not in priv.upper())
+
+
+def render_amnezia_conf(parsed: dict[str, Any], *, host: str = "") -> str:
+    """Serialize parsed AWG fields back to a client .conf."""
+    endpoint_host = str(host or parsed.get("host") or "").strip()
+    port = max(1, min(65535, _as_int(parsed.get("port"), AWG_DEFAULT_PORT)))
+    address = str(parsed.get("address") or AWG_DEFAULT_ADDRESS).strip() or AWG_DEFAULT_ADDRESS
+    mtu = max(1280, min(1500, _as_int(parsed.get("mtu"), AWG_DEFAULT_MTU)))
+    keepalive = max(0, min(600, _as_int(parsed.get("keepalive"), 25))) or 25
+    lines = [
+        "[Interface]",
+        f"PrivateKey = {str(parsed.get('private_key') or '').strip()}",
+        f"Address = {address}",
+        f"MTU = {mtu}",
+    ]
+    for key, label in (
+        ("jc", "Jc"),
+        ("jmin", "Jmin"),
+        ("jmax", "Jmax"),
+        ("s1", "S1"),
+        ("s2", "S2"),
+    ):
+        val = _as_int(parsed.get(key), 0)
+        if val:
+            lines.append(f"{label} = {val}")
+    for key, label in (("h1", "H1"), ("h2", "H2"), ("h3", "H3"), ("h4", "H4")):
+        val = str(parsed.get(key) or "").strip()
+        if val:
+            lines.append(f"{label} = {val}")
+    lines.extend(["", "[Peer]", f"PublicKey = {str(parsed.get('peer_public_key') or '').strip()}"])
+    psk = str(parsed.get("pre_shared_key") or "").strip()
+    if psk:
+        lines.append(f"PresharedKey = {psk}")
+    if endpoint_host:
+        lines.append(f"Endpoint = {endpoint_host}:{port}")
+    lines.append("AllowedIPs = 0.0.0.0/0, ::/0")
+    lines.append(f"PersistentKeepalive = {keepalive}")
+    return "\n".join(lines) + "\n"
+
+
 def apply_amnezia_to_config(cfg: dict[str, Any], parsed: dict[str, Any]) -> dict[str, Any]:
-    """Merge wg-quick / Amnezia fields into client config.json (other dials stay)."""
+    """Overlay parsed .conf onto the in-memory config (not written to JSON)."""
     out = ensure_config_defaults(cfg)
     awg = out["transport"].setdefault("amneziawg", {})
     if not isinstance(awg, dict):
@@ -151,6 +204,81 @@ def apply_amnezia_to_config(cfg: dict[str, Any], parsed: dict[str, Any]) -> dict
     return ensure_config_defaults(out)
 
 
+def overlay_amnezia_conf(cfg: dict[str, Any], conf_path: Path) -> dict[str, Any]:
+    """Fill transport.amneziawg from amneziawg.conf when the file is valid."""
+    if not conf_path.is_file():
+        return cfg
+    try:
+        text = conf_path.read_text(encoding="utf-8-sig")
+    except OSError:
+        return cfg
+    parsed = parse_amnezia_conf(text)
+    if not amnezia_keys_ready(parsed):
+        return cfg
+    return apply_amnezia_to_config(cfg, parsed)
+
+
+def strip_amneziawg_section(cfg: dict[str, Any]) -> dict[str, Any]:
+    """config.json must not contain transport.amneziawg."""
+    out = deepcopy(cfg) if isinstance(cfg, dict) else {}
+    tr = out.get("transport")
+    if isinstance(tr, dict):
+        tr.pop("amneziawg", None)
+    return out
+
+
+def persistable_config(cfg: dict[str, Any] | None) -> dict[str, Any]:
+    """Normalized JSON payload without the AmneziaWG block."""
+    return strip_amneziawg_section(ensure_config_defaults(cfg or {}))
+
+
+def _write_awg_conf(conf_path: Path, text: str) -> None:
+    conf_path.parent.mkdir(parents=True, exist_ok=True)
+    body = text if str(text).endswith("\n") else str(text) + "\n"
+    conf_path.write_text(body, encoding="utf-8")
+    try:
+        os.chmod(conf_path, 0o600)
+    except OSError:
+        pass
+    invalidate_config_cache()
+
+
+def migrate_legacy_awg_json(cfg: dict[str, Any], conf_path: Path) -> bool:
+    """If JSON still has AWG keys and .conf is missing, write the .conf once."""
+    if conf_path.is_file():
+        return False
+    tr = cfg.get("transport") if isinstance(cfg.get("transport"), dict) else {}
+    awg = tr.get("amneziawg") if isinstance(tr.get("amneziawg"), dict) else {}
+    if not amnezia_keys_ready(awg) and isinstance(cfg.get("amneziawg"), dict):
+        awg = cfg["amneziawg"]
+    if not amnezia_keys_ready(awg):
+        return False
+    host = ""
+    server = cfg.get("server")
+    if isinstance(server, dict):
+        host = str(server.get("host") or "").strip()
+    _write_awg_conf(conf_path, render_amnezia_conf(awg, host=host))
+    return True
+
+
+def install_amnezia_conf(config_path: Path, text: str) -> dict[str, Any]:
+    """Save a client .conf and switch dial to AmneziaWG. JSON keys stay empty."""
+    parsed = parse_amnezia_conf(text)
+    if not amnezia_keys_ready(parsed):
+        raise ValueError("В .conf нет PrivateKey или PublicKey пира")
+    path = Path(config_path)
+    _write_awg_conf(awg_conf_path(path), text)
+    if path.is_file():
+        cfg = load_config(path, force=True)
+    else:
+        cfg = overlay_amnezia_conf(default_config_template(), awg_conf_path(path))
+    tr = cfg.setdefault("transport", {})
+    if isinstance(tr, dict):
+        tr["dial"] = "amneziawg"
+    save_config(path, cfg)
+    return load_config(path, force=True)
+
+
 def _nonempty(value: Any) -> bool:
     """False for None / blank strings / empty containers. 0 and False stay (real values)."""
     if value is None:
@@ -181,7 +309,6 @@ def merge_imported_config(
     src = deepcopy(incoming if isinstance(incoming, dict) else {})
     keys = set(src)
     fragment_keys = {
-        "amneziawg",
         "hysteria2",
         "uuid",
         "public_key",
@@ -190,18 +317,18 @@ def merge_imported_config(
         "dial",
         "type",
     }
+    src.pop("amneziawg", None)
     if keys & fragment_keys and "transport" not in src and "server" not in src:
         wrap: dict[str, Any] = {}
-        for key in ("amneziawg", "hysteria2"):
-            if key in src:
-                wrap[key] = src.pop(key)
+        if "hysteria2" in src:
+            wrap["hysteria2"] = src.pop("hysteria2")
         for key in ("uuid", "public_key", "short_id", "server_name", "port", "dial", "type"):
             if key in src:
                 wrap[key] = src.pop(key)
         src = {"transport": wrap, **src}
 
     if base is None:
-        return ensure_config_defaults(src)
+        return persistable_config(src)
 
     out = deepcopy(base)
     inc_tr = src.get("transport")
@@ -211,7 +338,9 @@ def merge_imported_config(
             dst_tr = {}
             out["transport"] = dst_tr
         for key, val in inc_tr.items():
-            if key in ("hysteria2", "amneziawg") and isinstance(val, dict):
+            if key == "amneziawg":
+                continue
+            if key == "hysteria2" and isinstance(val, dict):
                 cur = dst_tr.get(key)
                 if not isinstance(cur, dict):
                     cur = {}
@@ -256,9 +385,7 @@ def config_is_ready(cfg: dict[str, Any] | None) -> bool:
     if str(hy.get("password") or "").strip():
         return True
     awg = tr.get("amneziawg") if isinstance(tr.get("amneziawg"), dict) else {}
-    priv = str(awg.get("private_key") or "").strip()
-    pub = str(awg.get("peer_public_key") or "").strip()
-    return bool(priv and pub and "REPLACE" not in priv.upper())
+    return amnezia_keys_ready(awg)
 
 
 def load_dotenv(path: Path) -> dict[str, str]:
@@ -280,7 +407,7 @@ def load_dotenv(path: Path) -> dict[str, str]:
     return out
 
 
-_config_cache: tuple[float, dict[str, Any]] | None = None
+_config_cache: tuple[str, float, float, dict[str, Any]] | None = None
 _runtime_cfg: dict[str, Any] | None = None
 
 
@@ -389,16 +516,31 @@ def load_config(path: Path, *, force: bool = False) -> dict[str, Any]:
     global _config_cache
     if not path.is_file():
         raise FileNotFoundError(f"Missing config.json. Run init first: {path}")
-    mtime = _file_mtime(path)
-    if not force and _config_cache and _config_cache[0] == mtime:
-        return deepcopy(_config_cache[1])
-    cfg = ensure_config_defaults(json.loads(path.read_text(encoding="utf-8-sig")))
-    _config_cache = (mtime, cfg)
+    conf = awg_conf_path(path)
+    json_mtime = _file_mtime(path)
+    conf_mtime = _file_mtime(conf)
+    try:
+        cache_key = str(path.resolve())
+    except OSError:
+        cache_key = str(path)
+    if (
+        not force
+        and _config_cache
+        and _config_cache[0] == cache_key
+        and _config_cache[1] == json_mtime
+        and _config_cache[2] == conf_mtime
+    ):
+        return deepcopy(_config_cache[3])
+    raw = json.loads(path.read_text(encoding="utf-8-sig"))
+    cfg = ensure_config_defaults(raw if isinstance(raw, dict) else {})
+    migrate_legacy_awg_json(cfg, conf)
+    cfg = overlay_amnezia_conf(cfg, conf)
+    _config_cache = (cache_key, json_mtime, _file_mtime(conf), cfg)
     return deepcopy(cfg)
 
 
 def save_config(path: Path, cfg: dict[str, Any]) -> None:
-    """Write config.json. Empty incoming fields never erase filled keys already on disk."""
+    """Write config.json without AmneziaWG. Empty incoming fields never erase filled keys."""
     payload = cfg if isinstance(cfg, dict) else {}
     if path.is_file():
         try:
@@ -411,8 +553,11 @@ def save_config(path: Path, cfg: dict[str, Any]) -> None:
             payload = ensure_config_defaults(payload)
     else:
         payload = ensure_config_defaults(payload)
+    payload = ensure_config_defaults(payload)
+    migrate_legacy_awg_json(payload, awg_conf_path(path))
+    persist = persistable_config(payload)
     path.write_text(
-        json.dumps(ensure_config_defaults(payload), indent=2, ensure_ascii=False) + "\n",
+        json.dumps(persist, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
     try:

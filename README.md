@@ -41,7 +41,7 @@ bash modes/vps/bootstrap_singbox_443.sh
 bash modes/vps/enable_amneziawg.sh
 ```
 
-Скрипт напечатает `transport.amneziawg` и кусок `.conf` для вставки в настройки клиента. Проверка: `systemctl status ergoms-amneziawg`, `ss -lunp | grep ':51820'`. В панели хостинга открыть **UDP 51820**.
+Скрипт напечатает `client.json` и отдельный `amneziawg.conf`. В клиенте: **Настройки → Из файла** (JSON), затем **Загрузить .conf**. Проверка: `systemctl status ergoms-amneziawg`, `ss -lunp | grep ':51820'`. В панели хостинга открыть **UDP 51820**.
 
 Подсказки: `.\deploy.ps1` / `./deploy.sh`.
 
@@ -124,12 +124,13 @@ chmod +x "ERGOMS SECURE CONNECTION"
 
 ## Настройки
 
-Всё в одном файле `config.json` (образец: `config/config.example.json`).
+Всё в `config.json` (образец: `config/config.example.json`). AmneziaWG — отдельный `amneziawg.conf` рядом.
 
 | Ключ | Назначение |
 |------|------------|
 | `server.host` | IP/hostname VPS |
-| `transport` | VLESS: uuid, public_key, short_id, `server_name` (Reality dest). Дом: `hysteria2.password`, `obfs_password`, свой `server_name`. Либо `amneziawg` (ключи, UDP-порт, Jc/H*) |
+| `transport` | VLESS: uuid, public_key, short_id, `server_name` (Reality dest). Дом: `hysteria2.password`, `obfs_password`, свой `server_name`. `dial`: `vless-reality` / `hysteria2` / `amneziawg` |
+| `amneziawg.conf` | Клиентский AWG (только `.conf`, не JSON) |
 | `socks_scope` | `full` или `github` (область PAC) |
 | `tun.enabled` / `tun.elevate` | TUN вместе с `on` (по умолчанию вкл.), запрос прав |
 | `kill_switch` | при обрыве резать интернет (по умолчанию вкл.; нужен TUN) |

@@ -249,6 +249,13 @@ def test_merge_empty_does_not_wipe_secrets() -> None:
     assert out["transport"]["hysteria2"]["password"] == "hy2-secret"
     assert out["transport"]["amneziawg"]["private_key"] == "awg-priv"
     assert out["transport"]["amneziawg"]["jc"] == 10
+    incoming_awg = {
+        "transport": {
+            "amneziawg": {"private_key": "from-json", "peer_public_key": "from-json-pub"}
+        }
+    }
+    skipped = merge_imported_config(base, incoming_awg)
+    assert skipped["transport"]["amneziawg"]["private_key"] == "awg-priv"
 
 
 def test_apply_settings_empty_form_keeps_disk() -> None:
@@ -282,17 +289,59 @@ def test_apply_settings_empty_form_keeps_disk() -> None:
     assert out["transport"]["amneziawg"]["h1"] == "111"
 
 
+def test_awg_conf_is_outside_json(tmp_path: Path) -> None:
+    from desktop.config_io import install_amnezia_conf, load_config, parse_amnezia_conf
+
+    text = (
+        "[Interface]\n"
+        "PrivateKey = client-priv\n"
+        "Address = 10.66.66.2/32\n"
+        "MTU = 1280\n"
+        "Jc = 10\n"
+        "H1 = 111\n"
+        "\n"
+        "[Peer]\n"
+        "PublicKey = server-pub\n"
+        "PresharedKey = psk\n"
+        "Endpoint = 203.0.113.10:51821\n"
+        "AllowedIPs = 0.0.0.0/0\n"
+        "PersistentKeepalive = 25\n"
+    )
+    parsed = parse_amnezia_conf(text)
+    assert parsed["private_key"] == "client-priv"
+    assert parsed["peer_public_key"] == "server-pub"
+    assert parsed["host"] == "203.0.113.10"
+    assert parsed["port"] == 51821
+    path = tmp_path / "config.json"
+    save_config(path, default_config_template())
+    cfg = install_amnezia_conf(path, text)
+    disk = json.loads(path.read_text(encoding="utf-8"))
+    assert "amneziawg" not in disk["transport"]
+    assert disk["transport"]["dial"] == "amneziawg"
+    assert cfg["transport"]["amneziawg"]["private_key"] == "client-priv"
+    loaded = load_config(path)
+    assert loaded["transport"]["amneziawg"]["private_key"] == "client-priv"
+    assert loaded["transport"]["amneziawg"]["jc"] == 10
+    assert loaded["server"]["host"] == "203.0.113.10"
+
+
 def test_save_config_empty_payload_keeps_disk(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     live = default_config_template()
     live["server"]["host"] = "vps.example"
     live["transport"]["uuid"] = "keep-uuid"
     live["transport"]["amneziawg"]["private_key"] = "awg-priv"
+    live["transport"]["amneziawg"]["peer_public_key"] = "awg-pub"
     live["blocked_hosts"] = ["keep.example"]
     path.write_text(json.dumps(live), encoding="utf-8")
     save_config(path, {"transport": {"uuid": "", "amneziawg": {"private_key": ""}}})
     saved = json.loads(path.read_text(encoding="utf-8"))
     assert saved["server"]["host"] == "vps.example"
     assert saved["transport"]["uuid"] == "keep-uuid"
-    assert saved["transport"]["amneziawg"]["private_key"] == "awg-priv"
+    assert "amneziawg" not in saved["transport"]
     assert saved["blocked_hosts"] == ["keep.example"]
+    conf = tmp_path / "amneziawg.conf"
+    assert conf.is_file()
+    text = conf.read_text(encoding="utf-8")
+    assert "awg-priv" in text
+    assert "awg-pub" in text
