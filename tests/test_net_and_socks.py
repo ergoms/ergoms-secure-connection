@@ -50,11 +50,13 @@ def test_normalize_dial_aliases() -> None:
 def test_tun_split_cmds_cover_both_halves() -> None:
     from desktop.tun import install_tun_split_default
 
-    cmds = install_tun_split_default(53, hop="0.0.0.0")
+    cmds = install_tun_split_default(53)
     joined = "\n".join(cmds)
-    assert "route add 0.0.0.0 mask 128.0.0.0 0.0.0.0" in joined
-    assert "route add 128.0.0.0 mask 128.0.0.0 0.0.0.0" in joined
+    assert "route add 0.0.0.0 mask 128.0.0.0 172.19.0.1" in joined
+    assert "route add 128.0.0.0 mask 128.0.0.0 172.19.0.1" in joined
     assert "if 53" in joined
+    onlink = "\n".join(install_tun_split_default(53, hop="0.0.0.0"))
+    assert "route add 0.0.0.0 mask 128.0.0.0 0.0.0.0" in onlink
 
 
 def test_win_kill_switch_blackhole_is_onlink_loopback() -> None:
@@ -83,8 +85,9 @@ def test_underlay_ifaces_skips_loopback() -> None:
 
     rows = underlay_ifaces()
     assert isinstance(rows, list)
-    for idx, name in rows:
+    for idx, metric, name in rows:
         assert idx > 0
+        assert metric > 0
         assert "loopback" not in name.lower()
 
 
