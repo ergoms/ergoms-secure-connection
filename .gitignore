@@ -43,6 +43,7 @@ __pycache__/
 # Build leftovers
 dist/
 build/
+artifacts/
 
 # Optional local binaries
 tools/*

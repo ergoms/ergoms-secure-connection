@@ -33,12 +33,12 @@ find_poetry() {
 }
 
 install_poetry() {
-  echo "Poetry не найден — ставлю…"
+  echo "Poetry не найден — ставлю…" >&2
   local py installer
   py="$(find_system_python)"
   installer="${TMPDIR:-/tmp}/install-poetry.py"
   "$py" -c "import urllib.request; urllib.request.urlretrieve('https://install.python-poetry.org', r'''$installer''')"
-  "$py" "$installer"
+  "$py" "$installer" >&2
   find_poetry
 }
 

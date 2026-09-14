@@ -1,10 +1,11 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
+    inputs:
+      note:
+        description: "Manual only — local release is .vscode/release.ps1"
+        required: false
 
 permissions:
   contents: write

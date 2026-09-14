@@ -226,11 +226,12 @@ ERGOMS SECURE CONNECTION/
 
 Linux: `./.vscode/setup.sh build` → `dist/ERGOMS SECURE CONNECTION/ERGOMS SECURE CONNECTION`.
 
-### GitHub Release
+### GitHub Release (локально)
 
-Тег `vX.Y.Z` (должен совпадать с `__version__` в `desktop/__init__.py`) запускает GitHub Actions: Windows Setup + zip и Linux tar.gz публикуются в [GitHub Releases](https://github.com/DohaoSTR/ergoms-secure-connection/releases). Папка `dist/` в git не коммитится.
+Сборка без GitHub Actions: Windows на хосте, Linux в WSL, файлы в `artifacts/` и на [GitHub Releases](https://github.com/DohaoSTR/ergoms-secure-connection/releases). `dist/` и `artifacts/` в git не коммитятся.
 
-```bash
-git tag v1.2.1
-git push origin v1.2.1
+```powershell
+.\.vscode\release.ps1
 ```
+
+Только Windows: `-Target windows`. Только Linux (WSL Ubuntu-24.04): `-Target linux`. Только загрузка уже собранных файлов: `-Target publish`.
