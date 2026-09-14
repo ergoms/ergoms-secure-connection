@@ -138,7 +138,7 @@ chmod +x "ERGOMS SECURE CONNECTION"
 | `docker_proxy` | проксировать Docker Desktop / CLI через VPN (в корпоративном пресете вкл., иначе выкл.) |
 | `corporate_proxy` | корпоративный Squid |
 | `tun.sing_box_path` | пусто = авто `tools/sing-box` |
-| `reverse_ssh.enabled` | проброс sshd клиента на `127.0.0.1:listen_port` VPS |
+| `reverse_ssh.enabled` | проброс sshd клиента на `127.0.0.1:listen_port` VPS (по умолчанию выкл.) |
 
 Старый `.env` при `init` один раз мигрируется в `config.json`.
 
@@ -178,7 +178,7 @@ chmod +x "ERGOMS SECURE CONNECTION"
 
 ## SSH на клиент без публичного IP
 
-По умолчанию включено (дом и офис): пока VPN поднят, с VPS можно зайти на этот ПК. Офисный Squid рвёт прямые соединения на VPS `:22`, поэтому клиент открывает обратный туннель **через SOCKS** (Hy2 или Reality).
+По умолчанию выключено. Если включить, пока VPN поднят, с VPS можно зайти на этот ПК. Офисный Squid рвёт прямые соединения на VPS `:22`, поэтому клиент открывает обратный туннель **через SOCKS** (Hy2 или Reality).
 
 На клиенте нужны OpenSSH Server и ключ в `creds/` (тот же, что в `authorized_keys` на VPS). В настройках: **SSH с сервера**.
 

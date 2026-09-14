@@ -72,7 +72,7 @@
     }
   },
   "reverse_ssh": {
-    "enabled": true,
+    "enabled": false,
     "vps_user": "root",
     "vps_port": 22,
     "listen_port": 2222,

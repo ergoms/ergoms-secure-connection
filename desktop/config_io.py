@@ -462,7 +462,7 @@ def migrate_env_into_config(cfg: dict[str, Any], env: dict[str, str]) -> dict[st
     if "REVERSE_SSH" in env:
         rev = out.setdefault("reverse_ssh", {})
         if isinstance(rev, dict):
-            rev["enabled"] = _as_bool(env["REVERSE_SSH"], True)
+            rev["enabled"] = _as_bool(env["REVERSE_SSH"], False)
     return out
 
 

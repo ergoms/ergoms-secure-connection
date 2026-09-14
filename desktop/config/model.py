@@ -271,7 +271,7 @@ class TransportConfig:
 
 @dataclass
 class ReverseSshConfig:
-    enabled: bool = True
+    enabled: bool = False
     vps_user: str = "root"
     vps_port: int = REVERSE_SSH_VPS_PORT
     listen_port: int = REVERSE_SSH_LISTEN
@@ -279,7 +279,7 @@ class ReverseSshConfig:
     identity_file: str = ""
 
     def __post_init__(self) -> None:
-        self.enabled = as_bool(self.enabled, True)
+        self.enabled = as_bool(self.enabled, False)
         self.vps_user = str(self.vps_user or "root").strip() or "root"
         self.vps_port = clamp_port(self.vps_port, REVERSE_SSH_VPS_PORT)
         self.listen_port = clamp_port(self.listen_port, REVERSE_SSH_LISTEN)
@@ -290,7 +290,7 @@ class ReverseSshConfig:
     def from_dict(cls, raw: Any) -> ReverseSshConfig:
         data = _section(raw)
         return cls(
-            enabled=as_bool(data.get("enabled"), True),
+            enabled=as_bool(data.get("enabled"), False),
             vps_user=str(data.get("vps_user") or "root"),
             vps_port=as_int(data.get("vps_port"), REVERSE_SSH_VPS_PORT),
             listen_port=as_int(data.get("listen_port"), REVERSE_SSH_LISTEN),

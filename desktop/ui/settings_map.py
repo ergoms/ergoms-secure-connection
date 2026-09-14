@@ -131,7 +131,7 @@ def cfg_to_settings(cfg: dict[str, Any]) -> dict[str, Any]:
                 and str(awg.get("peer_public_key") or "").strip()
             ),
             "awgSummary": "",
-            "reverseSsh": bool(rev.get("enabled", True)),
+            "reverseSsh": bool(rev.get("enabled", False)),
             "reverseSshListen": str(rev.get("listen_port") or 2222),
             "reverseSshVpsUser": str(rev.get("vps_user") or "root"),
             "reverseSshVpsPort": str(rev.get("vps_port") or 22),
