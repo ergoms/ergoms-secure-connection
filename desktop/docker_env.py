@@ -12,12 +12,9 @@ from pathlib import Path
 from typing import Callable
 
 from desktop import procutil
+from desktop.logutil import noop
 
 LogFn = Callable[[str], None]
-
-
-def _noop(msg: str) -> None:
-    pass
 
 
 # Common registries / CDNs that fail when container DNS is broken.
@@ -92,7 +89,7 @@ def _docker_exe() -> str | None:
 
 
 def detect_docker_host_ip(
-    *, log: LogFn = _noop, timeout: float = _DOCKER_PROBE_TIMEOUT
+    *, log: LogFn = noop, timeout: float = _DOCKER_PROBE_TIMEOUT
 ) -> str | None:
     """IPv4 that containers can use to reach the host (Docker Desktop host-gateway).
 
@@ -185,7 +182,7 @@ def write_docker_env(
     *,
     dns_hosts: list[str] | None = None,
     active: bool = True,
-    log: LogFn = _noop,
+    log: LogFn = noop,
     run_ps1: Path | None = None,
     run_sh: Path | None = None,
 ) -> None:
@@ -407,7 +404,7 @@ def clear_docker_env(
     hosts_path: Path,
     *,
     http_port: int = 1088,
-    log: LogFn = _noop,
+    log: LogFn = noop,
     run_ps1: Path | None = None,
     run_sh: Path | None = None,
 ) -> None:
@@ -423,7 +420,7 @@ def clear_docker_env(
     )
 
 
-def docker_dns_probe(*, log: LogFn = _noop, timeout: float = 60.0) -> int:
+def docker_dns_probe(*, log: LogFn = noop, timeout: float = 60.0) -> int:
     """Return 0 if a bridge container can resolve pypi.org (needs TUN hijack)."""
     docker = _docker_exe()
     if not docker:
@@ -465,7 +462,7 @@ def docker_dns_probe(*, log: LogFn = _noop, timeout: float = 60.0) -> int:
 def docker_smoke_test(
     http_port: int,
     *,
-    log: LogFn = _noop,
+    log: LogFn = noop,
     proxy_ip: str | None = None,
 ) -> int:
     """Return 0 if a container can HTTPS via the host bridge (and report DNS)."""

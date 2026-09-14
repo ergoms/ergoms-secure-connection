@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 import os
-import socket
 import ssl
-import struct
 import threading
 import time
 from datetime import datetime
-from typing import Callable
+from typing import Any, Callable, Protocol
 
-from desktop.client import OpsClient, _port_open
 from desktop.config_io import (
     get_local_socks_port,
     get_reverse_ssh_enabled,
@@ -21,10 +18,29 @@ from desktop.config_io import (
     get_watchdog_interval,
     get_watchdog_max_retries,
 )
+from desktop.logutil import noop
+from lib.netutil import port_open
+from lib.socks5 import connect as socks5_connect
 
 LogFn = Callable[[str], None]
 NotifyFn = Callable[[str, str], None]
 SkipFn = Callable[[], bool]
+
+
+class WatchHost(Protocol):
+    def reload_env(self) -> None: ...
+    def config(self) -> dict[str, Any]: ...
+    def enable(self, *, spawn_watchdog: bool = True) -> None: ...
+    def enable_tun(self, *, persist: bool = True) -> None: ...
+    def stop_singbox_mode(self) -> None: ...
+    def _ensure_kill_switch(self, cfg: dict[str, Any]) -> list[str]: ...
+    def _maybe_start_reverse_ssh(self, cfg: dict[str, Any] | None = None) -> None: ...
+
+    log: Callable[[str], None]
+    paths: Any
+    singbox: Any
+    tun: Any
+    reverse_ssh: Any
 
 # Public IP:443 — no DNS needed; not private (SSRF blocklist).
 _PROBE_HOST = "1.1.1.1"
@@ -34,11 +50,7 @@ _PROBE_TIMEOUT = 6.0
 _PROBE_FAILS_BEFORE_RECONNECT = 2
 
 
-def _noop(_msg: str) -> None:
-    pass
-
-
-def socks_port_from_client(client: OpsClient) -> int:
+def socks_port_from_client(client: WatchHost) -> int:
     try:
         return get_local_socks_port(client.config())
     except Exception:  # noqa: BLE001
@@ -57,45 +69,24 @@ def socks_probe(
     Detects zombie tunnels: :1080 still accepts TCP but VLESS/Squid no longer
     forwards (the usual cause of TUN blackholing the whole OS).
     """
-    s: socket.socket | None = None
+    s = None
     try:
-        s = socket.create_connection(("127.0.0.1", socks_port), timeout=timeout)
-        s.settimeout(timeout)
-        s.sendall(b"\x05\x01\x00")
-        resp = s.recv(2)
-        if len(resp) != 2 or resp[0] != 5 or resp[1] != 0:
-            return f"SOCKS5 greeting failed: {resp!r}"
-        try:
-            ip_bytes = socket.inet_aton(host)
-            req = b"\x05\x01\x00\x01" + ip_bytes + struct.pack("!H", port)
-        except OSError:
-            host_b = host.encode("ascii")
-            req = (
-                b"\x05\x01\x00\x03"
-                + bytes([len(host_b)])
-                + host_b
-                + struct.pack("!H", port)
-            )
-        s.sendall(req)
-        hdr = s.recv(4)
-        if len(hdr) != 4:
-            return "SOCKS5 CONNECT truncated"
-        if hdr[0] != 5 or hdr[1] != 0:
-            return f"SOCKS5 CONNECT rejected: rep={hdr[1]}"
-        atyp = hdr[3]
-        if atyp == 1:
-            s.recv(4 + 2)
-        elif atyp == 3:
-            ln = s.recv(1)
-            if not ln:
-                return "SOCKS5 CONNECT bnd truncated"
-            s.recv(ln[0] + 2)
-        elif atyp == 4:
-            s.recv(16 + 2)
-        else:
-            return f"SOCKS5 bad atyp={atyp}"
+        s = socks5_connect(
+            "127.0.0.1",
+            socks_port,
+            host,
+            port,
+            timeout=timeout,
+            prefer_ipv4_atyp=True,
+            encoding="ascii",
+        )
         return None
     except OSError as exc:
+        msg = str(exc)
+        if msg.startswith("SOCKS5"):
+            if "bind truncated" in msg:
+                return "SOCKS5 CONNECT bnd truncated"
+            return msg
         return f"SOCKS probe: {exc}"
     finally:
         if s is not None:
@@ -115,43 +106,17 @@ def socks_https_probe(
     path: str = "/cdn-cgi/trace",
 ) -> str | None:
     """CONNECT + TLS + HTTP GET. CONNECT-only can pass while sites stay dead."""
-    s: socket.socket | None = None
+    s = None
     try:
-        s = socket.create_connection(("127.0.0.1", socks_port), timeout=timeout)
-        s.settimeout(timeout)
-        s.sendall(b"\x05\x01\x00")
-        resp = s.recv(2)
-        if len(resp) != 2 or resp[0] != 5 or resp[1] != 0:
-            return f"SOCKS5 greeting failed: {resp!r}"
-        try:
-            ip_bytes = socket.inet_aton(host)
-            req = b"\x05\x01\x00\x01" + ip_bytes + struct.pack("!H", port)
-        except OSError:
-            host_b = host.encode("ascii")
-            req = (
-                b"\x05\x01\x00\x03"
-                + bytes([len(host_b)])
-                + host_b
-                + struct.pack("!H", port)
-            )
-        s.sendall(req)
-        hdr = s.recv(4)
-        if len(hdr) != 4:
-            return "SOCKS5 CONNECT truncated"
-        if hdr[0] != 5 or hdr[1] != 0:
-            return f"SOCKS5 CONNECT rejected: rep={hdr[1]}"
-        atyp = hdr[3]
-        if atyp == 1:
-            s.recv(4 + 2)
-        elif atyp == 3:
-            ln = s.recv(1)
-            if not ln:
-                return "SOCKS5 CONNECT bnd truncated"
-            s.recv(ln[0] + 2)
-        elif atyp == 4:
-            s.recv(16 + 2)
-        else:
-            return f"SOCKS5 bad atyp={atyp}"
+        s = socks5_connect(
+            "127.0.0.1",
+            socks_port,
+            host,
+            port,
+            timeout=timeout,
+            prefer_ipv4_atyp=True,
+            encoding="ascii",
+        )
         ctx = ssl.create_default_context()
         tls = ctx.wrap_socket(s, server_hostname=sni)
         s = None
@@ -177,6 +142,11 @@ def socks_https_probe(
             return f"HTTPS {status}"
         return None
     except OSError as exc:
+        msg = str(exc)
+        if msg.startswith("SOCKS5"):
+            if "bind truncated" in msg:
+                return "SOCKS5 CONNECT bnd truncated"
+            return msg
         return f"HTTPS probe: {exc}"
     finally:
         if s is not None:
@@ -186,7 +156,7 @@ def socks_https_probe(
                 pass
 
 
-def health_problem(client: OpsClient, *, probe: bool = False) -> str | None:
+def health_problem(client: WatchHost, *, probe: bool = False) -> str | None:
     """Return a short reason if the tunnel looks broken, else None.
 
     Idle (nothing expected) is not a problem — caller decides via desired_on.
@@ -194,7 +164,7 @@ def health_problem(client: OpsClient, *, probe: bool = False) -> str | None:
     """
     client.reload_env()
     socks = socks_port_from_client(client)
-    socks_up = _port_open("127.0.0.1", socks, timeout=0.35)
+    socks_up = port_open("127.0.0.1", socks, timeout=0.35)
 
     singbox_alive = False
     try:
@@ -228,7 +198,7 @@ def health_problem(client: OpsClient, *, probe: bool = False) -> str | None:
     return None
 
 
-def infer_desired_on(client: OpsClient) -> bool:
+def infer_desired_on(client: WatchHost) -> bool:
     """True if leftover state suggests the user wanted the tunnel up."""
     if client.paths.state_path.is_file():
         return True
@@ -247,9 +217,9 @@ class TunnelWatchdog:
 
     def __init__(
         self,
-        client: OpsClient,
+        client: WatchHost,
         *,
-        log: LogFn = _noop,
+        log: LogFn = noop,
         on_notify: NotifyFn | None = None,
         should_skip: SkipFn | None = None,
     ) -> None:
@@ -456,7 +426,7 @@ class TunnelWatchdog:
                 break
 
 
-def _daemon_logger(client: OpsClient) -> LogFn:
+def _daemon_logger(client: WatchHost) -> LogFn:
     log_path = client.paths.logs_dir / "watchdog.log"
     client.paths.logs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -473,7 +443,7 @@ def _daemon_logger(client: OpsClient) -> LogFn:
 
 
 def run_watch_forever(
-    client: OpsClient,
+    client: WatchHost,
     *,
     log: LogFn | None = None,
     daemon: bool = False,

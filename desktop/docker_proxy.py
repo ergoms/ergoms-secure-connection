@@ -16,6 +16,8 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
+from desktop.logutil import noop
+
 LogFn = Callable[[str], None]
 
 _PROXY_STORE_KEYS = (
@@ -28,10 +30,6 @@ _PROXY_STORE_KEYS = (
     "ContainersOverrideProxyHTTPS",
     "ContainersOverrideProxyExclude",
 )
-
-
-def _noop(msg: str) -> None:
-    pass
 
 
 def _settings_store_path() -> Path:
@@ -108,7 +106,7 @@ def enable_docker_desktop_proxy(
     http_port: int,
     backup_path: Path,
     *,
-    log: LogFn = _noop,
+    log: LogFn = noop,
 ) -> None:
     """Switch Docker Desktop + ~/.docker/config.json to the local HTTP bridge."""
     if sys.platform != "win32":
@@ -171,7 +169,7 @@ def disable_docker_desktop_proxy(
     backup_path: Path,
     *,
     http_port: int = 1088,
-    log: LogFn = _noop,
+    log: LogFn = noop,
 ) -> None:
     """Restore Docker Desktop / CLI proxy from the on-enable backup."""
     if sys.platform != "win32":

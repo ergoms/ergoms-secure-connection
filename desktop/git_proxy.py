@@ -10,14 +10,11 @@ from pathlib import Path
 from typing import Callable
 
 from desktop import procutil
+from desktop.logutil import noop
 
 LogFn = Callable[[str], None]
 
 _BRIDGE_PORTS = (1088, 1080, 8877)
-
-
-def _noop(msg: str) -> None:
-    pass
 
 
 def _git_exe() -> str:
@@ -99,7 +96,7 @@ def _is_local_bridge_proxy(value: str) -> bool:
     return any(re.search(rf":{port}(?:\D|$)", text) for port in _BRIDGE_PORTS)
 
 
-def clear_instead_of(log: LogFn = _noop) -> None:
+def clear_instead_of(log: LogFn = noop) -> None:
     r = _git("config", "--global", "--get-regexp", r"url\..*\.insteadof")
     if r.returncode != 0 or not r.stdout:
         return
@@ -240,7 +237,7 @@ def _keys_to_clear(pairs: list[tuple[str, str]], *, keep_restored_proxy: bool) -
 
 def set_git_http_proxy(
     proxy: str,
-    log: LogFn = _noop,
+    log: LogFn = noop,
     *,
     backup_path: Path | None = None,
 ) -> None:
@@ -256,7 +253,7 @@ def set_git_http_proxy(
 def clear_git_proxy(
     cli_env: Path,
     cli_ps1: Path,
-    log: LogFn = _noop,
+    log: LogFn = noop,
     *,
     backup_path: Path | None = None,
 ) -> None:
@@ -279,7 +276,7 @@ def clear_git_proxy(
 def clear_stale_git_proxy(
     cli_env: Path,
     cli_ps1: Path,
-    log: LogFn = _noop,
+    log: LogFn = noop,
     *,
     backup_path: Path | None = None,
 ) -> bool:

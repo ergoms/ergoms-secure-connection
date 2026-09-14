@@ -7,11 +7,9 @@ import sys
 from pathlib import Path
 from typing import Any, Callable
 
+from desktop.logutil import noop
+
 LogFn = Callable[[str], None]
-
-
-def _noop(msg: str) -> None:
-    pass
 
 
 def _is_windows() -> bool:
@@ -107,7 +105,7 @@ def _is_our_pac(url: str) -> bool:
     return "proxy.pac" in text or ":1089" in text
 
 
-def restore_win_proxy(backup_path: Path, log: LogFn = _noop) -> None:
+def restore_win_proxy(backup_path: Path, log: LogFn = noop) -> None:
     if not _is_windows():
         return
     import winreg
@@ -145,7 +143,7 @@ def enable_browser_pac(
     scope: str,
     bypass_count: int,
     backup_path: Path,
-    log: LogFn = _noop,
+    log: LogFn = noop,
     *,
     pac_url: str | None = None,
 ) -> None:
@@ -166,5 +164,5 @@ def enable_browser_pac(
     log("Restart Edge/Chrome tabs if sites still look cached/blocked")
 
 
-def disable_browser_proxy(backup_path: Path, log: LogFn = _noop) -> None:
+def disable_browser_proxy(backup_path: Path, log: LogFn = noop) -> None:
     restore_win_proxy(backup_path, log=log)

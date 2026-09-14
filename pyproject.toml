@@ -9,9 +9,14 @@ dependencies = []
 [project.optional-dependencies]
 gui = ["PySide6_Essentials>=6.6"]
 build = ["pyinstaller>=6.3"]
+test = ["pytest>=8.0"]
 
 [project.scripts]
 ergoms-secure-connection = "desktop.__main__:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
 
 [tool.poetry]
 packages = [

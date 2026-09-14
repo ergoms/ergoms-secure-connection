@@ -21,18 +21,11 @@ from desktop.branding import ENV_RESUME, env
 from desktop.client import OpsClient
 from desktop.config_crypto import MAGIC, decrypt_config
 from desktop.config_io import (
-    AWG_DEFAULT_ADDRESS,
-    AWG_DEFAULT_MTU,
-    AWG_DEFAULT_PORT,
     CORPORATE_BYPASS_PRESET,
     CORPORATE_PROXY_PRESET,
-    HY2_DEFAULT_SNI,
-    REALITY_DEFAULT_SNI,
     STANDARD_BYPASS_PRESET,
     apply_amnezia_to_config,
     apply_config,
-    apply_corporate_profile,
-    apply_standard_profile,
     config_is_ready,
     default_config_template,
     ensure_config_defaults,
@@ -41,12 +34,15 @@ from desktop.config_io import (
     load_config,
     looks_like_wg_conf,
     merge_imported_config,
-    normalize_dial,
-    normalize_hy2_sni,
     parse_amnezia_conf,
     save_config,
 )
 from desktop.paths import Paths, gui_command
+from desktop.ui.settings_map import (
+    apply_settings_to_cfg,
+    cfg_to_settings,
+    settings_defaults,
+)
 
 LogFn = Callable[[str], None]
 
@@ -158,7 +154,7 @@ class GuiBridge(QObject):
         self._status_pending_force = False
 
         self._settings = QQmlPropertyMap(self)
-        for key, value in _settings_defaults().items():
+        for key, value in settings_defaults().items():
             self._settings.insert(key, value)
 
         self._bgFinished.connect(self._on_bg_finished)
@@ -426,69 +422,11 @@ class GuiBridge(QObject):
             self._sync_config_ready()
             return
         cfg = load_config(self.paths.config_path)
-        server = cfg.get("server") or {}
-        tun = cfg.get("tun") or {}
-        tr = cfg.get("transport") or {}
-        bypass = cfg.get("proxy_bypass") or []
         self._set_corporate(infer_corporate(cfg))
         self._mode_label = "Корпоративный" if self._corporate else "VPN"
         self.modeLabelChanged.emit()
-        self._settings.insert("socksScope", str(cfg.get("socks_scope") or "full"))
-        self._settings.insert("tunAuto", bool(tun.get("enabled")))
-        self._settings.insert("killSwitch", bool(cfg.get("kill_switch", True)))
-        self._settings.insert("gitProxy", bool(cfg.get("git_proxy")))
-        self._settings.insert("dockerProxy", bool(cfg.get("docker_proxy")))
-        self._settings.insert("httpBridgePort", str(cfg.get("http_bridge_port") or 1088))
-        self._settings.insert(
-            "useProxy",
-            bool(cfg.get("use_proxy")) or infer_corporate(cfg),
-        )
-        self._settings.insert("corporateProxy", str(cfg.get("corporate_proxy") or ""))
-        self._settings.insert("serverHost", str(server.get("host") or ""))
-        self._settings.insert("serverPort", str(server.get("port") or 443))
-        self._settings.insert("serverSocks", str(server.get("local_socks_port") or 1080))
-        self._settings.insert("proxyBypass", ", ".join(str(x) for x in bypass))
-        self._settings.insert(
-            "proxyBypassVia", str(cfg.get("proxy_bypass_via") or "direct")
-        )
-        self._settings.insert("trUuid", str(tr.get("uuid") or ""))
-        self._settings.insert("trPublicKey", str(tr.get("public_key") or ""))
-        self._settings.insert("trShortId", str(tr.get("short_id") or ""))
-        self._settings.insert(
-            "trServerName", str(tr.get("server_name") or REALITY_DEFAULT_SNI)
-        )
-        self._settings.insert("trPort", str(tr.get("port") or 443))
-        hy = tr.get("hysteria2") if isinstance(tr.get("hysteria2"), dict) else {}
-        self._settings.insert("trDial", normalize_dial(tr.get("dial")))
-        self._settings.insert("hy2Password", str(hy.get("password") or ""))
-        self._settings.insert("hy2Port", str(hy.get("port") or 8443))
-        self._settings.insert(
-            "hy2ServerName", normalize_hy2_sni(hy.get("server_name"))
-        )
-        self._settings.insert("hy2Obfs", str(hy.get("obfs_password") or ""))
-        awg = tr.get("amneziawg") if isinstance(tr.get("amneziawg"), dict) else {}
-        self._settings.insert("awgPrivateKey", str(awg.get("private_key") or ""))
-        self._settings.insert("awgPeerPublicKey", str(awg.get("peer_public_key") or ""))
-        self._settings.insert("awgPresharedKey", str(awg.get("pre_shared_key") or ""))
-        self._settings.insert(
-            "awgAddress", str(awg.get("address") or AWG_DEFAULT_ADDRESS)
-        )
-        self._settings.insert("awgPort", str(awg.get("port") or AWG_DEFAULT_PORT))
-        self._settings.insert("awgMtu", str(awg.get("mtu") or AWG_DEFAULT_MTU))
-        self._settings.insert("awgJc", str(awg.get("jc") or 0))
-        self._settings.insert("awgJmin", str(awg.get("jmin") or 0))
-        self._settings.insert("awgJmax", str(awg.get("jmax") or 0))
-        self._settings.insert("awgS1", str(awg.get("s1") or 0))
-        self._settings.insert("awgS2", str(awg.get("s2") or 0))
-        self._settings.insert("awgH1", str(awg.get("h1") or ""))
-        self._settings.insert("awgH2", str(awg.get("h2") or ""))
-        self._settings.insert("awgH3", str(awg.get("h3") or ""))
-        self._settings.insert("awgH4", str(awg.get("h4") or ""))
-        rev = cfg.get("reverse_ssh") or {}
-        self._settings.insert("reverseSsh", bool(rev.get("enabled", True)))
-        self._settings.insert("reverseSshListen", str(rev.get("listen_port") or 2222))
-        self._settings.insert("reverseSshVpsUser", str(rev.get("vps_user") or "root"))
-        self._settings.insert("reverseSshVpsPort", str(rev.get("vps_port") or 22))
+        for key, value in cfg_to_settings(cfg).items():
+            self._settings.insert(key, value)
         self._sync_config_ready()
 
     def _set_corporate(self, on: bool) -> None:
@@ -653,116 +591,8 @@ class GuiBridge(QObject):
                 cfg = load_config(self.paths.config_path)
             else:
                 cfg = default_config_template()
-            s = self._settings
-            corporate = bool(self._corporate)
-            cfg["corporate"] = corporate
-            cfg["http_bridge_port"] = int(
-                str(s.value("httpBridgePort") or "1088").strip() or "1088"
-            )
-            if corporate:
-                apply_corporate_profile(cfg)
-                cfg["socks_scope"] = (
-                    str(s.value("socksScope") or "github").strip() or "github"
-                )
-                cfg["use_proxy"] = True
-                cfg["corporate_proxy"] = str(s.value("corporateProxy") or "").strip()
-            else:
-                apply_standard_profile(cfg)
-                cfg["use_proxy"] = bool(s.value("useProxy"))
-                cfg["corporate_proxy"] = (
-                    str(s.value("corporateProxy") or "").strip()
-                    if cfg["use_proxy"]
-                    else ""
-                )
-            cfg.pop("ssh", None)
-            cfg["server"] = {
-                "host": str(s.value("serverHost") or "").strip(),
-                "port": int(str(s.value("serverPort") or "443").strip() or "443"),
-                "local_socks_port": int(
-                    str(s.value("serverSocks") or "1080").strip() or "1080"
-                ),
-            }
-            cfg.pop("worker_base_url", None)
-            if corporate:
-                raw_bypass = str(s.value("proxyBypass") or "").strip()
-                cfg["proxy_bypass"] = [
-                    x.strip() for x in raw_bypass.split(",") if x.strip()
-                ]
-                cfg["proxy_bypass_via"] = "direct"
-            cfg["kill_switch"] = bool(s.value("killSwitch"))
-            cfg["git_proxy"] = bool(s.value("gitProxy"))
-            cfg["docker_proxy"] = bool(s.value("dockerProxy"))
-            cfg.setdefault("tun", {})
-            cfg["tun"]["enabled"] = bool(s.value("tunAuto")) or cfg["kill_switch"]
-            cfg["tun"]["elevate"] = True
-            cfg["tun"]["sing_box_path"] = ""
-            cfg.setdefault("transport", {})
-            cfg["transport"]["type"] = "vless-reality"
-            if corporate:
-                cfg["transport"]["dial"] = "vless-reality"
-            else:
-                cfg["transport"]["dial"] = normalize_dial(s.value("trDial"))
-            cfg["transport"]["uuid"] = str(s.value("trUuid") or "").strip()
-            cfg["transport"]["public_key"] = str(s.value("trPublicKey") or "").strip()
-            cfg["transport"]["short_id"] = str(s.value("trShortId") or "").strip()
-            cfg["transport"]["server_name"] = (
-                str(s.value("trServerName") or "").strip() or REALITY_DEFAULT_SNI
-            )
-            cfg["transport"]["port"] = int(
-                str(s.value("serverPort") or s.value("trPort") or "443").strip() or "443"
-            )
-            hy = cfg["transport"].setdefault("hysteria2", {})
-            if not isinstance(hy, dict):
-                hy = {}
-                cfg["transport"]["hysteria2"] = hy
-            hy_pw = str(s.value("hy2Password") or "").strip()
-            if hy_pw:
-                hy["password"] = hy_pw
-            hy["port"] = int(str(s.value("hy2Port") or "8443").strip() or "8443")
-            hy["server_name"] = normalize_hy2_sni(s.value("hy2ServerName"))
-            hy_obfs = str(s.value("hy2Obfs") or "").strip()
-            if hy_obfs:
-                hy["obfs_password"] = hy_obfs
-            elif "obfs_password" not in hy:
-                hy["obfs_password"] = str(hy.get("obfs_password") or "")
-            hy["insecure"] = bool(hy.get("insecure", True))
-            awg = cfg["transport"].setdefault("amneziawg", {})
-            if not isinstance(awg, dict):
-                awg = {}
-                cfg["transport"]["amneziawg"] = awg
-            awg["private_key"] = str(s.value("awgPrivateKey") or "").strip()
-            awg["peer_public_key"] = str(s.value("awgPeerPublicKey") or "").strip()
-            awg["pre_shared_key"] = str(s.value("awgPresharedKey") or "").strip()
-            awg["address"] = (
-                str(s.value("awgAddress") or "").strip() or AWG_DEFAULT_ADDRESS
-            )
-            awg["port"] = int(
-                str(s.value("awgPort") or str(AWG_DEFAULT_PORT)).strip()
-                or str(AWG_DEFAULT_PORT)
-            )
-            awg["mtu"] = int(
-                str(s.value("awgMtu") or str(AWG_DEFAULT_MTU)).strip()
-                or str(AWG_DEFAULT_MTU)
-            )
-            awg["jc"] = int(str(s.value("awgJc") or "0").strip() or "0")
-            awg["jmin"] = int(str(s.value("awgJmin") or "0").strip() or "0")
-            awg["jmax"] = int(str(s.value("awgJmax") or "0").strip() or "0")
-            awg["s1"] = int(str(s.value("awgS1") or "0").strip() or "0")
-            awg["s2"] = int(str(s.value("awgS2") or "0").strip() or "0")
-            awg["h1"] = str(s.value("awgH1") or "").strip()
-            awg["h2"] = str(s.value("awgH2") or "").strip()
-            awg["h3"] = str(s.value("awgH3") or "").strip()
-            awg["h4"] = str(s.value("awgH4") or "").strip()
-            cfg.setdefault("reverse_ssh", {})
-            cfg["reverse_ssh"]["enabled"] = bool(s.value("reverseSsh"))
-            cfg["reverse_ssh"]["listen_port"] = int(
-                str(s.value("reverseSshListen") or "2222").strip() or "2222"
-            )
-            cfg["reverse_ssh"]["vps_user"] = (
-                str(s.value("reverseSshVpsUser") or "").strip() or "root"
-            )
-            cfg["reverse_ssh"]["vps_port"] = int(
-                str(s.value("reverseSshVpsPort") or "22").strip() or "22"
+            apply_settings_to_cfg(
+                cfg, self._settings.value, corporate=bool(self._corporate)
             )
             save_config(self.paths.config_path, cfg)
             apply_config(self.paths.config_path, force=True)
@@ -1138,54 +968,6 @@ class GuiBridge(QObject):
                 self._finish_await_status()
             elif self._busy_intent not in ("on", "off"):
                 self._finish_await_status()
-
-
-def _settings_defaults() -> dict[str, Any]:
-    return {
-        "corporate": False,
-        "useProxy": False,
-        "socksScope": "full",
-        "tunAuto": True,
-        "killSwitch": True,
-        "gitProxy": False,
-        "dockerProxy": False,
-        "httpBridgePort": "1088",
-        "corporateProxy": "",
-        "serverHost": "",
-        "serverPort": "443",
-        "serverSocks": "1080",
-        "proxyBypass": "",
-        "proxyBypassVia": "direct",
-        "trUuid": "",
-        "trPublicKey": "",
-        "trShortId": "",
-        "trServerName": "www.cloudflare.com",
-        "trPort": "443",
-        "trDial": "hysteria2",
-        "hy2Password": "",
-        "hy2Port": "8443",
-        "hy2ServerName": HY2_DEFAULT_SNI,
-        "hy2Obfs": "",
-        "awgPrivateKey": "",
-        "awgPeerPublicKey": "",
-        "awgPresharedKey": "",
-        "awgAddress": AWG_DEFAULT_ADDRESS,
-        "awgPort": str(AWG_DEFAULT_PORT),
-        "awgMtu": str(AWG_DEFAULT_MTU),
-        "awgJc": "0",
-        "awgJmin": "0",
-        "awgJmax": "0",
-        "awgS1": "0",
-        "awgS2": "0",
-        "awgH1": "",
-        "awgH2": "",
-        "awgH3": "",
-        "awgH4": "",
-        "reverseSsh": True,
-        "reverseSshListen": "2222",
-        "reverseSshVpsUser": "root",
-        "reverseSshVpsPort": "22",
-    }
 
 
 def qml_dir() -> Path:

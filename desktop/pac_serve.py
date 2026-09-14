@@ -17,13 +17,47 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
+from desktop.logutil import noop  # noqa: E402
 from lib.http_via_socks import build_pac  # noqa: E402
 
 LogFn = Callable[[str], None]
 
 
-def _noop(msg: str) -> None:
-    pass
+def serve_pac_response(client: socket.socket, pac: bytes) -> None:
+    try:
+        client.settimeout(10)
+        buf = b""
+        while b"\r\n\r\n" not in buf and len(buf) < 8192:
+            chunk = client.recv(4096)
+            if not chunk:
+                return
+            buf += chunk
+        head = buf.split(b"\r\n\r\n", 1)[0]
+        line = head.split(b"\r\n", 1)[0].decode("ascii", "replace")
+        parts = line.split()
+        path = parts[1].split("?", 1)[0] if len(parts) >= 2 else "/"
+        if len(parts) >= 1 and parts[0].upper() == "GET" and path in (
+            "/proxy.pac",
+            "/pac",
+            "/",
+        ):
+            client.sendall(
+                b"HTTP/1.1 200 OK\r\n"
+                b"Content-Type: application/x-ns-proxy-autoconfig\r\n"
+                b"Cache-Control: no-cache\r\n"
+                b"Connection: close\r\n"
+                + f"Content-Length: {len(pac)}\r\n\r\n".encode("ascii")
+                + pac
+            )
+        else:
+            client.sendall(b"HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n")
+    except OSError:
+        pass
+    finally:
+        try:
+            client.close()
+        except OSError:
+            pass
 
 
 class PacServer:
@@ -46,7 +80,7 @@ class PacServer:
         *,
         listen_host: str = "127.0.0.1",
         listen_port: int = 1089,
-        log: LogFn = _noop,
+        log: LogFn = noop,
     ) -> int:
         self.stop()
         if listen_host not in ("127.0.0.1", "::1", "localhost"):
@@ -84,49 +118,15 @@ class PacServer:
                     target=self._handle, args=(client,), daemon=True
                 ).start()
 
-        self._thread = threading.Thread(target=loop, name="ops-pac-serve", daemon=True)
+        self._thread = threading.Thread(target=loop, name="ergoms-pac-serve", daemon=True)
         self._thread.start()
         log(f"PAC server http://127.0.0.1:{listen_port}/proxy.pac")
         return listen_port
 
     def _handle(self, client: socket.socket) -> None:
-        try:
-            client.settimeout(10)
-            buf = b""
-            while b"\r\n\r\n" not in buf and len(buf) < 8192:
-                chunk = client.recv(4096)
-                if not chunk:
-                    return
-                buf += chunk
-            head = buf.split(b"\r\n\r\n", 1)[0]
-            line = head.split(b"\r\n", 1)[0].decode("ascii", "replace")
-            parts = line.split()
-            path = parts[1].split("?", 1)[0] if len(parts) >= 2 else "/"
-            if len(parts) >= 1 and parts[0].upper() == "GET" and path in (
-                "/proxy.pac",
-                "/pac",
-                "/",
-            ):
-                body = self._pac
-                client.sendall(
-                    b"HTTP/1.1 200 OK\r\n"
-                    b"Content-Type: application/x-ns-proxy-autoconfig\r\n"
-                    b"Cache-Control: no-cache\r\n"
-                    b"Connection: close\r\n"
-                    + f"Content-Length: {len(body)}\r\n\r\n".encode("ascii")
-                    + body
-                )
-            else:
-                client.sendall(b"HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n")
-        except OSError:
-            pass
-        finally:
-            try:
-                client.close()
-            except OSError:
-                pass
+        serve_pac_response(client, self._pac)
 
-    def stop(self, log: LogFn = _noop) -> None:
+    def stop(self, log: LogFn = noop) -> None:
         self._stop.set()
         srv = self._srv
         self._srv = None
@@ -189,42 +189,6 @@ def main(argv: list[str] | None = None) -> int:
         flush=True,
     )
 
-    def handle(client: socket.socket) -> None:
-        try:
-            client.settimeout(10)
-            buf = b""
-            while b"\r\n\r\n" not in buf and len(buf) < 8192:
-                chunk = client.recv(4096)
-                if not chunk:
-                    return
-                buf += chunk
-            head = buf.split(b"\r\n\r\n", 1)[0]
-            line = head.split(b"\r\n", 1)[0].decode("ascii", "replace")
-            parts = line.split()
-            path = parts[1].split("?", 1)[0] if len(parts) >= 2 else "/"
-            if len(parts) >= 1 and parts[0].upper() == "GET" and path in (
-                "/proxy.pac",
-                "/pac",
-                "/",
-            ):
-                client.sendall(
-                    b"HTTP/1.1 200 OK\r\n"
-                    b"Content-Type: application/x-ns-proxy-autoconfig\r\n"
-                    b"Cache-Control: no-cache\r\n"
-                    b"Connection: close\r\n"
-                    + f"Content-Length: {len(pac)}\r\n\r\n".encode("ascii")
-                    + pac
-                )
-            else:
-                client.sendall(b"HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n")
-        except OSError:
-            pass
-        finally:
-            try:
-                client.close()
-            except OSError:
-                pass
-
     while True:
         client, _ = srv.accept()
         try:
@@ -238,7 +202,9 @@ def main(argv: list[str] | None = None) -> int:
             except OSError:
                 pass
             continue
-        threading.Thread(target=handle, args=(client,), daemon=True).start()
+        threading.Thread(
+            target=serve_pac_response, args=(client, pac), daemon=True
+        ).start()
 
 
 if __name__ == "__main__":

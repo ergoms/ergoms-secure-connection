@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Callable
 
 from desktop import procutil
+from desktop.logutil import noop
+from desktop.net_host import resolve_host, underlay_gateway
 from desktop.paths import bundle_dir, is_frozen
 
 LogFn = Callable[[str], None]
@@ -29,23 +31,8 @@ AWG_ARCHIVE_SHA256 = {
 }
 
 
-def _noop(msg: str) -> None:
-    pass
-
-
 def _resolve_host(host: str) -> str | None:
-    host = (host or "").strip()
-    if not host:
-        return None
-    try:
-        socket.inet_aton(host)
-        return host
-    except OSError:
-        pass
-    try:
-        return socket.gethostbyname(host)
-    except OSError:
-        return None
+    return resolve_host(host)
 
 
 def underlay_bind_info(dest: str) -> tuple[str, str, int]:
@@ -354,8 +341,6 @@ def gateway_via_dest(dest: str) -> str | None:
     name = detect_bind_interface(dest)
     ips = set(iface_ipv4s(name or ""))
     if not ips:
-        from desktop.kill_switch import underlay_gateway
-
         return underlay_gateway(dest)
     for raw in default_route_lines():
         parts = raw.split()
@@ -364,8 +349,6 @@ def gateway_via_dest(dest: str) -> str | None:
         hop, iface = parts[2], parts[3]
         if iface in ips and hop.lower() not in {"on-link", "onlink", "0.0.0.0"}:
             return hop
-    from desktop.kill_switch import underlay_gateway
-
     return underlay_gateway(dest)
 
 
@@ -617,7 +600,7 @@ RUSTDESK_PORTS = [21114, 21115, 21116, 21117, 21118, 21119]
 class TunManager:
     """Locate/download sing-box and stop leftover TUN processes."""
 
-    def __init__(self, var_dir: Path, tools_dir: Path, logs_dir: Path, log: LogFn = _noop) -> None:
+    def __init__(self, var_dir: Path, tools_dir: Path, logs_dir: Path, log: LogFn = noop) -> None:
         self.var_dir = var_dir
         self.tools_dir = tools_dir
         self.log = log

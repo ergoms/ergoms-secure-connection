@@ -882,14 +882,10 @@ def wait_port_open(
     probe: Callable[[], bool] | None = None,
 ) -> bool:
     """Poll until TCP port accepts connections or timeout expires."""
-    import socket
+    from lib.netutil import port_open
 
     def default_probe() -> bool:
-        try:
-            with socket.create_connection((host, port), timeout=0.2):
-                return True
-        except OSError:
-            return False
+        return port_open(host, port, timeout=0.2)
 
     check = probe or default_probe
     deadline = time.monotonic() + timeout
