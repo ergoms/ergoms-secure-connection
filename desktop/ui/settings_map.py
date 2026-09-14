@@ -12,6 +12,8 @@ from desktop.config_io import (
     REALITY_DEFAULT_SNI,
     apply_corporate_profile,
     apply_standard_profile,
+    assign_filled,
+    filled_str,
     infer_corporate,
     normalize_dial,
     normalize_hy2_sni,
@@ -128,107 +130,130 @@ def cfg_to_settings(cfg: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _as_int(raw: Any, default: int) -> int:
+    try:
+        return int(str(raw or "").strip() or str(default))
+    except ValueError:
+        return default
+
+
+def _set_awg_int(awg: dict[str, Any], key: str, incoming: Any, default: int = 0) -> None:
+    """Keep a nonzero disk value when the form still has 0 / empty."""
+    val = _as_int(incoming, default)
+    cur = awg.get(key)
+    if val or not cur:
+        awg[key] = val
+
+
 def apply_settings_to_cfg(
     cfg: dict[str, Any],
     get: GetFn,
     *,
     corporate: bool,
 ) -> dict[str, Any]:
+    prev_bypass = [str(x).strip() for x in (cfg.get("proxy_bypass") or []) if str(x).strip()]
+    prev_proxy = filled_str(cfg.get("corporate_proxy"))
+    server = cfg.get("server")
+    if not isinstance(server, dict):
+        server = {}
+        cfg["server"] = server
+    prev_host = filled_str(server.get("host"))
+    tun = cfg.get("tun")
+    if not isinstance(tun, dict):
+        tun = {}
+        cfg["tun"] = tun
+    prev_sing_box = filled_str(tun.get("sing_box_path"))
+
     cfg["corporate"] = corporate
-    cfg["http_bridge_port"] = int(
-        str(get("httpBridgePort") or "1088").strip() or "1088"
-    )
+    cfg["http_bridge_port"] = _as_int(get("httpBridgePort"), 1088)
     if corporate:
         apply_corporate_profile(cfg)
         if bool(get("tunAuto") or get("killSwitch")):
             cfg["socks_scope"] = "full"
         else:
-            cfg["socks_scope"] = str(get("socksScope") or "github").strip() or "github"
+            cfg["socks_scope"] = filled_str(get("socksScope")) or "github"
         cfg["use_proxy"] = True
-        cfg["corporate_proxy"] = str(get("corporateProxy") or "").strip()
     else:
         apply_standard_profile(cfg)
         cfg["use_proxy"] = bool(get("useProxy"))
-        cfg["corporate_proxy"] = (
-            str(get("corporateProxy") or "").strip() if cfg["use_proxy"] else ""
-        )
+    assign_filled(cfg, "corporate_proxy", get("corporateProxy"))
+    if not filled_str(cfg.get("corporate_proxy")) and prev_proxy:
+        cfg["corporate_proxy"] = prev_proxy
     cfg.pop("ssh", None)
-    cfg["server"] = {
-        "host": str(get("serverHost") or "").strip(),
-        "port": int(str(get("serverPort") or "443").strip() or "443"),
-        "local_socks_port": int(str(get("serverSocks") or "1080").strip() or "1080"),
-    }
+    assign_filled(server, "host", get("serverHost"))
+    if not filled_str(server.get("host")) and prev_host:
+        server["host"] = prev_host
+    server["port"] = _as_int(get("serverPort"), 443)
+    server["local_socks_port"] = _as_int(get("serverSocks"), 1080)
     cfg.pop("worker_base_url", None)
+    ui_bypass = [
+        x.strip() for x in filled_str(get("proxyBypass")).split(",") if x.strip()
+    ]
+    if ui_bypass:
+        cfg["proxy_bypass"] = ui_bypass
+    elif prev_bypass:
+        cfg["proxy_bypass"] = prev_bypass
     if corporate:
-        raw_bypass = str(get("proxyBypass") or "").strip()
-        cfg["proxy_bypass"] = [x.strip() for x in raw_bypass.split(",") if x.strip()]
         cfg["proxy_bypass_via"] = "direct"
     cfg["kill_switch"] = bool(get("killSwitch"))
     cfg["git_proxy"] = bool(get("gitProxy"))
     cfg["docker_proxy"] = bool(get("dockerProxy"))
-    cfg.setdefault("tun", {})
-    cfg["tun"]["enabled"] = bool(get("tunAuto")) or cfg["kill_switch"]
-    cfg["tun"]["elevate"] = True
-    cfg["tun"]["sing_box_path"] = ""
-    cfg.setdefault("transport", {})
-    cfg["transport"]["type"] = "vless-reality"
-    cfg["transport"]["dial"] = normalize_dial(get("trDial"))
-    cfg["transport"]["uuid"] = str(get("trUuid") or "").strip()
-    cfg["transport"]["public_key"] = str(get("trPublicKey") or "").strip()
-    cfg["transport"]["short_id"] = str(get("trShortId") or "").strip()
-    cfg["transport"]["server_name"] = (
-        str(get("trServerName") or "").strip() or REALITY_DEFAULT_SNI
-    )
-    cfg["transport"]["port"] = int(
-        str(get("serverPort") or get("trPort") or "443").strip() or "443"
-    )
-    hy = cfg["transport"].setdefault("hysteria2", {})
+    cfg["tun"] = tun
+    tun["enabled"] = bool(get("tunAuto")) or cfg["kill_switch"]
+    tun["elevate"] = True
+    if prev_sing_box:
+        tun["sing_box_path"] = prev_sing_box
+    tr = cfg.get("transport")
+    if not isinstance(tr, dict):
+        tr = {}
+        cfg["transport"] = tr
+    tr["type"] = "vless-reality"
+    tr["dial"] = normalize_dial(get("trDial"))
+    assign_filled(tr, "uuid", get("trUuid"))
+    assign_filled(tr, "public_key", get("trPublicKey"))
+    assign_filled(tr, "short_id", get("trShortId"))
+    assign_filled(tr, "server_name", get("trServerName"))
+    if not filled_str(tr.get("server_name")):
+        tr["server_name"] = REALITY_DEFAULT_SNI
+    tr["port"] = _as_int(get("serverPort") or get("trPort"), 443)
+    hy = tr.get("hysteria2")
     if not isinstance(hy, dict):
         hy = {}
-        cfg["transport"]["hysteria2"] = hy
-    hy_pw = str(get("hy2Password") or "").strip()
-    if hy_pw:
-        hy["password"] = hy_pw
-    hy["port"] = int(str(get("hy2Port") or "8443").strip() or "8443")
-    hy["server_name"] = normalize_hy2_sni(get("hy2ServerName"))
-    hy_obfs = str(get("hy2Obfs") or "").strip()
-    if hy_obfs:
-        hy["obfs_password"] = hy_obfs
-    elif "obfs_password" not in hy:
-        hy["obfs_password"] = str(hy.get("obfs_password") or "")
+        tr["hysteria2"] = hy
+    assign_filled(hy, "password", get("hy2Password"))
+    hy["port"] = _as_int(get("hy2Port"), 8443)
+    hy_sni = filled_str(get("hy2ServerName"))
+    if hy_sni:
+        hy["server_name"] = normalize_hy2_sni(hy_sni)
+    assign_filled(hy, "obfs_password", get("hy2Obfs"))
     hy["insecure"] = bool(hy.get("insecure", True))
-    awg = cfg["transport"].setdefault("amneziawg", {})
+    awg = tr.get("amneziawg")
     if not isinstance(awg, dict):
         awg = {}
-        cfg["transport"]["amneziawg"] = awg
-    awg["private_key"] = str(get("awgPrivateKey") or "").strip()
-    awg["peer_public_key"] = str(get("awgPeerPublicKey") or "").strip()
-    awg["pre_shared_key"] = str(get("awgPresharedKey") or "").strip()
-    awg["address"] = str(get("awgAddress") or "").strip() or AWG_DEFAULT_ADDRESS
-    awg["port"] = int(
-        str(get("awgPort") or str(AWG_DEFAULT_PORT)).strip() or str(AWG_DEFAULT_PORT)
-    )
-    awg["mtu"] = int(
-        str(get("awgMtu") or str(AWG_DEFAULT_MTU)).strip() or str(AWG_DEFAULT_MTU)
-    )
-    awg["jc"] = int(str(get("awgJc") or "0").strip() or "0")
-    awg["jmin"] = int(str(get("awgJmin") or "0").strip() or "0")
-    awg["jmax"] = int(str(get("awgJmax") or "0").strip() or "0")
-    awg["s1"] = int(str(get("awgS1") or "0").strip() or "0")
-    awg["s2"] = int(str(get("awgS2") or "0").strip() or "0")
-    awg["h1"] = str(get("awgH1") or "").strip()
-    awg["h2"] = str(get("awgH2") or "").strip()
-    awg["h3"] = str(get("awgH3") or "").strip()
-    awg["h4"] = str(get("awgH4") or "").strip()
-    cfg.setdefault("reverse_ssh", {})
-    cfg["reverse_ssh"]["enabled"] = bool(get("reverseSsh"))
-    cfg["reverse_ssh"]["listen_port"] = int(
-        str(get("reverseSshListen") or "2222").strip() or "2222"
-    )
-    cfg["reverse_ssh"]["vps_user"] = (
-        str(get("reverseSshVpsUser") or "").strip() or "root"
-    )
-    cfg["reverse_ssh"]["vps_port"] = int(
-        str(get("reverseSshVpsPort") or "22").strip() or "22"
-    )
+        tr["amneziawg"] = awg
+    assign_filled(awg, "private_key", get("awgPrivateKey"))
+    assign_filled(awg, "peer_public_key", get("awgPeerPublicKey"))
+    assign_filled(awg, "pre_shared_key", get("awgPresharedKey"))
+    assign_filled(awg, "address", get("awgAddress") or AWG_DEFAULT_ADDRESS)
+    awg["port"] = _as_int(get("awgPort"), AWG_DEFAULT_PORT)
+    awg["mtu"] = _as_int(get("awgMtu"), AWG_DEFAULT_MTU)
+    _set_awg_int(awg, "jc", get("awgJc"))
+    _set_awg_int(awg, "jmin", get("awgJmin"))
+    _set_awg_int(awg, "jmax", get("awgJmax"))
+    _set_awg_int(awg, "s1", get("awgS1"))
+    _set_awg_int(awg, "s2", get("awgS2"))
+    assign_filled(awg, "h1", get("awgH1"))
+    assign_filled(awg, "h2", get("awgH2"))
+    assign_filled(awg, "h3", get("awgH3"))
+    assign_filled(awg, "h4", get("awgH4"))
+    rev = cfg.get("reverse_ssh")
+    if not isinstance(rev, dict):
+        rev = {}
+        cfg["reverse_ssh"] = rev
+    rev["enabled"] = bool(get("reverseSsh"))
+    rev["listen_port"] = _as_int(get("reverseSshListen"), 2222)
+    assign_filled(rev, "vps_user", get("reverseSshVpsUser"))
+    if not filled_str(rev.get("vps_user")):
+        rev["vps_user"] = "root"
+    rev["vps_port"] = _as_int(get("reverseSshVpsPort"), 22)
     return cfg

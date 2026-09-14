@@ -54,18 +54,41 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 [Run]
 Filename: "{app}\{#AppExeName}"; Description: "Запустить {#AppName}"; Flags: nowait postinstall skipifsilent
 
-[UninstallRun]
-Filename: "{app}\{#AppExeName}"; Parameters: "off"; Flags: runhidden waituntilterminated; RunOnceId: "ErgomsOff"
-Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""ERGOMS SECURE CONNECTION"" /F"; Flags: runhidden waituntilterminated; RunOnceId: "ErgomsTaskDemand"
-Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""ERGOMS SECURE CONNECTION (автозапуск)"" /F"; Flags: runhidden waituntilterminated; RunOnceId: "ErgomsTaskAutostart"
-Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""ERGOMS SECURE CONNECTION (sing-box)"""; Flags: runhidden waituntilterminated; RunOnceId: "ErgomsFw"
-
 [UninstallDelete]
 Type: filesandordirs; Name: "{localappdata}\{#AppName}"
 Type: filesandordirs; Name: "{localappdata}\ERGOMS VPN"
 Type: filesandordirs; Name: "{localappdata}\ops-content"
 
 [Code]
+#ifdef UNICODE
+  #define AW "W"
+#else
+  #define AW "A"
+#endif
+
+type
+  TMsg = record
+    hwnd: HWND;
+    message: UINT;
+    wParam: Longint;
+    lParam: Longint;
+    time: DWORD;
+    pt: TPoint;
+  end;
+
+function PeekMessage(var lpMsg: TMsg; hWnd: HWND; wMsgFilterMin, wMsgFilterMax, wRemoveMsg: UINT): BOOL;
+  external 'PeekMessage{#AW}@user32.dll stdcall';
+function TranslateMessage(const lpMsg: TMsg): BOOL;
+  external 'TranslateMessage@user32.dll stdcall';
+function DispatchMessage(const lpMsg: TMsg): Longint;
+  external 'DispatchMessage{#AW}@user32.dll stdcall';
+
+const
+  PM_REMOVE = 1;
+
+var
+  ExecSeq: Integer;
+
 function UninstallKey(): String;
 begin
   Result := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{#AppIdGuid}_is1';
@@ -81,56 +104,46 @@ begin
   Result := Uninst;
 end;
 
-procedure SetWizardStatus(const Title, Detail: String);
+procedure ProcessMessages;
+var
+  Msg: TMsg;
 begin
-  if WizardSilent then
+  while PeekMessage(Msg, 0, 0, 0, PM_REMOVE) do
+  begin
+    TranslateMessage(Msg);
+    DispatchMessage(Msg);
+  end;
+end;
+
+{ Wait without blocking the wizard thread — ewWaitUntilTerminated freezes UI. }
+function ExecPumped(const Filename, Params: String; TimeoutMs: Integer): Integer;
+var
+  ResultCode: Integer;
+  Marker: String;
+  Elapsed: Integer;
+  Cmd: String;
+begin
+  Result := -1;
+  ExecSeq := ExecSeq + 1;
+  Marker := ExpandConstant('{tmp}\ergoms-exec-') + IntToStr(ExecSeq) + '.done';
+  DeleteFile(Marker);
+  Cmd := '/d /s /c ""' + Filename + '" ' + Params + ' & (echo 1>"' + Marker + '")"';
+  if not Exec(ExpandConstant('{sys}\cmd.exe'), Cmd, '', SW_HIDE, ewNoWait, ResultCode) then
     Exit;
-  WizardForm.StatusLabel.Caption := Title;
-  WizardForm.FilenameLabel.Caption := Detail;
-  WizardForm.Update;
-end;
-
-procedure KillOne(const Image: String);
-var
-  ResultCode: Integer;
-begin
-  { No /T: tree-kill waits forever if a child is stuck or elevated. }
-  Exec(ExpandConstant('{sys}\cmd.exe'),
-    '/C taskkill /F /IM "' + Image + '" >nul 2>&1',
-    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-end;
-
-procedure KillAppProcesses;
-begin
-  KillOne('{#AppExeName}');
-  KillOne('sing-box.exe');
-  KillOne('ergoms-tun.exe');
-  KillOne('ergoms-tun-awg.exe');
-end;
-
-procedure DeleteRunValue(const Name: String);
-begin
-  RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', Name);
-end;
-
-procedure WipeLeftovers;
-var
-  ResultCode: Integer;
-  InstallDir: String;
-begin
-  { Data dir only. Do not delete Local\Programs\app when it is DestDir. }
-  DelTree(ExpandConstant('{localappdata}\{#AppName}'), True, True, True);
-  DelTree(ExpandConstant('{localappdata}\ERGOMS VPN'), True, True, True);
-  DelTree(ExpandConstant('{localappdata}\ops-content'), True, True, True);
-  InstallDir := ExpandConstant('{localappdata}\Programs\{#AppName}');
-  if CompareText(InstallDir, ExpandConstant('{app}')) <> 0 then
-    DelTree(InstallDir, True, True, True);
-  Exec(ExpandConstant('{sys}\netsh.exe'), 'advfirewall firewall delete rule name="ERGOMS SECURE CONNECTION (sing-box)"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Exec(ExpandConstant('{sys}\schtasks.exe'), '/Delete /TN "ERGOMS SECURE CONNECTION" /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Exec(ExpandConstant('{sys}\schtasks.exe'), '/Delete /TN "ERGOMS SECURE CONNECTION (автозапуск)" /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  DeleteRunValue('{#AppName}');
-  DeleteRunValue('ERGOMS VPN');
-  DeleteRunValue('ops-content');
+  Elapsed := 0;
+  while not FileExists(Marker) do
+  begin
+    ProcessMessages;
+    Sleep(50);
+    Elapsed := Elapsed + 50;
+    if (TimeoutMs > 0) and (Elapsed >= TimeoutMs) then
+    begin
+      Result := -2;
+      Exit;
+    end;
+  end;
+  DeleteFile(Marker);
+  Result := 0;
 end;
 
 function ExtractUninstallExe(const Raw: String): String;
@@ -155,20 +168,135 @@ begin
   Result := Trim(S);
 end;
 
-procedure UninstallPrevious;
+function GetPreviousInstallDir(): String;
 var
-  Uninst: String;
-  ResultCode: Integer;
+  Dir, Uninst: String;
 begin
-  Uninst := ExtractUninstallExe(GetUninstallString());
-  if Uninst = '' then
+  Dir := '';
+  if not RegQueryStringValue(HKCU, UninstallKey(), 'InstallLocation', Dir) then
+    RegQueryStringValue(HKLM, UninstallKey(), 'InstallLocation', Dir);
+  Dir := RemoveBackslash(Trim(Dir));
+  if (Dir <> '') and DirExists(Dir) then
+  begin
+    Result := Dir;
     Exit;
-  Exec(Uninst, '/VERYSILENT /NORESTART /SUPPRESSMSGBOXES', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  end;
+  Uninst := ExtractUninstallExe(GetUninstallString());
+  if Uninst <> '' then
+    Result := RemoveBackslash(ExtractFileDir(Uninst))
+  else
+    Result := '';
+end;
+
+procedure KillOne(const Image: String);
+begin
+  { No /T: tree-kill waits forever if a child is stuck or elevated. }
+  ExecPumped(ExpandConstant('{sys}\taskkill.exe'),
+    '/F /IM "' + Image + '"', 8000);
+end;
+
+procedure KillAppProcesses;
+begin
+  KillOne('{#AppExeName}');
+  KillOne('sing-box.exe');
+  KillOne('ergoms-tun.exe');
+  KillOne('ergoms-tun-awg.exe');
+end;
+
+procedure DeleteRunValue(const Name: String);
+begin
+  RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', Name);
+end;
+
+procedure WipeLeftovers;
+var
+  InstallDir: String;
+begin
+  { Data dir only. Do not delete Local\Programs\app when it is DestDir. }
+  DelTree(ExpandConstant('{localappdata}\{#AppName}'), True, True, True);
+  ProcessMessages;
+  DelTree(ExpandConstant('{localappdata}\ERGOMS VPN'), True, True, True);
+  ProcessMessages;
+  DelTree(ExpandConstant('{localappdata}\ops-content'), True, True, True);
+  ProcessMessages;
+  InstallDir := ExpandConstant('{localappdata}\Programs\{#AppName}');
+  if CompareText(InstallDir, ExpandConstant('{app}')) <> 0 then
+    DelTree(InstallDir, True, True, True);
+  ExecPumped(ExpandConstant('{sys}\netsh.exe'),
+    'advfirewall firewall delete rule name="ERGOMS SECURE CONNECTION (sing-box)"', 15000);
+  ExecPumped(ExpandConstant('{sys}\schtasks.exe'),
+    '/Delete /TN "ERGOMS SECURE CONNECTION" /F', 10000);
+  ExecPumped(ExpandConstant('{sys}\schtasks.exe'),
+    '/Delete /TN "ERGOMS SECURE CONNECTION (автозапуск)" /F', 10000);
+  DeleteRunValue('{#AppName}');
+  DeleteRunValue('ERGOMS VPN');
+  DeleteRunValue('ops-content');
+end;
+
+procedure RemovePreviousFiles;
+var
+  OldDir, DestDir: String;
+begin
+  OldDir := GetPreviousInstallDir();
+  DestDir := ExpandConstant('{app}');
+  if OldDir = '' then
+    OldDir := DestDir;
+  if not DirExists(OldDir) then
+    Exit;
+  DelTree(OldDir, True, True, True);
+  ProcessMessages;
+  if CompareText(OldDir, DestDir) = 0 then
+    ForceDirectories(DestDir);
 end;
 
 function WantRemoveOld(): Boolean;
 begin
   Result := WizardIsTaskSelected('removeold') and (GetUninstallString() <> '');
+end;
+
+procedure ProgressStep(Page: TOutputProgressWizardPage; Step, MaxSteps: Integer;
+  const Title, Detail: String);
+begin
+  if Page = nil then
+    Exit;
+  Page.SetText(Title, Detail);
+  Page.SetProgress(Step, MaxSteps);
+  ProcessMessages;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  Page: TOutputProgressWizardPage;
+begin
+  Result := '';
+  NeedsRestart := False;
+  Page := nil;
+  (* Do not run old unins000.exe: same AppId mutex + it launches exe off
+     (slow frozen boot / UAC) while this wizard waits on the UI thread. *)
+  if WantRemoveOld() then
+  begin
+    Page := CreateOutputProgressPage(
+      'Удаление предыдущей версии',
+      'Сначала удаление, затем установка новых файлов.');
+    if not WizardSilent then
+      Page.Show;
+  end;
+  try
+    ProgressStep(Page, 0, 3, 'Остановка запущенной программы…', '{#AppName}');
+    KillAppProcesses;
+    if not WantRemoveOld() then
+      Exit;
+    ProgressStep(Page, 1, 3, 'Очистка данных предыдущей версии…',
+      'Профили, правила брандмауэра, задачи');
+    WipeLeftovers;
+    ProgressStep(Page, 2, 3, 'Удаление файлов предыдущей версии…',
+      GetPreviousInstallDir());
+    RemovePreviousFiles;
+    ProgressStep(Page, 3, 3, 'Предыдущая версия удалена', 'Переход к установке…');
+  finally
+    if (Page <> nil) and not WizardSilent then
+      Page.Hide;
+  end;
 end;
 
 function UpdateReadyMemo(Space, NewLine, MemoUserInfoInfo, MemoDirInfo,
@@ -188,26 +316,10 @@ begin
     Result := Result + MemoTasksInfo;
 end;
 
-procedure CurStepChanged(CurStep: TSetupStep);
-begin
-  if CurStep <> ssInstall then
-    Exit;
-  SetWizardStatus('Остановка запущенной программы…', '{#AppName}');
-  KillAppProcesses;
-  if not WantRemoveOld() then
-  begin
-    SetWizardStatus('Установка файлов…', '');
-    Exit;
-  end;
-  SetWizardStatus('Удаление предыдущей версии…', 'Это может занять несколько секунд');
-  UninstallPrevious;
-  SetWizardStatus('Очистка данных предыдущей версии…', '');
-  WipeLeftovers;
-  SetWizardStatus('Установка файлов…', '');
-end;
-
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
+  if CurUninstallStep = usUninstall then
+    KillAppProcesses;
   if CurUninstallStep = usPostUninstall then
     WipeLeftovers;
 end;

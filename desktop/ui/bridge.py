@@ -524,6 +524,17 @@ class GuiBridge(QObject):
                 cfg = apply_amnezia_to_config(existing, parsed)
                 cfg["transport"]["dial"] = "amneziawg"
             else:
+                try:
+                    same_live = src.resolve() == self.paths.config_path.resolve()
+                except OSError:
+                    same_live = False
+                if same_live:
+                    apply_config(self.paths.config_path, force=True)
+                    self.loadSettings()
+                    self._enqueue_log("Конфиг загружен")
+                    self.toast.emit("Конфиг загружен", "info")
+                    self._refresh_status(force=True)
+                    return
                 data = json.loads(text)
                 if not isinstance(data, dict):
                     raise ValueError("Файл не JSON-объект")
