@@ -30,12 +30,14 @@ ArchitecturesInstallIn64BitMode=x64compatible
 CloseApplications=yes
 UninstallDisplayIcon={app}\{#AppExeName}
 UninstallDisplayName={#AppName}
+UsePreviousTasks=no
 
 [Languages]
 Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
+Name: "removeold"; Description: "Удалить предыдущую версию"; GroupDescription: "Обновление:"; Flags: checkedonce
 Name: "desktopicon"; Description: "Ярлык на рабочем столе"; GroupDescription: "Дополнительно:"; Flags: unchecked
 Name: "autostart"; Description: "Автозапуск при входе в Windows"; GroupDescription: "Дополнительно:"; Flags: unchecked
 
@@ -156,12 +158,20 @@ begin
   Exec(Uninst, '/VERYSILENT /NORESTART /SUPPRESSMSGBOXES', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
+function WantRemoveOld(): Boolean;
+begin
+  Result := WizardIsTaskSelected('removeold') and (GetUninstallString() <> '');
+end;
+
 function UpdateReadyMemo(Space, NewLine, MemoUserInfoInfo, MemoDirInfo,
   MemoTypeInfo, MemoComponentsInfo, MemoGroupInfo, MemoTasksInfo: String): String;
 begin
   Result := '';
-  if GetUninstallString() <> '' then
-    Result := Result + 'Предыдущая версия будет удалена в этом же окне, затем пойдёт установка.' + NewLine + NewLine;
+  if WantRemoveOld() then
+    Result := Result + 'Удаление предыдущей версии' + NewLine +
+      Space + 'Сначала в этом окне пойдёт удаление, затем установка.' + NewLine + NewLine
+  else if GetUninstallString() <> '' then
+    Result := Result + 'Предыдущая версия не удаляется — файлы будут обновлены.' + NewLine + NewLine;
   if MemoDirInfo <> '' then
     Result := Result + MemoDirInfo + NewLine + NewLine;
   if MemoGroupInfo <> '' then
@@ -170,17 +180,19 @@ begin
     Result := Result + MemoTasksInfo;
 end;
 
-function PrepareToInstall(var NeedsRestart: Boolean): String;
+procedure CurStepChanged(CurStep: TSetupStep);
 begin
-  NeedsRestart := False;
-  Result := '';
+  if CurStep <> ssInstall then
+    Exit;
   SetWizardStatus('Остановка запущенной программы…', '{#AppName}');
   KillAppProcesses;
-  if GetUninstallString() <> '' then
+  if not WantRemoveOld() then
   begin
-    SetWizardStatus('Удаление предыдущей версии…', '');
-    UninstallPrevious;
+    SetWizardStatus('Установка файлов…', '');
+    Exit;
   end;
+  SetWizardStatus('Удаление предыдущей версии…', 'Это может занять несколько секунд');
+  UninstallPrevious;
   SetWizardStatus('Очистка данных предыдущей версии…', '');
   WipeLeftovers;
   SetWizardStatus('Установка файлов…', '');
