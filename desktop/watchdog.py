@@ -218,7 +218,7 @@ def health_problem(client: OpsClient, *, probe: bool = False) -> str | None:
     if probe and socks_up and (
         singbox_alive or tun_up or tun_wanted or client.paths.state_path.is_file()
     ):
-        err = socks_probe(socks)
+        err = socks_https_probe(socks, timeout=10.0)
         if err:
             return f"SOCKS :{socks} zombie ({err})"
     # SOCKS alone is not enough for Docker Desktop: UDP/53 from the VM dies

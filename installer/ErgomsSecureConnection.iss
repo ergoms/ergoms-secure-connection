@@ -27,7 +27,7 @@ WizardStyle=modern
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 ArchitecturesInstallIn64BitMode=x64compatible
-CloseApplications=yes
+CloseApplications=no
 UninstallDisplayIcon={app}\{#AppExeName}
 UninstallDisplayName={#AppName}
 UsePreviousTasks=no
@@ -38,7 +38,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "removeold"; Description: "Удалить предыдущую версию"; GroupDescription: "Обновление:"; Flags: checkedonce
-Name: "desktopicon"; Description: "Ярлык на рабочем столе"; GroupDescription: "Дополнительно:"; Flags: unchecked
+Name: "desktopicon"; Description: "Ярлык на рабочем столе"; GroupDescription: "Дополнительно:"; Flags: checkedonce
 Name: "autostart"; Description: "Автозапуск при входе в Windows"; GroupDescription: "Дополнительно:"; Flags: unchecked
 
 [Files]
@@ -90,14 +90,22 @@ begin
   WizardForm.Update;
 end;
 
-procedure KillAppProcesses;
+procedure KillOne(const Image: String);
 var
   ResultCode: Integer;
 begin
-  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM "{#AppExeName}" /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM "sing-box.exe" /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM "ergoms-tun.exe" /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM "ergoms-tun-awg.exe" /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  { No /T: tree-kill waits forever if a child is stuck or elevated. }
+  Exec(ExpandConstant('{sys}\cmd.exe'),
+    '/C taskkill /F /IM "' + Image + '" >nul 2>&1',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
+procedure KillAppProcesses;
+begin
+  KillOne('{#AppExeName}');
+  KillOne('sing-box.exe');
+  KillOne('ergoms-tun.exe');
+  KillOne('ergoms-tun-awg.exe');
 end;
 
 procedure DeleteRunValue(const Name: String);

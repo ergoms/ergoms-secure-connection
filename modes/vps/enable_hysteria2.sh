@@ -160,11 +160,20 @@ systemctl restart sing-box.service
 sleep 1
 ss -lunp 2>/dev/null | grep -E ":${HY2_PORT}\\b" || echo "WARN: UDP :$HY2_PORT not listening"
 
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+EMIT="$ROOT/modes/vps/emit_client_json.py"
+if [[ -f "$EMIT" ]]; then
+  python3 "$EMIT"
+else
+  echo "WARN: $EMIT missing — client.json не собран" >&2
+fi
+
 cat <<EOF
 
 ========================================================================
 OK: Hysteria2 UDP :${HY2_PORT} SNI ${HY2_SNI} salamander
 (VLESS+Reality TCP :443 не трогали)
-Пароль и obfs — в $CREDS, не в этом выводе.
+Один файл на ПК: $STATE_DIR/client.json (Reality + Hy2 + AWG, если уже включён).
+В клиенте: Настройки → Из файла.
 ========================================================================
 EOF
