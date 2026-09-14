@@ -185,11 +185,26 @@ def apply_amnezia_to_config(cfg: dict[str, Any], parsed: dict[str, Any]) -> dict
 
 
 def _nonempty(value: Any) -> bool:
+    """False for None / blank strings / empty containers. 0 and False stay (real values)."""
     if value is None:
         return False
     if isinstance(value, str):
         return bool(value.strip())
+    if isinstance(value, (list, tuple, dict, set)):
+        return len(value) > 0
     return True
+
+
+def filled_str(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def assign_filled(dst: dict[str, Any], key: str, incoming: Any) -> None:
+    """Write incoming only when it has a value — never clear a filled key."""
+    if isinstance(incoming, str):
+        incoming = incoming.strip()
+    if _nonempty(incoming):
+        dst[key] = incoming
 
 
 def merge_imported_config(
@@ -479,7 +494,7 @@ def infer_corporate(cfg: dict[str, Any] | None) -> bool:
 
 
 def apply_corporate_profile(cfg: dict[str, Any]) -> dict[str, Any]:
-    """Office defaults: VLESS via Squid, university bypass. TUN → all sites."""
+    """Office defaults: VLESS via Squid. Does not clear filled proxy / bypass."""
     out = cfg
     out["corporate"] = True
     out["use_proxy"] = True
@@ -488,8 +503,10 @@ def apply_corporate_profile(cfg: dict[str, Any]) -> dict[str, Any]:
         out["socks_scope"] = "full"
     else:
         out["socks_scope"] = "github"
-    out["corporate_proxy"] = CORPORATE_PROXY_PRESET
-    out["proxy_bypass"] = list(CORPORATE_BYPASS_PRESET)
+    if not filled_str(out.get("corporate_proxy")):
+        out["corporate_proxy"] = CORPORATE_PROXY_PRESET
+    if not out.get("proxy_bypass"):
+        out["proxy_bypass"] = list(CORPORATE_BYPASS_PRESET)
     out.setdefault("proxy_bypass_via", "direct")
     out["git_proxy"] = True
     out["docker_proxy"] = True
@@ -500,14 +517,14 @@ def apply_corporate_profile(cfg: dict[str, Any]) -> dict[str, Any]:
 
 
 def apply_standard_profile(cfg: dict[str, Any]) -> dict[str, Any]:
-    """Ordinary VPN: all traffic, no office proxy."""
+    """Ordinary VPN: all traffic. Keeps filled proxy / bypass / keys."""
     out = cfg
     out["corporate"] = False
     out["use_proxy"] = False
     out["socks_scope"] = "full"
-    out["corporate_proxy"] = ""
-    out["proxy_bypass"] = list(STANDARD_BYPASS_PRESET)
-    out["proxy_bypass_via"] = "direct"
+    if not out.get("proxy_bypass"):
+        out["proxy_bypass"] = list(STANDARD_BYPASS_PRESET)
+    out.setdefault("proxy_bypass_via", "direct")
     tr = out.setdefault("transport", {})
     if isinstance(tr, dict):
         tr["dial"] = "amneziawg"
@@ -668,8 +685,21 @@ def load_config(path: Path, *, force: bool = False) -> dict[str, Any]:
 
 
 def save_config(path: Path, cfg: dict[str, Any]) -> None:
+    """Write config.json. Empty incoming fields never erase filled keys already on disk."""
+    payload = cfg if isinstance(cfg, dict) else {}
+    if path.is_file():
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8-sig"))
+            if isinstance(existing, dict):
+                payload = merge_imported_config(existing, payload)
+            else:
+                payload = ensure_config_defaults(payload)
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            payload = ensure_config_defaults(payload)
+    else:
+        payload = ensure_config_defaults(payload)
     path.write_text(
-        json.dumps(ensure_config_defaults(cfg), indent=2, ensure_ascii=False) + "\n",
+        json.dumps(ensure_config_defaults(payload), indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
     try:

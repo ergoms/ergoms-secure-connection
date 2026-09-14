@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import json
 import socket
 import struct
+from pathlib import Path
 
 import pytest
 
-from desktop.config_io import default_config_template, normalize_dial
+from desktop.config_io import (
+    default_config_template,
+    merge_imported_config,
+    normalize_dial,
+    save_config,
+)
 from desktop.net_host import resolve_host
 from desktop.singbox_mode import choose_dial
 from desktop.ui.settings_map import apply_settings_to_cfg, cfg_to_settings, settings_defaults
@@ -199,3 +206,79 @@ def test_settings_map_roundtrip() -> None:
     assert office["corporate"] is True
     assert office["transport"]["dial"] == "amneziawg"
     assert office["socks_scope"] == "full"
+
+
+def test_merge_empty_does_not_wipe_secrets() -> None:
+    base = default_config_template()
+    base["server"]["host"] = "vps.example"
+    base["blocked_hosts"] = ["keep.example"]
+    base["proxy_bypass"] = ["*.tu-bryansk.ru", "*.local"]
+    base["transport"]["uuid"] = "keep-uuid"
+    base["transport"]["hysteria2"]["password"] = "hy2-secret"
+    base["transport"]["amneziawg"]["private_key"] = "awg-priv"
+    base["transport"]["amneziawg"]["jc"] = 10
+    incoming = {
+        "server": {"host": ""},
+        "blocked_hosts": [],
+        "proxy_bypass": [],
+        "transport": {
+            "uuid": "",
+            "hysteria2": {"password": ""},
+            "amneziawg": {"private_key": "", "jc": 10},
+        },
+    }
+    out = merge_imported_config(base, incoming)
+    assert out["server"]["host"] == "vps.example"
+    assert out["blocked_hosts"] == ["keep.example"]
+    assert out["proxy_bypass"] == ["*.tu-bryansk.ru", "*.local"]
+    assert out["transport"]["uuid"] == "keep-uuid"
+    assert out["transport"]["hysteria2"]["password"] == "hy2-secret"
+    assert out["transport"]["amneziawg"]["private_key"] == "awg-priv"
+    assert out["transport"]["amneziawg"]["jc"] == 10
+
+
+def test_apply_settings_empty_form_keeps_disk() -> None:
+    cfg = default_config_template()
+    cfg["server"]["host"] = "vps.example"
+    cfg["corporate_proxy"] = "10.16.0.8:3128"
+    cfg["proxy_bypass"] = ["*.tu-bryansk.ru", "*.local"]
+    cfg["tun"]["sing_box_path"] = "C:/tools/sing-box.exe"
+    cfg["transport"]["uuid"] = "keep-uuid"
+    cfg["transport"]["public_key"] = "keep-pk"
+    cfg["transport"]["hysteria2"]["password"] = "hy2-secret"
+    cfg["transport"]["amneziawg"]["private_key"] = "awg-priv"
+    cfg["transport"]["amneziawg"]["peer_public_key"] = "awg-pub"
+    cfg["transport"]["amneziawg"]["jc"] = 10
+    cfg["transport"]["amneziawg"]["h1"] = "111"
+
+    def get(key: str) -> object:
+        return settings_defaults()[key]
+
+    out = apply_settings_to_cfg(cfg, get, corporate=False)
+    assert out["server"]["host"] == "vps.example"
+    assert out["corporate_proxy"] == "10.16.0.8:3128"
+    assert out["proxy_bypass"] == ["*.tu-bryansk.ru", "*.local"]
+    assert out["tun"]["sing_box_path"] == "C:/tools/sing-box.exe"
+    assert out["transport"]["uuid"] == "keep-uuid"
+    assert out["transport"]["public_key"] == "keep-pk"
+    assert out["transport"]["hysteria2"]["password"] == "hy2-secret"
+    assert out["transport"]["amneziawg"]["private_key"] == "awg-priv"
+    assert out["transport"]["amneziawg"]["peer_public_key"] == "awg-pub"
+    assert out["transport"]["amneziawg"]["jc"] == 10
+    assert out["transport"]["amneziawg"]["h1"] == "111"
+
+
+def test_save_config_empty_payload_keeps_disk(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    live = default_config_template()
+    live["server"]["host"] = "vps.example"
+    live["transport"]["uuid"] = "keep-uuid"
+    live["transport"]["amneziawg"]["private_key"] = "awg-priv"
+    live["blocked_hosts"] = ["keep.example"]
+    path.write_text(json.dumps(live), encoding="utf-8")
+    save_config(path, {"transport": {"uuid": "", "amneziawg": {"private_key": ""}}})
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["server"]["host"] == "vps.example"
+    assert saved["transport"]["uuid"] == "keep-uuid"
+    assert saved["transport"]["amneziawg"]["private_key"] == "awg-priv"
+    assert saved["blocked_hosts"] == ["keep.example"]
