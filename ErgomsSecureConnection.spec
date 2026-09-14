@@ -11,6 +11,12 @@ if not sb.is_file():
     raise SystemExit(
         f"{sb.name} missing in tools/ — run: python -m desktop download-sing-box"
     )
+awg = root / "tools" / ("ergoms-tun-awg.exe" if sys.platform == "win32" else "sing-box-awg")
+if not awg.is_file():
+    raise SystemExit(
+        f"{awg.name} missing in tools/ — run: python -m desktop download-sing-box-awg"
+    )
+awg_ver = root / "tools" / "sing-box-awg.ver"
 
 ico = root / "desktop" / "app_icon.ico"
 datas = [
@@ -19,11 +25,13 @@ datas = [
 ]
 if ico.is_file():
     datas.append((str(ico), "desktop"))
+if awg_ver.is_file():
+    datas.append((str(awg_ver), "tools"))
 
 a = Analysis(
     [str(root / "desktop" / "entry.py")],
     pathex=[str(root)],
-    binaries=[(str(sb), "tools")],
+    binaries=[(str(sb), "tools"), (str(awg), "tools")],
     datas=datas,
     hiddenimports=[
         "desktop",

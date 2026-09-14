@@ -339,6 +339,9 @@ class SingboxModeManager:
     def find_awg_sing_box(self) -> Path | None:
         return self._tun_helper.find_awg_sing_box()
 
+    def awg_version_ok(self) -> bool:
+        return self._tun_helper.awg_version_ok()
+
     def ensure_downloaded(self, proxy_url: str | None = None) -> Path:
         return self._tun_helper.ensure_downloaded(proxy_url=proxy_url)
 

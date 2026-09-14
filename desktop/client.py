@@ -675,20 +675,7 @@ class OpsClient:
         sing_box_path = get_sing_box_path(cfg)
         if dial == "amneziawg":
             exe = self.singbox.find_awg_sing_box()
-            ver_ok = False
-            try:
-                from desktop.tun import AWG_SING_BOX_VERSION
-
-                ver_path = self.tun.tools_dir / "sing-box-awg.ver"
-                ver_ok = bool(
-                    exe
-                    and ver_path.is_file()
-                    and ver_path.read_text(encoding="utf-8").strip()
-                    == AWG_SING_BOX_VERSION
-                )
-            except OSError:
-                ver_ok = False
-            if not ver_ok:
+            if not exe or not self.tun.awg_version_ok():
                 self.log("sing-box AWG — скачиваю зафиксированную сборку…")
                 exe = self.singbox.ensure_awg_downloaded(proxy_url=proxy_url)
             sing_box_path = str(exe)

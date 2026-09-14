@@ -202,58 +202,20 @@ ss -lntp 2>/dev/null | grep -E ':443' || true
 
 # shellcheck disable=SC1090
 source "$CREDS"
-PUBLIC_IP="$(curl -4 -fsS --max-time 8 ifconfig.me 2>/dev/null || true)"
-if [[ -z "$PUBLIC_IP" ]]; then
-  PUBLIC_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+if [[ -f "$ROOT/modes/vps/emit_client_json.py" ]]; then
+  python3 "$ROOT/modes/vps/emit_client_json.py"
 fi
-PUBLIC_IP="${PUBLIC_IP:-YOUR_VPS_IP}"
 
 cat <<EOF
 
 ========================================================================
 OK: sing-box VLESS+Reality listening on :443
-
-On the office PC — config.json (merge into existing file):
-
-  "server": {
-    "host": "$PUBLIC_IP",
-    "port": 443,
-    "local_socks_port": 1080
-  },
-  "transport": {
-    "type": "vless-reality",
-    "dial": "vless-reality",
-    "uuid": "$UUID",
-    "public_key": "$PUBLIC_KEY",
-    "short_id": "$SHORT_ID",
-    "server_name": "$SERVER_NAME",
-    "port": 443,
-    "hysteria2": {
-      "password": "${HY2_PASSWORD:-}",
-      "port": ${HY2_PORT:-8443},
-      "server_name": "${HY2_SERVER_NAME:-www.microsoft.com}",
-      "obfs_password": "${HY2_OBFS:-}",
-      "insecure": true
-    }
-  }
-
-On the office PC — merge server + transport into config.json, then:
-
-  # config.json
-  "tun": { "enabled": true, "elevate": true, ... }
+Один файл на ПК: $STATE_DIR/client.json (Reality + Hy2 + AWG, если уже включён).
+В клиенте: Настройки → Из файла.
 
   ./ergoms-secure-connection.sh on
   # or: .\\ergoms-secure-connection.ps1 on
   # or: python -m desktop on
-
-  # optional: encrypt config for transfer to another PC
-  # ./ergoms-secure-connection.sh encrypt
-  # ./ergoms-secure-connection.sh decrypt config.json.enc
-
-Probe from office:
-
-  ./ergoms-secure-connection.sh probe $PUBLIC_IP 443
-  # or: .\\ergoms-secure-connection.ps1 probe $PUBLIC_IP 443
 
 Credentials saved on VPS: $CREDS
 ========================================================================

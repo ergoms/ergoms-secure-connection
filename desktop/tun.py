@@ -854,9 +854,62 @@ class TunManager:
     def _awg_version_path(self) -> Path:
         return self.tools_dir / "sing-box-awg.ver"
 
+    def _bundled_awg_sing_box(self) -> Path | None:
+        for name in (self._awg_bin_name(), "sing-box-awg.exe", "sing-box-awg"):
+            packed = bundle_dir() / "tools" / name
+            if self._is_native_sing_box(packed):
+                return packed
+        return None
+
+    def awg_version_ok(self) -> bool:
+        for path in (
+            self._awg_version_path(),
+            bundle_dir() / "tools" / "sing-box-awg.ver",
+        ):
+            try:
+                if (
+                    path.is_file()
+                    and path.read_text(encoding="utf-8").strip() == AWG_SING_BOX_VERSION
+                ):
+                    return True
+            except OSError:
+                continue
+        return False
+
+    def _write_awg_version(self) -> None:
+        try:
+            self.tools_dir.mkdir(parents=True, exist_ok=True)
+            self._awg_version_path().write_text(
+                AWG_SING_BOX_VERSION + "\n", encoding="utf-8"
+            )
+        except OSError:
+            pass
+
+    def _materialize_bundled_awg(self) -> Path | None:
+        """Copy packed AWG sing-box to writable tools/ (same as official)."""
+        src = self._bundled_awg_sing_box()
+        if src is None:
+            return None
+        dest = self.tools_dir / self._awg_bin_name()
+        try:
+            self.tools_dir.mkdir(parents=True, exist_ok=True)
+            if not dest.is_file() or dest.stat().st_size != src.stat().st_size:
+                shutil.copy2(src, dest)
+            if not self.awg_version_ok():
+                bundled_ver = bundle_dir() / "tools" / "sing-box-awg.ver"
+                if bundled_ver.is_file():
+                    shutil.copy2(bundled_ver, self._awg_version_path())
+                else:
+                    self._write_awg_version()
+        except OSError:
+            return dest if dest.is_file() else src
+        return dest if dest.is_file() else src
+
     def find_awg_sing_box(self) -> Path | None:
         name = self._awg_bin_name()
+        packed = self._materialize_bundled_awg()
         candidates = [
+            packed,
             self.tools_dir / name,
             bundle_dir() / "tools" / name,
         ]
@@ -866,6 +919,8 @@ class TunManager:
             candidates.append(self.tools_dir / "sing-box-awg")
         seen: set[str] = set()
         for c in candidates:
+            if c is None:
+                continue
             key = str(c.resolve()) if c.exists() else str(c)
             if key in seen:
                 continue
