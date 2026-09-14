@@ -9,14 +9,15 @@ from __future__ import annotations
 
 import json
 import re
-import socket
 import sys
 import time
 from pathlib import Path
 from typing import Callable
 
 from desktop import procutil
-from desktop.tun import _resolve_host
+from desktop.logutil import noop
+from desktop.net_host import resolve_host
+from lib.netutil import port_open
 
 LogFn = Callable[[str], None]
 
@@ -38,16 +39,8 @@ _WIN_BLACKHOLE = re.compile(
 )
 
 
-def _noop(_msg: str) -> None:
-    pass
-
-
 def _host_open(host: str, port: int = 443, timeout: float = 2.5) -> bool:
-    try:
-        with socket.create_connection((host, port), timeout=timeout):
-            return True
-    except OSError:
-        return False
+    return port_open(host, port, timeout=timeout)
 
 
 def state_path(var_dir: Path) -> Path:
@@ -79,7 +72,7 @@ def allow_ips(*hosts: str) -> list[str]:
         host = (raw or "").strip()
         if not host:
             continue
-        ip = _resolve_host(host)
+        ip = resolve_host(host)
         if not ip or ip in seen:
             continue
         seen.add(ip)
@@ -188,7 +181,7 @@ def remove_commands(allow: list[str], *, gw: str | None = None) -> list[str]:
 
 
 def _iface_index_win(dest: str) -> int | None:
-    ip = _resolve_host(dest) if dest else None
+    ip = resolve_host(dest) if dest else None
     if not ip:
         return None
     try:
@@ -359,7 +352,7 @@ def pin_underlay(
     allow: list[str],
     *,
     var_dir: Path,
-    log: LogFn = _noop,
+    log: LogFn = noop,
     elevate: bool = False,
 ) -> bool:
     """Restore VPS/Squid /32 after TUN is up. Uses gw/if saved before auto_route."""
@@ -386,7 +379,7 @@ def pin_underlay(
     return ok
 
 
-def apply(allow: list[str], *, var_dir: Path, log: LogFn = _noop) -> bool:
+def apply(allow: list[str], *, var_dir: Path, log: LogFn = noop) -> bool:
     """Install routes. Returns True if blackhole is present afterwards."""
     unique = list(dict.fromkeys(allow))
     if is_applied():
@@ -443,7 +436,7 @@ def apply(allow: list[str], *, var_dir: Path, log: LogFn = _noop) -> bool:
     return present
 
 
-def clear(*, var_dir: Path, log: LogFn = _noop) -> None:
+def clear(*, var_dir: Path, log: LogFn = noop) -> None:
     st = _load_state(var_dir)
     allow = [str(x) for x in (st.get("allow") or []) if x]
     gw = str(st.get("gw") or "") or None

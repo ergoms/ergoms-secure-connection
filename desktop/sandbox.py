@@ -9,19 +9,19 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable, Protocol
 
 from desktop import procutil
-from desktop.client import OpsClient
 from desktop.config_io import get_server, get_server_host, get_sing_box_path
-from desktop.kill_switch import underlay_gateway
+from desktop.logutil import noop
+from desktop.net_host import underlay_gateway
 from desktop.singbox_mode import (
     amneziawg_opts,
     awg_endpoint,
+    config_skeleton,
     hy2_outbound,
     hysteria2_opts,
     require_transport,
-    _dns_v12,
 )
 from desktop.tun import (
     bind_underlay_socket,
@@ -43,8 +43,11 @@ AWG_SOCKS = 18280
 AWG_HTTP = 18288
 
 
-def _noop(msg: str) -> None:
-    pass
+class SandboxHost(Protocol):
+    def config(self) -> dict[str, Any]: ...
+
+    paths: Any
+    singbox: Any
 
 
 def _tcp(
@@ -343,36 +346,12 @@ def _vless_cfg(
     if bind_iface and server not in ("127.0.0.1", "localhost"):
         outbound["bind_interface"] = bind_iface
     return {
-        "log": {
-            "level": "info",
-            "timestamp": True,
-            "output": str(log_path).replace("\\", "/"),
-        },
-        "dns": {
-            "servers": [
-                {
-                    "tag": "dns-proxy",
-                    "address": "https://1.1.1.1/dns-query",
-                    "detour": "proxy",
-                }
-            ],
-            "final": "dns-proxy",
-            "strategy": "prefer_ipv4",
-        },
-        "inbounds": [
-            {
-                "type": "socks",
-                "tag": "socks-in",
-                "listen": "127.0.0.1",
-                "listen_port": int(socks_port),
-            },
-            {
-                "type": "http",
-                "tag": "http-in",
-                "listen": "127.0.0.1",
-                "listen_port": int(http_port),
-            },
-        ],
+        **config_skeleton(
+            log_path=log_path,
+            socks_port=socks_port,
+            http_port=http_port,
+            simple_dns=True,
+        ),
         "outbounds": [
             outbound,
             {
@@ -407,36 +386,12 @@ def _hy2_cfg(
     }
     outbound = hy2_outbound(server, hy, bind_iface=bind_iface)
     return {
-        "log": {
-            "level": "info",
-            "timestamp": True,
-            "output": str(log_path).replace("\\", "/"),
-        },
-        "dns": {
-            "servers": [
-                {
-                    "tag": "dns-proxy",
-                    "address": "https://1.1.1.1/dns-query",
-                    "detour": "proxy",
-                }
-            ],
-            "final": "dns-proxy",
-            "strategy": "prefer_ipv4",
-        },
-        "inbounds": [
-            {
-                "type": "socks",
-                "tag": "socks-in",
-                "listen": "127.0.0.1",
-                "listen_port": int(socks_port),
-            },
-            {
-                "type": "http",
-                "tag": "http-in",
-                "listen": "127.0.0.1",
-                "listen_port": int(http_port),
-            },
-        ],
+        **config_skeleton(
+            log_path=log_path,
+            socks_port=socks_port,
+            http_port=http_port,
+            simple_dns=True,
+        ),
         "outbounds": [
             outbound,
             {
@@ -459,26 +414,12 @@ def _awg_cfg(
     http_port: int = AWG_HTTP,
 ) -> dict:
     return {
-        "log": {
-            "level": "info",
-            "timestamp": True,
-            "output": str(log_path).replace("\\", "/"),
-        },
-        "dns": _dns_v12(),
-        "inbounds": [
-            {
-                "type": "socks",
-                "tag": "socks-in",
-                "listen": "127.0.0.1",
-                "listen_port": int(socks_port),
-            },
-            {
-                "type": "http",
-                "tag": "http-in",
-                "listen": "127.0.0.1",
-                "listen_port": int(http_port),
-            },
-        ],
+        **config_skeleton(
+            log_path=log_path,
+            socks_port=socks_port,
+            http_port=http_port,
+            dns_schema="v12",
+        ),
         "endpoints": [awg_endpoint(server, opts, bind_iface=bind_iface)],
         "outbounds": [
             {
@@ -562,7 +503,7 @@ def _dump_tail(log_path: Path, log: LogFn) -> None:
         log(f"    {ln}")
 
 
-def run_sandbox(client: OpsClient, *, log: LogFn = _noop) -> int:
+def run_sandbox(client: SandboxHost, *, log: LogFn = noop) -> int:
     """Protocol checks via underlay NIC. Does not touch TUN, KS, or Amnezia."""
     cfg = client.config()
     host = get_server_host(cfg)

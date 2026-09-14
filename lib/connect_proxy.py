@@ -16,11 +16,10 @@ import socket
 import sys
 import threading
 
-
-def parse_proxy(value: str) -> tuple[str, int]:
-    value = value.replace("http://", "").replace("https://", "").strip("/")
-    host, _, port = value.partition(":")
-    return host, int(port or "3128")
+try:
+    from lib.http_connect import http_connect, parse_proxy
+except ImportError:
+    from http_connect import http_connect, parse_proxy
 
 
 def open_connect(target_host: str, target_port: int) -> socket.socket:
@@ -28,59 +27,18 @@ def open_connect(target_host: str, target_port: int) -> socket.socket:
         os.environ.get("ERGOMS_SC_HTTP_PROXY")
         or os.environ.get("OPS_CONTENT_HTTP_PROXY", "10.16.0.8:3128")
     )
-    sock = socket.create_connection((proxy_host, proxy_port), timeout=30)
     try:
-        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-    except OSError:
-        pass
-    req = (
-        f"CONNECT {target_host}:{target_port} HTTP/1.1\r\n"
-        f"Host: {target_host}:{target_port}\r\n"
-        f"Proxy-Connection: keep-alive\r\n"
-        f"\r\n"
-    ).encode("ascii")
-    sock.sendall(req)
-
-    buf = b""
-    while b"\r\n\r\n" not in buf:
-        chunk = sock.recv(4096)
-        if not chunk:
-            raise RuntimeError("proxy closed during CONNECT")
-        buf += chunk
-
-    header, _, remainder = buf.partition(b"\r\n\r\n")
-    status_line = header.split(b"\r\n", 1)[0].decode("ascii", "replace")
-    if "200" not in status_line:
-        raise RuntimeError(f"CONNECT failed: {status_line}")
-
-    if remainder:
-        # Keep early payload, if any.
-        sock = _PrefixedSocket(sock, remainder)
+        sock, _status = http_connect(
+            proxy_host,
+            proxy_port,
+            target_host,
+            target_port,
+            timeout=30,
+            keep_remainder=True,
+        )
+    except OSError as exc:
+        raise RuntimeError(str(exc)) from exc
     return sock
-
-
-class _PrefixedSocket:
-    def __init__(self, sock: socket.socket, prefix: bytes) -> None:
-        self._sock = sock
-        self._prefix = prefix
-
-    def recv(self, n: int) -> bytes:
-        if self._prefix:
-            out, self._prefix = self._prefix[:n], self._prefix[n:]
-            return out
-        return self._sock.recv(n)
-
-    def sendall(self, data: bytes) -> None:
-        self._sock.sendall(data)
-
-    def shutdown(self, how: int) -> None:
-        self._sock.shutdown(how)
-
-    def close(self) -> None:
-        self._sock.close()
-
-    def fileno(self) -> int:
-        return self._sock.fileno()
 
 
 def pump_windows(sock: socket.socket) -> int:

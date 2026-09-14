@@ -7,7 +7,14 @@ import json
 import os
 import subprocess
 import sys
+from copy import deepcopy
 from pathlib import Path
+
+_ROOT = Path(__file__).resolve().parents[2]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
+
+from desktop.config_io import default_config_template  # noqa: E402
 
 STATE = Path("/var/lib/ops-content-singbox")
 CREDS = STATE / "credentials.env"
@@ -91,75 +98,34 @@ def main() -> int:
         dial = "hysteria2"
     else:
         dial = "vless-reality"
-    cfg = {
-        "corporate": False,
-        "use_proxy": False,
-        "corporate_proxy": "",
-        "socks_scope": "full",
-        "http_bridge_port": 1088,
-        "pac_listen_port": 1089,
-        "watchdog": True,
-        "watchdog_interval": 15,
-        "watchdog_max_retries": 5,
-        "kill_switch": True,
-        "git_proxy": False,
-        "docker_proxy": False,
-        "server": {
-            "host": host,
-            "port": 443,
-            "local_socks_port": 1080,
-        },
-        "proxy_bypass": ["*.local", "*.lan"],
-        "proxy_bypass_via": "direct",
-        "tun": {
-            "enabled": True,
-            "elevate": True,
-            "sing_box_path": "",
-            "mtu": 1500,
-        },
-        "transport": {
-            "type": "vless-reality",
-            "dial": dial,
-            "uuid": creds.get("UUID") or "",
-            "public_key": creds.get("PUBLIC_KEY") or "",
-            "short_id": creds.get("SHORT_ID") or "",
-            "server_name": creds.get("SERVER_NAME") or "www.cloudflare.com",
-            "port": 443,
-            "hysteria2": {
-                "password": hy2_pw,
-                "port": int(hy2_port or "8443"),
-                "server_name": hy2_sni,
-                "obfs_password": hy2_obfs,
-                "insecure": True,
-            },
-            "amneziawg": {
-                "port": int(creds.get("AWG_PORT") or "51820"),
-                "private_key": awg_priv,
-                "peer_public_key": awg_pub,
-                "pre_shared_key": creds.get("AWG_PSK") or "",
-                "address": creds.get("AWG_ADDRESS_CLIENT") or "10.66.66.2/32",
-                "mtu": 1280,
-                "jc": int(creds.get("AWG_JC") or "0"),
-                "jmin": int(creds.get("AWG_JMIN") or "0"),
-                "jmax": int(creds.get("AWG_JMAX") or "0"),
-                "s1": int(creds.get("AWG_S1") or "0"),
-                "s2": int(creds.get("AWG_S2") or "0"),
-                "h1": creds.get("AWG_H1") or "",
-                "h2": creds.get("AWG_H2") or "",
-                "h3": creds.get("AWG_H3") or "",
-                "h4": creds.get("AWG_H4") or "",
-                "keepalive": 25,
-            },
-        },
-        "reverse_ssh": {
-            "enabled": True,
-            "vps_user": "root",
-            "vps_port": 22,
-            "listen_port": 2222,
-            "local_port": 22,
-            "identity_file": "",
-        },
-    }
+    cfg = deepcopy(default_config_template())
+    cfg["server"]["host"] = host
+    cfg["transport"]["dial"] = dial
+    cfg["transport"]["uuid"] = creds.get("UUID") or ""
+    cfg["transport"]["public_key"] = creds.get("PUBLIC_KEY") or ""
+    cfg["transport"]["short_id"] = creds.get("SHORT_ID") or ""
+    cfg["transport"]["server_name"] = creds.get("SERVER_NAME") or "www.cloudflare.com"
+    hy = cfg["transport"].setdefault("hysteria2", {})
+    hy["password"] = hy2_pw
+    hy["port"] = int(hy2_port or "8443")
+    hy["server_name"] = hy2_sni
+    hy["obfs_password"] = hy2_obfs
+    hy["insecure"] = True
+    awg = cfg["transport"].setdefault("amneziawg", {})
+    awg["port"] = int(creds.get("AWG_PORT") or "51820")
+    awg["private_key"] = awg_priv
+    awg["peer_public_key"] = awg_pub
+    awg["pre_shared_key"] = creds.get("AWG_PSK") or ""
+    awg["address"] = creds.get("AWG_ADDRESS_CLIENT") or "10.66.66.2/32"
+    awg["jc"] = int(creds.get("AWG_JC") or "0")
+    awg["jmin"] = int(creds.get("AWG_JMIN") or "0")
+    awg["jmax"] = int(creds.get("AWG_JMAX") or "0")
+    awg["s1"] = int(creds.get("AWG_S1") or "0")
+    awg["s2"] = int(creds.get("AWG_S2") or "0")
+    awg["h1"] = creds.get("AWG_H1") or ""
+    awg["h2"] = creds.get("AWG_H2") or ""
+    awg["h3"] = creds.get("AWG_H3") or ""
+    awg["h4"] = creds.get("AWG_H4") or ""
     STATE.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     try:

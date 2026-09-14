@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Callable
 
 from desktop import procutil
+from desktop.logutil import noop
 
 LogFn = Callable[[str], None]
 
@@ -34,8 +35,6 @@ _ENV_PROXY_KEYS = (
 )
 
 
-def _noop(msg: str) -> None:
-    pass
 
 
 def _parse_environment(text: str) -> tuple[list[str], dict[str, str]]:
@@ -74,7 +73,7 @@ def _render_environment(lines: list[str], overrides: dict[str, str]) -> str:
 def enable_linux_env_proxy(
     http_port: int,
     backup_path: Path,
-    log: LogFn = _noop,
+    log: LogFn = noop,
 ) -> None:
     """Point system CLI proxy at local HTTP bridge (overrides corporate Squid)."""
     if sys.platform == "win32":
@@ -169,7 +168,7 @@ def enable_linux_env_proxy(
     log(f"Системный proxy → {proxy} (profile.d + /etc/environment)")
 
 
-def disable_linux_env_proxy(backup_path: Path, log: LogFn = _noop) -> None:
+def disable_linux_env_proxy(backup_path: Path, log: LogFn = noop) -> None:
     """Restore corporate /etc/environment proxy and remove profile.d override."""
     if sys.platform == "win32":
         return
@@ -236,7 +235,7 @@ def enable_browser_pac(
     scope: str,
     bypass_count: int,
     backup_path: Path,
-    log: LogFn = _noop,
+    log: LogFn = noop,
     *,
     pac_url: str | None = None,
 ) -> None:
@@ -291,7 +290,7 @@ def enable_browser_pac(
         log(f"GNOME PAC = {pac_url} (GitHub via VPS; bypass={bypass_count})")
 
 
-def disable_browser_proxy(backup_path: Path, log: LogFn = _noop) -> None:
+def disable_browser_proxy(backup_path: Path, log: LogFn = noop) -> None:
     if sys.platform == "win32":
         from desktop.win_proxy import disable_browser_proxy as win_disable
 

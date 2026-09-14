@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import socket
 import subprocess
 import sys
 import threading
@@ -23,22 +22,20 @@ from desktop.config_io import (
     normalize_dial,
     normalize_hy2_sni,
 )
+from desktop.logutil import noop
+from desktop.net_host import resolve_host
 from desktop.tun import (
     RUSTDESK_PORTS,
     TUN_IFACE_NAME,
     TunManager,
     _direct_python_paths,
-    _resolve_host,
     detect_bind_interface,
     iface_ipv4s,
 )
 from lib.http_via_socks import bypass_to_singbox
+from lib.netutil import port_open
 
 LogFn = Callable[[str], None]
-
-
-def _noop(msg: str) -> None:
-    pass
 
 
 def parse_corporate_proxy(proxy: str) -> tuple[str, int]:
@@ -252,6 +249,116 @@ def _dns_v12(
     }
 
 
+def log_block(log_path: Path | str) -> dict[str, Any]:
+    return {
+        "level": "info",
+        "timestamp": True,
+        "output": str(log_path).replace("\\", "/"),
+    }
+
+
+def local_inbounds(socks_port: int, http_port: int) -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "socks",
+            "tag": "socks-in",
+            "listen": "127.0.0.1",
+            "listen_port": int(socks_port),
+        },
+        {
+            "type": "http",
+            "tag": "http-in",
+            "listen": "127.0.0.1",
+            "listen_port": int(http_port),
+        },
+    ]
+
+
+def dns_block(
+    *,
+    schema: str = "v11",
+    simple: bool = False,
+    docker_wsl_procs: list[str] | None = None,
+    bypass_suffixes: list[str] | None = None,
+    bypass_domains: list[str] | None = None,
+) -> dict[str, Any]:
+    """sing-box 1.11 `address` DNS vs 1.12+ typed servers (AWG fork)."""
+    if schema == "v12":
+        return _dns_v12(
+            docker_wsl_procs=docker_wsl_procs,
+            bypass_suffixes=bypass_suffixes,
+            bypass_domains=bypass_domains,
+        )
+    if simple:
+        return {
+            "servers": [
+                {
+                    "tag": "dns-proxy",
+                    "address": "https://1.1.1.1/dns-query",
+                    "detour": "proxy",
+                }
+            ],
+            "final": "dns-proxy",
+            "strategy": "prefer_ipv4",
+        }
+    return {
+        "servers": [
+            {
+                "tag": "dns-proxy",
+                "address": "https://1.1.1.1/dns-query",
+                "detour": "proxy",
+            },
+            {
+                "tag": "dns-proxy-dot",
+                "address": "tls://1.1.1.1",
+                "detour": "proxy",
+            },
+            {"tag": "dns-local", "address": "local", "detour": "direct"},
+        ],
+        "rules": [
+            *(
+                [{"process_name": docker_wsl_procs, "server": "dns-local"}]
+                if docker_wsl_procs
+                else []
+            ),
+            *(
+                [{"domain_suffix": bypass_suffixes, "server": "dns-local"}]
+                if bypass_suffixes
+                else []
+            ),
+            *(
+                [{"domain": bypass_domains, "server": "dns-local"}]
+                if bypass_domains
+                else []
+            ),
+            {
+                "domain_suffix": [".local", ".lan", ".internal", ".localhost"],
+                "server": "dns-local",
+            },
+        ],
+        "final": "dns-proxy",
+        "strategy": "prefer_ipv4",
+    }
+
+
+def config_skeleton(
+    *,
+    log_path: Path | str,
+    socks_port: int,
+    http_port: int,
+    dns_schema: str = "v11",
+    dns: dict[str, Any] | None = None,
+    simple_dns: bool = False,
+) -> dict[str, Any]:
+    return {
+        "log": log_block(log_path),
+        "dns": dns
+        if dns is not None
+        else dns_block(schema=dns_schema, simple=simple_dns),
+        "inbounds": local_inbounds(socks_port, http_port),
+    }
+
+
 def _udp_bind(bind_iface: str) -> dict[str, Any]:
     """Windows: bind the NIC IPv4. bind_interface by name drops Hy2 UDP."""
     if not bind_iface:
@@ -320,7 +427,7 @@ class SingboxModeManager:
         var_dir: Path,
         tools_dir: Path,
         logs_dir: Path,
-        log: LogFn = _noop,
+        log: LogFn = noop,
     ) -> None:
         self.var_dir = var_dir
         self.tools_dir = tools_dir
@@ -370,7 +477,7 @@ class SingboxModeManager:
         if use_office_proxy:
             hosts.insert(0, squid_host)
         for h in hosts:
-            ip = _resolve_host(h)
+            ip = resolve_host(h)
             if ip:
                 exclude_ips.append(ip)
 
@@ -477,7 +584,7 @@ class SingboxModeManager:
             self.log(f"дом: Hysteria2 UDP :{hy['port']} (Reality на этом Wi-Fi режет DPI)")
         elif office:
             self.log("офис: VLESS+Reality через Squid")
-        vps_ip = _resolve_host(server_host)
+        vps_ip = resolve_host(server_host)
         if vps_ip:
             rules.append(
                 {"ip_cidr": [f"{vps_ip}/32"], "port": vpn_port, "outbound": "direct"}
@@ -525,20 +632,7 @@ class SingboxModeManager:
         sni = str(transport["server_name"])
         vless_port = int(transport["port"])
 
-        inbounds: list[dict[str, Any]] = [
-            {
-                "type": "socks",
-                "tag": "socks-in",
-                "listen": "127.0.0.1",
-                "listen_port": int(socks_port),
-            },
-            {
-                "type": "http",
-                "tag": "http-in",
-                "listen": "127.0.0.1",
-                "listen_port": int(http_port),
-            },
-        ]
+        inbounds: list[dict[str, Any]] = local_inbounds(socks_port, http_port)
         if enable_tun:
             inbounds.append(
                 {
@@ -558,48 +652,17 @@ class SingboxModeManager:
             )
 
         box: dict[str, Any] = {
-            "log": {
-                "level": "info",
-                "timestamp": True,
-                "output": str(self.log_path).replace("\\", "/"),
-            },
-            "dns": {
-                "servers": [
-                    {
-                        "tag": "dns-proxy",
-                        "address": "https://1.1.1.1/dns-query",
-                        "detour": "proxy",
-                    },
-                    {
-                        "tag": "dns-proxy-dot",
-                        "address": "tls://1.1.1.1",
-                        "detour": "proxy",
-                    },
-                    {"tag": "dns-local", "address": "local", "detour": "direct"},
-                ],
-                "rules": [
-                    {
-                        "process_name": docker_wsl_procs,
-                        "server": "dns-local",
-                    },
-                    *(
-                        [{"domain_suffix": bypass_suffixes, "server": "dns-local"}]
-                        if bypass_suffixes
-                        else []
-                    ),
-                    *(
-                        [{"domain": bypass_domains, "server": "dns-local"}]
-                        if bypass_domains
-                        else []
-                    ),
-                    {
-                        "domain_suffix": [".local", ".lan", ".internal", ".localhost"],
-                        "server": "dns-local",
-                    },
-                ],
-                "final": "dns-proxy",
-                "strategy": "prefer_ipv4",
-            },
+            **config_skeleton(
+                log_path=self.log_path,
+                socks_port=socks_port,
+                http_port=http_port,
+                dns=dns_block(
+                    schema="v11",
+                    docker_wsl_procs=docker_wsl_procs,
+                    bypass_suffixes=bypass_suffixes,
+                    bypass_domains=bypass_domains,
+                ),
+            ),
             "inbounds": inbounds,
             "outbounds": [
                 *(
@@ -667,7 +730,8 @@ class SingboxModeManager:
             },
         }
         if awg:
-            box["dns"] = _dns_v12(
+            box["dns"] = dns_block(
+                schema="v12",
                 docker_wsl_procs=docker_wsl_procs,
                 bypass_suffixes=bypass_suffixes,
                 bypass_domains=bypass_domains,
@@ -707,36 +771,12 @@ class SingboxModeManager:
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         outbound = hy2_outbound(server_host, hy, bind_iface=bind_iface)
         return {
-            "log": {
-                "level": "info",
-                "timestamp": True,
-                "output": str(self.log_path).replace("\\", "/"),
-            },
-            "dns": {
-                "servers": [
-                    {
-                        "tag": "dns-proxy",
-                        "address": "https://1.1.1.1/dns-query",
-                        "detour": "proxy",
-                    }
-                ],
-                "final": "dns-proxy",
-                "strategy": "prefer_ipv4",
-            },
-            "inbounds": [
-                {
-                    "type": "socks",
-                    "tag": "socks-in",
-                    "listen": "127.0.0.1",
-                    "listen_port": int(socks_port),
-                },
-                {
-                    "type": "http",
-                    "tag": "http-in",
-                    "listen": "127.0.0.1",
-                    "listen_port": int(http_port),
-                },
-            ],
+            **config_skeleton(
+                log_path=self.log_path,
+                socks_port=socks_port,
+                http_port=http_port,
+                simple_dns=True,
+            ),
             "outbounds": [
                 outbound,
                 {
@@ -769,26 +809,12 @@ class SingboxModeManager:
             self.log(f"дом: AWG UDP с {ip}")
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         return {
-            "log": {
-                "level": "info",
-                "timestamp": True,
-                "output": str(self.log_path).replace("\\", "/"),
-            },
-            "dns": _dns_v12(),
-            "inbounds": [
-                {
-                    "type": "socks",
-                    "tag": "socks-in",
-                    "listen": "127.0.0.1",
-                    "listen_port": int(socks_port),
-                },
-                {
-                    "type": "http",
-                    "tag": "http-in",
-                    "listen": "127.0.0.1",
-                    "listen_port": int(http_port),
-                },
-            ],
+            **config_skeleton(
+                log_path=self.log_path,
+                socks_port=socks_port,
+                http_port=http_port,
+                dns_schema="v12",
+            ),
             "endpoints": [
                 awg_endpoint(server_host, awg, bind_iface=bind_iface)
             ],
@@ -1001,7 +1027,7 @@ class SingboxModeManager:
         deadline = time.monotonic() + timeout
         interval = 0.05
         while time.monotonic() < deadline:
-            if _port_open("127.0.0.1", socks_port):
+            if port_open("127.0.0.1", socks_port, timeout=0.35):
                 kind = "mixed + TUN" if enable_tun else "mixed"
                 self.log(
                     f"sing-box слушает SOCKS :{socks_port} и HTTP :{http_port} ({kind})"
@@ -1262,9 +1288,3 @@ class SingboxModeManager:
         self.log("брандмауэр: sing-box разрешён без окна Windows")
 
 
-def _port_open(host: str, port: int, timeout: float = 0.35) -> bool:
-    try:
-        with socket.create_connection((host, port), timeout=timeout):
-            return True
-    except OSError:
-        return False

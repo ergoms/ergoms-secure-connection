@@ -12,13 +12,10 @@ from typing import Any, Callable
 
 from desktop import procutil
 from desktop.config_io import get_local_socks_port, get_reverse_ssh, get_server_host
+from desktop.logutil import noop
 from desktop.paths import Paths, bundle_dir, is_frozen, resolve_ssh_identity, self_command
 
 LogFn = Callable[[str], None]
-
-
-def _noop(_msg: str) -> None:
-    pass
 
 
 def _which(name: str) -> str | None:
@@ -124,7 +121,7 @@ def write_hint(paths: Paths, cfg: dict[str, Any]) -> Path:
 
 
 class ReverseSshManager:
-    def __init__(self, paths: Paths, log: LogFn = _noop) -> None:
+    def __init__(self, paths: Paths, log: LogFn = noop) -> None:
         self.paths = paths
         self.log = log
         self.pid_path = paths.var_dir / "reverse-ssh.pid"

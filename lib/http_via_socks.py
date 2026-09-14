@@ -14,9 +14,17 @@ import fnmatch
 import ipaddress
 import select
 import socket
-import struct
 import threading
 from urllib.parse import urlsplit
+
+try:
+    from lib.http_connect import http_connect, parse_proxy
+    from lib.socks5 import connect as socks5_dial
+    from lib.socks5 import tune_tcp
+except ImportError:
+    from http_connect import http_connect, parse_proxy
+    from socks5 import connect as socks5_dial
+    from socks5 import tune_tcp
 
 # Hostnames that must never go through the VPS tunnel
 _BLOCKED_HOSTNAMES = frozenset(
@@ -32,15 +40,7 @@ _BLOCKED_HOSTNAMES = frozenset(
 
 
 def _tune(sock: socket.socket) -> None:
-    try:
-        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-    except OSError:
-        pass
-    try:
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1 << 20)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1 << 20)
-    except OSError:
-        pass
+    tune_tcp(sock, buffers=True)
 
 
 def _is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
@@ -83,34 +83,15 @@ def socks5_connect(socks_host: str, socks_port: int, host: str, port: int) -> so
         raise OSError(f"destination blocked (private/metadata): {host}")
     if not (1 <= port <= 65535):
         raise OSError(f"bad port: {port}")
-
-    s = socket.create_connection((socks_host, socks_port), timeout=30)
-    _tune(s)
-    s.sendall(b"\x05\x01\x00")
-    resp = s.recv(2)
-    if len(resp) != 2 or resp[0] != 5 or resp[1] != 0:
-        s.close()
-        raise OSError(f"SOCKS5 auth failed: {resp!r}")
-
-    host_b = host.encode("idna")
-    req = b"\x05\x01\x00\x03" + bytes([len(host_b)]) + host_b + struct.pack("!H", port)
-    s.sendall(req)
-    hdr = s.recv(4)
-    if len(hdr) != 4 or hdr[0] != 5 or hdr[1] != 0:
-        s.close()
-        raise OSError(f"SOCKS5 connect failed: {hdr!r}")
-    atyp = hdr[3]
-    if atyp == 1:
-        s.recv(4 + 2)
-    elif atyp == 3:
-        ln = s.recv(1)[0]
-        s.recv(ln + 2)
-    elif atyp == 4:
-        s.recv(16 + 2)
-    else:
-        s.close()
-        raise OSError(f"SOCKS5 bad atyp={atyp}")
-    return s
+    return socks5_dial(
+        socks_host,
+        socks_port,
+        host,
+        port,
+        timeout=30,
+        tune=True,
+        buffers=True,
+    )
 
 
 def pump(a: socket.socket, b: socket.socket) -> None:
@@ -331,27 +312,20 @@ def _direct_connect(host: str, port: int) -> socket.socket:
 
 
 def _corporate_connect(proxy: str, host: str, port: int) -> socket.socket:
-    phost, _, pport_s = proxy.replace("http://", "").replace("https://", "").partition(":")
-    pport = int(pport_s or 3128)
-    s = socket.create_connection((phost, pport), timeout=30)
-    _tune(s)
-    req = (
-        f"CONNECT {host}:{port} HTTP/1.1\r\n"
-        f"Host: {host}:{port}\r\n"
-        f"Proxy-Connection: keep-alive\r\n\r\n"
-    )
-    s.sendall(req.encode("ascii", "replace"))
-    resp = b""
-    while b"\r\n\r\n" not in resp and len(resp) < 8192:
-        chunk = s.recv(4096)
-        if not chunk:
-            break
-        resp += chunk
-    status = resp.split(b"\r\n", 1)[0].decode("ascii", "replace")
-    if " 200 " not in status:
-        s.close()
-        raise OSError(f"corporate CONNECT failed: {status}")
-    return s
+    phost, pport = parse_proxy(proxy)
+    try:
+        sock, _status = http_connect(
+            phost,
+            pport,
+            host,
+            port,
+            timeout=30,
+            buffers=True,
+            require_spaced_200=True,
+        )
+    except OSError as exc:
+        raise OSError(f"corporate CONNECT failed: {exc}") from exc
+    return sock
 
 
 def _connect_bypass(

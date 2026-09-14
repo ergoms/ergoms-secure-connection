@@ -9,6 +9,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Callable
 
+from desktop.logutil import noop
 from desktop.paths import Paths, bundle_dir
 
 
@@ -286,10 +287,6 @@ def normalize_hy2_sni(value: Any, *, fallback: str = HY2_DEFAULT_SNI) -> str:
 
 # Legacy .env keys → config.json (migration only)
 _ENV_BOOL_TRUE = frozenset({"1", "true", "yes", "on"})
-
-
-def _noop(msg: str) -> None:
-    pass
 
 
 def _truthy(val: Any) -> bool:
@@ -707,43 +704,6 @@ def _mirror_to_environ(cfg: dict[str, Any]) -> None:
         os.environ.pop("CORPORATE_PROXY", None)
 
 
-# Back-compat aliases
-def apply_dotenv(path: Path, *, force: bool = False) -> dict[str, str]:
-    """Deprecated: prefer apply_config. Still syncs runtime from config (+ legacy .env)."""
-    root = path.parent if path.name == ".env" else path.parent
-    cfg_path = root / "config.json"
-    if cfg_path.is_file():
-        apply_config(cfg_path, force=force, env_path=path if path.is_file() else None)
-    elif path.is_file():
-        data = load_dotenv(path)
-        for k, v in data.items():
-            os.environ[k] = v
-        return data
-    return {
-        "SOCKS_SCOPE": os.environ.get("SOCKS_SCOPE", "full"),
-        "TUN": os.environ.get("TUN", "0"),
-        "TUN_ELEVATE": os.environ.get("TUN_ELEVATE", "1"),
-    }
-
-
-def save_dotenv(path: Path, values: dict[str, str], preserve_comments: bool = True) -> None:
-    """Deprecated: write runtime switches into config.json instead of .env."""
-    del preserve_comments  # unused
-    cfg_path = path.parent / "config.json"
-    if cfg_path.is_file():
-        cfg = load_config(cfg_path)
-    else:
-        cfg = default_config_template()
-    cfg = migrate_env_into_config(cfg, values)
-    save_config(cfg_path, cfg)
-    apply_config(cfg_path, force=True)
-
-
-def update_env_key(path: Path, key: str, value: str) -> None:
-    """Deprecated name: set one runtime key in config.json."""
-    update_config_key(path.parent / "config.json" if path.name == ".env" else path, key, value)
-
-
 def update_config_key(path: Path, key: str, value: Any) -> None:
     """Set one config field (supports TUN / SOCKS_SCOPE legacy names)."""
     cfg = load_config(path) if path.is_file() else default_config_template()
@@ -1009,7 +969,7 @@ def get_tun_mtu(cfg: dict[str, Any] | None = None) -> int:
     return 1400
 
 
-def invoke_init(paths: Paths, log: LogFn = _noop) -> None:
+def invoke_init(paths: Paths, log: LogFn = noop) -> None:
     paths.ensure_dirs()
     bundled = bundle_dir()
     example_cfg = bundled / "config" / "config.example.json"
