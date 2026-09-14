@@ -253,62 +253,20 @@ fi
 sleep 1
 ss -lunp 2>/dev/null | grep -E ":${AWG_PORT}\\b" || echo "WARN: UDP :$AWG_PORT not listening"
 
-python3 - "$AWG_PORT" "$AWG_CLIENT_PRIVATE" "$AWG_SERVER_PUBLIC" "$AWG_PSK" \
-  "$AWG_ADDRESS_CLIENT" "$AWG_JC" "$AWG_JMIN" "$AWG_JMAX" "$AWG_S1" "$AWG_S2" \
-  "$AWG_H1" "$AWG_H2" "$AWG_H3" "$AWG_H4" <<'PY'
-import json, sys
-(
-    port, priv, pub, psk, addr, jc, jmin, jmax, s1, s2, h1, h2, h3, h4
-) = sys.argv[1:]
-blob = {
-    "port": int(port),
-    "private_key": priv,
-    "peer_public_key": pub,
-    "pre_shared_key": psk,
-    "address": addr,
-    "mtu": 1280,
-    "jc": int(jc),
-    "jmin": int(jmin),
-    "jmax": int(jmax),
-    "s1": int(s1),
-    "s2": int(s2),
-    "h1": h1,
-    "h2": h2,
-    "h3": h3,
-    "h4": h4,
-    "keepalive": 25,
-}
-print("\n--- transport.amneziawg ---")
-print(json.dumps({"amneziawg": blob}, indent=2))
-print("\n--- client .conf ---")
-print(f"""[Interface]
-PrivateKey = {priv}
-Address = {addr}
-MTU = 1280
-Jc = {jc}
-Jmin = {jmin}
-Jmax = {jmax}
-S1 = {s1}
-S2 = {s2}
-H1 = {h1}
-H2 = {h2}
-H3 = {h3}
-H4 = {h4}
-
-[Peer]
-PublicKey = {pub}
-PresharedKey = {psk}
-Endpoint = YOUR_VPS_IP:{port}
-AllowedIPs = 0.0.0.0/0, ::/0
-PersistentKeepalive = 25
-""")
-PY
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+EMIT="$ROOT/modes/vps/emit_client_json.py"
+if [[ -f "$EMIT" ]]; then
+  python3 "$EMIT"
+else
+  echo "WARN: $EMIT missing — client.json не собран" >&2
+fi
 
 cat <<EOF
 
 ========================================================================
 OK: AmneziaWG UDP :${AWG_PORT} (sing-box Reality/Hy2 не трогали)
-Ключи также в $CREDS. В клиенте: протокол AWG, вставьте .conf.
+Один файл на ПК: $STATE_DIR/client.json
+В клиенте: Настройки → Из файла. Reality, Hy2 и AWG уже внутри.
 На VPS в панели хостинга откройте UDP ${AWG_PORT}.
 ========================================================================
 EOF

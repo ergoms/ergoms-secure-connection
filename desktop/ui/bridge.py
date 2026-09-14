@@ -29,14 +29,18 @@ from desktop.config_io import (
     HY2_DEFAULT_SNI,
     REALITY_DEFAULT_SNI,
     STANDARD_BYPASS_PRESET,
+    apply_amnezia_to_config,
     apply_config,
     apply_corporate_profile,
     apply_standard_profile,
+    config_is_ready,
     default_config_template,
     ensure_config_defaults,
     get_tun_enabled,
     infer_corporate,
     load_config,
+    looks_like_wg_conf,
+    merge_imported_config,
     normalize_dial,
     normalize_hy2_sni,
     parse_amnezia_conf,
@@ -541,7 +545,7 @@ class GuiBridge(QObject):
             None,
             "Конфиг ERGOMS SECURE CONNECTION",
             "",
-            "Config (*.json *.enc);;JSON (*.json);;Encrypted (*.enc);;All files (*)",
+            "Config (*.json *.enc *.conf);;JSON (*.json);;Encrypted (*.enc);;AmneziaWG (*.conf);;All files (*)",
         )
         if not path:
             return
@@ -553,6 +557,11 @@ class GuiBridge(QObject):
     def _import_config_path(self, src: Path) -> None:
         raw = src.read_bytes()
         encrypted = raw.startswith(MAGIC) or src.suffix.lower() == ".enc"
+        existing = (
+            load_config(self.paths.config_path)
+            if self.paths.config_path.is_file()
+            else default_config_template()
+        )
         if encrypted:
             password, ok = QInputDialog.getText(
                 None,
@@ -562,19 +571,28 @@ class GuiBridge(QObject):
             )
             if not ok or not password:
                 return
-            cfg = decrypt_config(raw, password)
+            incoming = decrypt_config(raw, password)
+            cfg = merge_imported_config(existing, incoming)
         else:
-            data = json.loads(raw.decode("utf-8-sig"))
-            if not isinstance(data, dict):
-                raise ValueError("Файл не JSON-объект")
-            cfg = data
+            text = raw.decode("utf-8-sig")
+            if looks_like_wg_conf(text) or src.suffix.lower() == ".conf":
+                parsed = parse_amnezia_conf(text)
+                if not parsed.get("private_key") or not parsed.get("peer_public_key"):
+                    raise ValueError("В .conf нет PrivateKey или PublicKey пира")
+                cfg = apply_amnezia_to_config(existing, parsed)
+                cfg["transport"]["dial"] = "amneziawg"
+            else:
+                data = json.loads(text)
+                if not isinstance(data, dict):
+                    raise ValueError("Файл не JSON-объект")
+                cfg = merge_imported_config(existing, data)
         cfg = ensure_config_defaults(cfg)
         self.paths.ensure_dirs()
         save_config(self.paths.config_path, cfg)
         apply_config(self.paths.config_path, force=True)
         self.loadSettings()
         self._enqueue_log(f"Конфиг загружен из {src}")
-        self.toast.emit("Конфиг загружен", "info")
+        self.toast.emit("Конфиг загружен — Reality, Hy2 и AWG в одном файле", "info")
         self._refresh_status(force=True)
 
     @Slot()
@@ -607,47 +625,63 @@ class GuiBridge(QObject):
             parsed = parse_amnezia_conf(text)
             if not parsed.get("private_key") or not parsed.get("peer_public_key"):
                 raise ValueError("В .conf нет PrivateKey или PublicKey пира")
-            s = self._settings
-            s.insert("trDial", "amneziawg")
-            s.insert("awgPrivateKey", parsed["private_key"])
-            s.insert("awgPeerPublicKey", parsed["peer_public_key"])
-            s.insert("awgPresharedKey", parsed.get("pre_shared_key") or "")
-            s.insert("awgAddress", parsed.get("address") or AWG_DEFAULT_ADDRESS)
-            s.insert("awgPort", str(parsed.get("port") or AWG_DEFAULT_PORT))
-            s.insert("awgMtu", str(parsed.get("mtu") or AWG_DEFAULT_MTU))
-            s.insert("awgJc", str(parsed.get("jc") or 0))
-            s.insert("awgJmin", str(parsed.get("jmin") or 0))
-            s.insert("awgJmax", str(parsed.get("jmax") or 0))
-            s.insert("awgS1", str(parsed.get("s1") or 0))
-            s.insert("awgS2", str(parsed.get("s2") or 0))
-            s.insert("awgH1", str(parsed.get("h1") or ""))
-            s.insert("awgH2", str(parsed.get("h2") or ""))
-            s.insert("awgH3", str(parsed.get("h3") or ""))
-            s.insert("awgH4", str(parsed.get("h4") or ""))
-            host = str(parsed.get("host") or "").strip()
-            if host:
-                s.insert("serverHost", host)
-            self._enqueue_log("AmneziaWG .conf загружен")
-            self.toast.emit("AmneziaWG конфиг подставлен — нажмите Сохранить", "info")
+            existing = (
+                load_config(self.paths.config_path)
+                if self.paths.config_path.is_file()
+                else default_config_template()
+            )
+            cfg = apply_amnezia_to_config(existing, parsed)
+            cfg["transport"]["dial"] = "amneziawg"
+            self.paths.ensure_dirs()
+            save_config(self.paths.config_path, cfg)
+            apply_config(self.paths.config_path, force=True)
+            self.loadSettings()
+            self._enqueue_log("AmneziaWG записан в config.json (остальные протоколы на месте)")
+            self.toast.emit("AmneziaWG в общем config.json", "info")
+            self._refresh_status(force=True)
+        except Exception as exc:  # noqa: BLE001
+            self.toast.emit(str(exc), "error")
+
+    @Slot()
+    def exportConfigFile(self) -> None:
+        if self.paths.config_path.is_file():
+            cfg = ensure_config_defaults(load_config(self.paths.config_path))
+        else:
+            cfg = default_config_template()
+        path, _ = QFileDialog.getSaveFileName(
+            None,
+            "Сохранить config.json",
+            "config.json",
+            "JSON (*.json);;All files (*)",
+        )
+        if not path:
+            return
+        dest = Path(path)
+        if dest.suffix.lower() != ".json":
+            dest = dest.with_suffix(".json")
+        try:
+            save_config(dest, cfg)
+            self._enqueue_log(f"Копия конфига → {dest}")
+            self.toast.emit("Один JSON на все протоколы сохранён", "info")
         except Exception as exc:  # noqa: BLE001
             self.toast.emit(str(exc), "error")
 
     def _sync_config_ready(self) -> None:
-        uuid = str(self._settings.value("trUuid") or "").strip()
-        host = str(self._settings.value("serverHost") or "").strip()
-        ready = (
-            bool(uuid)
-            and "REPLACE" not in uuid.upper()
-            and len(uuid) >= 8
-            and bool(host)
-            and "YOUR_VPS" not in host
-        )
+        try:
+            cfg = (
+                load_config(self.paths.config_path)
+                if self.paths.config_path.is_file()
+                else None
+            )
+        except (OSError, json.JSONDecodeError, ValueError):
+            cfg = None
+        ready = config_is_ready(cfg)
         if ready != self._config_ready:
             self._config_ready = ready
             self.configReadyChanged.emit()
         if not ready and not self._active and not self._busy:
             self._status_title = "Нет конфига"
-            self._status_sub = "Загрузите config.json или .enc"
+            self._status_sub = "Загрузите один config.json (Reality + Hy2 + AWG)"
             self._power_text = "Загрузить конфиг"
             self.statusTitleChanged.emit()
             self.statusSubChanged.emit()
@@ -1105,7 +1139,7 @@ class GuiBridge(QObject):
             power = "Отключить"
         else:
             title, sub, color = (
-                ("Нет конфига", "Загрузите config.json или .enc", _C_MUTED)
+                ("Нет конфига", "Загрузите один config.json (Reality + Hy2 + AWG)", _C_MUTED)
                 if not self._config_ready
                 else ("Отключено", "", _C_MUTED)
             )

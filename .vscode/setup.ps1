@@ -158,6 +158,9 @@ function Install-SingBox {
     $py = Get-VenvPython
     & $py -m desktop download-sing-box | Out-Host
     if ($LASTEXITCODE -ne 0) { throw "download-sing-box failed: $LASTEXITCODE" }
+    Write-Host 'download-sing-box-awg'
+    & $py -m desktop download-sing-box-awg | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw "download-sing-box-awg failed: $LASTEXITCODE" }
 }
 
 function Invoke-PyInstaller {
@@ -170,7 +173,8 @@ function Invoke-PyInstaller {
     & $poetry install --extras gui --extras build
     if ($LASTEXITCODE -ne 0) { throw "poetry install failed: $LASTEXITCODE" }
     $sb = Join-Path $Root 'tools\sing-box.exe'
-    if (-not (Test-Path -LiteralPath $sb)) {
+    $awg = Join-Path $Root 'tools\ergoms-tun-awg.exe'
+    if (-not (Test-Path -LiteralPath $sb) -or -not (Test-Path -LiteralPath $awg)) {
         Install-SingBox
     }
     $py = Get-VenvPython

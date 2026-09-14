@@ -358,7 +358,7 @@ Item {
 
                         Text {
                             width: parent.width
-                            text: "Дом: UDP с обфускацией handshake. Офисный Squid этот протокол не проводит."
+                            text: "Дом: UDP с обфускацией handshake. Ключи живут в общем config.json вместе с Reality и Hy2. Отдельный .conf не обязателен."
                             color: T.muted
                             font.pixelSize: 11
                             font.family: T.fontUi
@@ -595,6 +595,12 @@ Item {
                     text: "Из файла"
                     enabled: !bridge.active && !bridge.busy
                     onClicked: bridge.importConfigFile()
+                }
+                PrimaryButton {
+                    Layout.fillWidth: true
+                    text: "Копия"
+                    enabled: !bridge.active && !bridge.busy
+                    onClicked: bridge.exportConfigFile()
                 }
                 PrimaryButton {
                     Layout.fillWidth: true

@@ -79,6 +79,15 @@ begin
   Result := Uninst;
 end;
 
+procedure SetWizardStatus(const Title, Detail: String);
+begin
+  if WizardSilent then
+    Exit;
+  WizardForm.StatusLabel.Caption := Title;
+  WizardForm.FilenameLabel.Caption := Detail;
+  WizardForm.Update;
+end;
+
 procedure KillAppProcesses;
 var
   ResultCode: Integer;
@@ -86,6 +95,7 @@ begin
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM "{#AppExeName}" /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM "sing-box.exe" /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM "ergoms-tun.exe" /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM "ergoms-tun-awg.exe" /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
 procedure DeleteRunValue(const Name: String);
@@ -109,25 +119,88 @@ begin
   DeleteRunValue('ops-content');
 end;
 
+function ExtractUninstallExe(const Raw: String): String;
+var
+  S: String;
+  P: Integer;
+begin
+  S := Trim(Raw);
+  if (Length(S) > 0) and (S[1] = '"') then
+  begin
+    Delete(S, 1, 1);
+    P := Pos('"', S);
+    if P > 0 then
+      S := Copy(S, 1, P - 1);
+  end
+  else
+  begin
+    P := Pos(' /', S);
+    if P > 0 then
+      S := Copy(S, 1, P - 1);
+  end;
+  Result := Trim(S);
+end;
+
 procedure UninstallPrevious;
 var
-  Uninst: String;
+  Uninst, Flags: String;
   ResultCode: Integer;
+  ShowCmd: Integer;
 begin
-  Uninst := GetUninstallString();
+  Uninst := ExtractUninstallExe(GetUninstallString());
   if Uninst = '' then
     Exit;
-  StringChangeEx(Uninst, '"', '', True);
-  Exec(Uninst, '/VERYSILENT /NORESTART /SUPPRESSMSGBOXES', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  if WizardSilent then
+  begin
+    Flags := '/VERYSILENT /NORESTART /SUPPRESSMSGBOXES';
+    ShowCmd := SW_HIDE;
+  end
+  else
+  begin
+    Flags := '/SILENT /NORESTART';
+    ShowCmd := SW_SHOWNORMAL;
+    WizardForm.Hide;
+  end;
+  try
+    Exec(Uninst, Flags, '', ShowCmd, ewWaitUntilTerminated, ResultCode);
+  finally
+    if not WizardSilent then
+    begin
+      WizardForm.Show;
+      WizardForm.Refresh;
+    end;
+  end;
+end;
+
+function UpdateReadyMemo(Space, NewLine, MemoUserInfoInfo, MemoDirInfo,
+  MemoTypeInfo, MemoComponentsInfo, MemoGroupInfo, MemoTasksInfo: String): String;
+begin
+  Result := '';
+  if GetUninstallString() <> '' then
+    Result := Result + 'Удаление предыдущей версии' + NewLine +
+      Space + 'Сначала откроется окно удаления со шкалой прогресса, затем установка.' + NewLine + NewLine;
+  if MemoDirInfo <> '' then
+    Result := Result + MemoDirInfo + NewLine + NewLine;
+  if MemoGroupInfo <> '' then
+    Result := Result + MemoGroupInfo + NewLine + NewLine;
+  if MemoTasksInfo <> '' then
+    Result := Result + MemoTasksInfo;
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   NeedsRestart := False;
   Result := '';
+  SetWizardStatus('Остановка запущенной программы…', '{#AppName}');
   KillAppProcesses;
-  UninstallPrevious;
+  if GetUninstallString() <> '' then
+  begin
+    SetWizardStatus('Удаление предыдущей версии…', 'Сейчас откроется окно удаления');
+    UninstallPrevious;
+  end;
+  SetWizardStatus('Очистка остатков предыдущей версии…', ExpandConstant('{localappdata}\{#AppName}'));
   WipeLeftovers;
+  SetWizardStatus('Установка файлов…', '');
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);

@@ -82,6 +82,7 @@ install_singbox() {
   local py
   py="$(venv_python)"
   "$py" -m desktop download-sing-box
+  "$py" -m desktop download-sing-box-awg
 }
 
 run_pyinstaller() {
@@ -92,7 +93,8 @@ run_pyinstaller() {
     poetry="$(install_poetry)"
   fi
   "$poetry" install --extras gui --extras build
-  if [[ ! -x "${ROOT}/tools/sing-box" && ! -x "${ROOT}/tools/sing-box.exe" ]]; then
+  if [[ ! -x "${ROOT}/tools/sing-box" && ! -x "${ROOT}/tools/sing-box.exe" ]] \
+     || [[ ! -x "${ROOT}/tools/sing-box-awg" && ! -f "${ROOT}/tools/ergoms-tun-awg.exe" ]]; then
     install_singbox
   fi
   py="$(venv_python)"

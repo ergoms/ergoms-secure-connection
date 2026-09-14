@@ -141,6 +141,143 @@ def parse_amnezia_conf(text: str) -> dict[str, Any]:
     }
 
 
+def looks_like_wg_conf(text: str) -> bool:
+    low = str(text or "").lower()
+    return "[interface]" in low and "privatekey" in low
+
+
+def apply_amnezia_to_config(cfg: dict[str, Any], parsed: dict[str, Any]) -> dict[str, Any]:
+    """Merge wg-quick / Amnezia fields into client config.json (other dials stay)."""
+    out = ensure_config_defaults(cfg)
+    awg = out["transport"].setdefault("amneziawg", {})
+    if not isinstance(awg, dict):
+        awg = {}
+        out["transport"]["amneziawg"] = awg
+    for key in (
+        "private_key",
+        "peer_public_key",
+        "pre_shared_key",
+        "address",
+        "port",
+        "mtu",
+        "jc",
+        "jmin",
+        "jmax",
+        "s1",
+        "s2",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "keepalive",
+    ):
+        val = parsed.get(key)
+        if val in (None, ""):
+            continue
+        awg[key] = val
+    host = str(parsed.get("host") or "").strip()
+    if host:
+        out.setdefault("server", {})
+        if isinstance(out["server"], dict):
+            out["server"]["host"] = host
+    return ensure_config_defaults(out)
+
+
+def _nonempty(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    return True
+
+
+def merge_imported_config(
+    base: dict[str, Any] | None, incoming: dict[str, Any]
+) -> dict[str, Any]:
+    """Fold a full or partial client JSON into one file. Empty values do not wipe keys."""
+    src = deepcopy(incoming if isinstance(incoming, dict) else {})
+    keys = set(src)
+    fragment_keys = {
+        "amneziawg",
+        "hysteria2",
+        "uuid",
+        "public_key",
+        "short_id",
+        "server_name",
+        "dial",
+        "type",
+    }
+    if keys & fragment_keys and "transport" not in src and "server" not in src:
+        wrap: dict[str, Any] = {}
+        for key in ("amneziawg", "hysteria2"):
+            if key in src:
+                wrap[key] = src.pop(key)
+        for key in ("uuid", "public_key", "short_id", "server_name", "port", "dial", "type"):
+            if key in src:
+                wrap[key] = src.pop(key)
+        src = {"transport": wrap, **src}
+
+    if base is None:
+        return ensure_config_defaults(src)
+
+    out = deepcopy(base)
+    inc_tr = src.get("transport")
+    if isinstance(inc_tr, dict):
+        dst_tr = out.setdefault("transport", {})
+        if not isinstance(dst_tr, dict):
+            dst_tr = {}
+            out["transport"] = dst_tr
+        for key, val in inc_tr.items():
+            if key in ("hysteria2", "amneziawg") and isinstance(val, dict):
+                cur = dst_tr.get(key)
+                if not isinstance(cur, dict):
+                    cur = {}
+                for sub, subval in val.items():
+                    if _nonempty(subval):
+                        cur[sub] = subval
+                dst_tr[key] = cur
+            elif _nonempty(val):
+                dst_tr[key] = val
+    for key, val in src.items():
+        if key == "transport":
+            continue
+        if (
+            key in ("server", "tun", "reverse_ssh")
+            and isinstance(val, dict)
+            and isinstance(out.get(key), dict)
+        ):
+            merged = dict(out[key])
+            for sub, subval in val.items():
+                if _nonempty(subval):
+                    merged[sub] = subval
+            out[key] = merged
+        elif _nonempty(val):
+            out[key] = val
+    return ensure_config_defaults(out)
+
+
+def config_is_ready(cfg: dict[str, Any] | None) -> bool:
+    """True if host + at least one transport (Reality / Hy2 / AWG) is filled."""
+    if not isinstance(cfg, dict):
+        return False
+    host = str((cfg.get("server") or {}).get("host") or "").strip()
+    if not host or "YOUR_VPS" in host.upper():
+        return False
+    tr = cfg.get("transport")
+    if not isinstance(tr, dict):
+        return False
+    uuid = str(tr.get("uuid") or "").strip()
+    if uuid and "REPLACE" not in uuid.upper() and len(uuid) >= 8:
+        return True
+    hy = tr.get("hysteria2") if isinstance(tr.get("hysteria2"), dict) else {}
+    if str(hy.get("password") or "").strip():
+        return True
+    awg = tr.get("amneziawg") if isinstance(tr.get("amneziawg"), dict) else {}
+    priv = str(awg.get("private_key") or "").strip()
+    pub = str(awg.get("peer_public_key") or "").strip()
+    return bool(priv and pub and "REPLACE" not in priv.upper())
+
+
 def normalize_hy2_sni(value: Any, *, fallback: str = HY2_DEFAULT_SNI) -> str:
     sni = str(value or "").strip()
     if not sni or sni.lower() in _BLOCKED_HY2_SNI:
