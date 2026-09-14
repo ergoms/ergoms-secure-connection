@@ -487,7 +487,10 @@ def _awg_cfg(
                 **({"bind_interface": bind_iface} if bind_iface else {}),
             }
         ],
-        "route": _route_block(bind_iface),
+        "route": {
+            **_route_block(bind_iface),
+            "default_domain_resolver": "dns-local",
+        },
     }
 
 

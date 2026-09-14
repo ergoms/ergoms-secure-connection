@@ -177,11 +177,13 @@ def awg_endpoint(
     }
     psk = str(opts.get("pre_shared_key") or "").strip()
     if psk:
-        peer["pre_shared_key"] = psk
+        # AWG fork: peers.preshared_key (not WireGuard's pre_shared_key).
+        peer["preshared_key"] = psk
+    # spoofi/sing-box-awg 1.13 registers type "awg", not "wireguard".
+    # Standard WG endpoint rejects jc/jmin/… as unknown fields.
     endpoint: dict[str, Any] = {
-        "type": "wireguard",
+        "type": "awg",
         "tag": tag,
-        "system": False,
         "mtu": int(opts.get("mtu") or AWG_DEFAULT_MTU),
         "address": addresses or [AWG_DEFAULT_ADDRESS],
         "private_key": opts["private_key"],
@@ -196,6 +198,8 @@ def awg_endpoint(
         if val:
             endpoint[hdr] = val
     endpoint.update(_udp_bind(bind_iface))
+    # 1.13: peer hostname must resolve on underlay, not through the tunnel.
+    endpoint["domain_resolver"] = "dns-local"
     return endpoint
 
 
@@ -675,6 +679,7 @@ class SingboxModeManager:
                     **({"bind_interface": bind_iface} if bind_iface else {}),
                 }
             ]
+            box["route"]["default_domain_resolver"] = "dns-local"
         return box
 
     def _minimal_hy2_config(
@@ -794,6 +799,7 @@ class SingboxModeManager:
             "route": {
                 "auto_detect_interface": False,
                 **({"default_interface": bind_iface} if bind_iface else {}),
+                "default_domain_resolver": "dns-local",
                 "final": "proxy",
             },
         }
