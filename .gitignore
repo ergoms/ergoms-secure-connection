@@ -16,6 +16,9 @@ creds/*
 !creds/certs/
 creds/certs/*
 !creds/certs/.gitkeep
+!creds/awg/
+creds/awg/*
+!creds/awg/.gitkeep
 
 # Logs
 logs/*
@@ -51,3 +54,4 @@ tools/*
 !tools/.gitkeep
 
 .venv/
+.pytest_cache/

@@ -5,7 +5,7 @@ Usage:
   ssh -o ProxyCommand="python connect_proxy.py %h %p" ...
 
 Env:
-  ERGOMS_SC_HTTP_PROXY   default: 192.0.2.10:3128
+  ERGOMS_SC_HTTP_PROXY   corporate HTTP proxy host:port
 """
 
 from __future__ import annotations

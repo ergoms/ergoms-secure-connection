@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-CORPORATE_PROXY_PRESET = "192.0.2.10:3128"
-CORPORATE_BYPASS_PRESET = ["*.intranet.example", "*.local", "*.lan"]
+CORPORATE_PROXY_PRESET = ""
+CORPORATE_BYPASS_PRESET = ["*.local", "*.lan"]
 STANDARD_BYPASS_PRESET = ["*.local", "*.lan"]
 
 REALITY_DEFAULT_SNI = "www.cloudflare.com"

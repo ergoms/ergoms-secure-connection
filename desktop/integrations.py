@@ -295,10 +295,6 @@ class IntegrationOps:
 
     def set_git_singbox(self, cfg: dict[str, Any], http_port: int) -> None:
         """Point CLI/docker/browser at sing-box HTTP inbound + PAC server."""
-        # Home Windows: PAC/git/Docker must not hit UDP until handshake is up.
-        if getattr(self, "_defer_win_tun", False):
-            self.log("дом: PAC/git/Docker после проверки выхода")
-            return
         self._apply_integrations(cfg, http_port)
 
 
@@ -356,7 +352,7 @@ class IntegrationOps:
         tun_live = False
         if sys.platform == "win32":
             tun_live = bool(wait_tun_iface(timeout=0.05))
-        elif get_tun_enabled(cfg) and not getattr(self, "_defer_win_tun", False):
+        elif get_tun_enabled(cfg):
             tun_live = True
         office = bool(resolve_corporate_proxy(cfg))
         if tun_live and not office:

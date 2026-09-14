@@ -127,24 +127,9 @@ class ConnectionOps:
         # steal AWG UDP (CONNECT still looks fine). Defer KS until HTTPS works.
         udp_dial = dial == "amneziawg"
         defer_win = sys.platform == "win32" and (not bool(office_proxy) or udp_dial)
-        # AWG binds underlay — TUN inbound (auto_route off) can start immediately;
-        # split/KS after HTTPS. Reality: apply KS immediately so a failed
-        # handshake cannot leak.
-        self._defer_win_tun = False
         self._defer_win_ks = bool(defer_win and kill_switch and udp_dial)
         self._hold_watchdog = True
-        self._box_boot = {
-            "server_host": host,
-            "transport": transport,
-            "corporate_proxy": office_proxy or "",
-            "socks_port": socks_port,
-            "http_port": http_port,
-            "sing_box_path": sing_box_path,
-            "bypass_hosts": bypass,
-            "mtu": get_tun_mtu(cfg),
-            "vps_proxy_ports": get_vps_proxy_ports(cfg),
-        }
-        start_tun = enable_tun and not self._defer_win_tun
+        start_tun = enable_tun
         start_ks = kill_switch and not self._defer_win_ks
         if (
             self._defer_win_ks
@@ -164,8 +149,6 @@ class ConnectionOps:
             prelude = leftover_cmds
             if allow:
                 remember_kill_switch_plan(self.paths.var_dir, allow)
-        if self._defer_win_tun:
-            self.log("дом: сначала AmneziaWG без TUN, маршруты поставлю после проверки")
         postlude = (
             kill_switch_pin_cmds(self.paths.var_dir, allow) if start_tun else []
         )
@@ -187,8 +170,7 @@ class ConnectionOps:
             postlude_cmds=postlude,
         )
         self.set_git_singbox(cfg, http_port)
-        if not getattr(self, "_defer_win_tun", False):
-            self._maybe_start_reverse_ssh(cfg)
+        self._maybe_start_reverse_ssh(cfg)
         state = {
             "mode": "singbox",
             "scope": get_socks_scope(),
@@ -239,7 +221,7 @@ class ConnectionOps:
             target=self._probe_exit,
             args=(
                 socks_port,
-                1.2 if self._defer_win_tun else (0.25 if awg else (0.4 if start_tun else 0.0)),
+                0.25 if awg else (0.4 if start_tun else 0.0),
             ),
             daemon=True,
         ).start()
@@ -407,75 +389,6 @@ class ConnectionOps:
         )
 
 
-    def _bring_up_win_tun(self) -> None:
-        """Restart sing-box with TUN only after HTTPS already works."""
-        boot = dict(getattr(self, "_box_boot", None) or {})
-        allow = list(getattr(self, "_pending_allow", []) or [])
-        want_ks = bool(getattr(self, "_defer_win_ks", False))
-        if not boot:
-            self.log("TUN: нет параметров запуска — оставляю SOCKS")
-            return
-        self.log("выход живой — поднимаю TUN")
-        remember_kill_switch_plan(self.paths.var_dir, allow)
-        try:
-            self.singbox.start(
-                **boot,
-                enable_tun=True,
-                elevate=True,
-                force_restart=True,
-                kill_switch=False,
-                prelude_cmds=[],
-                postlude_cmds=(
-                    kill_switch_pin_cmds(self.paths.var_dir, allow) if allow else []
-                ),
-            )
-        except Exception as exc:  # noqa: BLE001
-            self.log(f"TUN не поднялся ({exc}) — трафик через SOCKS")
-            return
-        if procutil.is_admin() and allow:
-            pin_kill_switch_underlay(
-                allow, var_dir=self.paths.var_dir, log=self.log, elevate=False
-            )
-        socks_port = int(boot.get("socks_port") or 1080)
-        time.sleep(0.8)
-        from desktop.watchdog import socks_https_probe
-
-        err = socks_https_probe(socks_port, timeout=10.0)
-        if err:
-            self.log(
-                f"TUN снова оборвал UDP ({err}) — возвращаю SOCKS без TUN"
-            )
-            try:
-                self.singbox.start(
-                    **boot,
-                    enable_tun=False,
-                    elevate=False,
-                    force_restart=True,
-                    kill_switch=False,
-                    prelude_cmds=[],
-                    postlude_cmds=[],
-                )
-            except Exception as exc:  # noqa: BLE001
-                self.log(f"откат на SOCKS: {exc}")
-            return
-        self._install_win_tun_routes(allow)
-        if want_ks:
-            apply_kill_switch(
-                allow, var_dir=self.paths.var_dir, log=self.log, blackhole=False
-            )
-        try:
-            raw = self.paths.state_path.read_text(encoding="utf-8")
-            st = json.loads(raw) if raw else {}
-            if isinstance(st, dict):
-                st["tun"] = True
-                self.paths.state_path.write_text(
-                    json.dumps(st, indent=2), encoding="utf-8"
-                )
-        except (OSError, json.JSONDecodeError):
-            pass
-        self.log("TUN готов (split default после живого UDP)")
-
-
     def _pin_underlay_later(self, allow: list[str]) -> None:
         for i, wait in enumerate((0.15, 0.4)):
             time.sleep(wait)
@@ -570,7 +483,7 @@ class ConnectionOps:
         self._exit_probe_hint = None
         self._want_watchdog = spawn_watchdog
         self.start_singbox_mode()
-        if spawn_watchdog and not getattr(self, "_defer_win_tun", False):
+        if spawn_watchdog:
             if procutil.is_admin() and not self._inprocess_helpers:
                 self.stop_watchdog_daemon()
             self.ensure_watchdog_daemon()

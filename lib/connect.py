@@ -133,7 +133,8 @@ def open_socks(target_host: str, target_port: int) -> socket.socket:
 def open_http(target_host: str, target_port: int) -> socket.socket:
     proxy_host, proxy_port = parse_endpoint(
         os.environ.get("ERGOMS_SC_HTTP_PROXY")
-        or os.environ.get("OPS_CONTENT_HTTP_PROXY", "192.0.2.10:3128"),
+        or os.environ.get("OPS_CONTENT_HTTP_PROXY")
+        or "",
         3128,
     )
     try:

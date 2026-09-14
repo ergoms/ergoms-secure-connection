@@ -1,6 +1,6 @@
 # ERGOMS SECURE CONNECTION
 
-Клиент и серверные скрипты для выхода в интернет через корпоративный Squid (`192.0.2.10:3128`) на **свой VPS** по **VLESS+Reality** (sing-box на порту 443).
+Клиент и серверные скрипты для выхода в интернет через корпоративный HTTP-прокси (Squid) на **свой VPS** по **VLESS+Reality** (sing-box на порту 443).
 
 Цепочка:
 
@@ -39,7 +39,15 @@ bash modes/vps/bootstrap_singbox_443.sh
 bash modes/vps/enable_amneziawg.sh
 ```
 
-Скрипт напечатает `client.json` и отдельный `amneziawg.conf`. В клиенте: **Настройки → Из файла** (JSON), затем **Загрузить .conf**. Проверка: `systemctl status ergoms-amneziawg`, `ss -lunp | grep ':51820'`. В панели хостинга открыть **UDP 51820**.
+Скрипт кладёт ключи в **`creds/awg/`** репозитория: `client.json` + `pc.conf` (первый клиент). Проверка: `systemctl status ergoms-amneziawg`, `ss -lunp | grep ':51820'`. В панели хостинга открыть **UDP 51820**.
+
+Ещё клиенты (каждый — свой `.conf`, свой IP `10.66.66.x`):
+
+```bash
+bash modes/vps/add_amneziawg_client.sh phone laptop
+bash modes/vps/add_amneziawg_client.sh --count 5
+python3 modes/vps/awg_clients.py list
+```
 
 Подсказки: `.\deploy.ps1` / `./deploy.sh`.
 
@@ -125,7 +133,7 @@ chmod +x "ERGOMS SECURE CONNECTION"
 |------|------------|
 | `server.host` | IP/hostname VPS |
 | `transport` | VLESS: uuid, public_key, short_id, `server_name` (Reality dest). `dial`: `vless-reality` / `amneziawg` |
-| `amneziawg.conf` | Клиентский AWG (только `.conf`, не JSON) |
+| `creds/awg/*.conf` | Клиентские AWG-ключи (по файлу на устройство) |
 | `socks_scope` | `full` или `github` (область PAC) |
 | `tun.enabled` / `tun.elevate` | TUN вместе с `on` (по умолчанию вкл.), запрос прав |
 | `kill_switch` | при обрыве резать интернет (по умолчанию вкл.; нужен TUN) |

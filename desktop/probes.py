@@ -75,7 +75,7 @@ class ProbeOps:
         if not self.singbox.running():
             self._exit_probe_error = self._exit_probe_error or "sing-box stopped"
             return
-        home_udp = bool(getattr(self, "_defer_win_tun", False))
+        home_udp = False
         probe_host, probe_path = "github.com", "/"
         try:
             cfg_now = self.config()
@@ -83,7 +83,7 @@ class ProbeOps:
             probe_host, probe_path = exit_probe_target(office=office)
             tr_now = require_transport(cfg_now)
             dial_now = choose_dial(tr_now, office=office)
-            home_udp = home_udp or dial_now == "amneziawg"
+            home_udp = dial_now == "amneziawg"
         except Exception:  # noqa: BLE001
             office = False
         self.log(f"проверка выхода через SOCKS :{socks_port} → {probe_host}:443…")
@@ -191,10 +191,7 @@ class ProbeOps:
         self._exit_probe_hint = None
         self._fail_closed = False
         self.log(f"проверка выхода: OK (HTTPS {probe_host} через SOCKS)")
-        if getattr(self, "_defer_win_tun", False):
-            self._defer_win_tun = False
-            self._bring_up_win_tun()
-        elif getattr(self, "_pending_win_tun", False):
+        if getattr(self, "_pending_win_tun", False):
             self._pending_win_tun = False
             allow = list(getattr(self, "_pending_allow", []) or [])
             self.log("выход живой — ставлю TUN split default")

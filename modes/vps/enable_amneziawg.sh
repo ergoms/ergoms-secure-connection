@@ -15,8 +15,8 @@ CONF="$AWG_DIR/awg0.conf"
 UNIT=/etc/systemd/system/ergoms-amneziawg.service
 GO_VERSION="${GO_VERSION:-1.24.6}"
 AWG_PORT_OVERRIDE="${AWG_PORT:-}"
-CLIENT_ADDR_DEFAULT="10.66.66.2/32"
 SERVER_ADDR_DEFAULT="10.66.66.1/24"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 mkdir -p "$STATE_DIR" "$AWG_DIR"
 touch "$CREDS"
@@ -132,15 +132,7 @@ if [[ -z "${AWG_SERVER_PRIVATE:-}" ]]; then
   AWG_SERVER_PRIVATE="$(awg genkey)"
 fi
 AWG_SERVER_PUBLIC="$(printf '%s\n' "$AWG_SERVER_PRIVATE" | awg pubkey)"
-if [[ -z "${AWG_CLIENT_PRIVATE:-}" ]]; then
-  AWG_CLIENT_PRIVATE="$(awg genkey)"
-fi
-AWG_CLIENT_PUBLIC="$(printf '%s\n' "$AWG_CLIENT_PRIVATE" | awg pubkey)"
-if [[ -z "${AWG_PSK:-}" ]]; then
-  AWG_PSK="$(awg genpsk)"
-fi
 AWG_ADDRESS_SERVER="${AWG_ADDRESS_SERVER:-$SERVER_ADDR_DEFAULT}"
-AWG_ADDRESS_CLIENT="${AWG_ADDRESS_CLIENT:-$CLIENT_ADDR_DEFAULT}"
 
 if [[ -z "${AWG_JC:-}" || "$AWG_JC" == "0" ]]; then
   AWG_JC="$(python3 -c 'import secrets; print(secrets.randbelow(8)+3)')"
@@ -168,11 +160,7 @@ WAN_IFACE="${WAN_IFACE:-eth0}"
 upsert_cred AWG_PORT "$AWG_PORT"
 upsert_cred AWG_SERVER_PRIVATE "$AWG_SERVER_PRIVATE"
 upsert_cred AWG_SERVER_PUBLIC "$AWG_SERVER_PUBLIC"
-upsert_cred AWG_CLIENT_PRIVATE "$AWG_CLIENT_PRIVATE"
-upsert_cred AWG_CLIENT_PUBLIC "$AWG_CLIENT_PUBLIC"
-upsert_cred AWG_PSK "$AWG_PSK"
 upsert_cred AWG_ADDRESS_SERVER "$AWG_ADDRESS_SERVER"
-upsert_cred AWG_ADDRESS_CLIENT "$AWG_ADDRESS_CLIENT"
 upsert_cred AWG_JC "$AWG_JC"
 upsert_cred AWG_JMIN "$AWG_JMIN"
 upsert_cred AWG_JMAX "$AWG_JMAX"
@@ -183,30 +171,11 @@ upsert_cred AWG_H2 "$AWG_H2"
 upsert_cred AWG_H3 "$AWG_H3"
 upsert_cred AWG_H4 "$AWG_H4"
 
-echo "==> Writing $CONF (iface $WAN_IFACE, UDP :$AWG_PORT)"
-cat >"$CONF" <<EOF
-[Interface]
-Address = ${AWG_ADDRESS_SERVER}
-ListenPort = ${AWG_PORT}
-PrivateKey = ${AWG_SERVER_PRIVATE}
-Jc = ${AWG_JC}
-Jmin = ${AWG_JMIN}
-Jmax = ${AWG_JMAX}
-S1 = ${AWG_S1}
-S2 = ${AWG_S2}
-H1 = ${AWG_H1}
-H2 = ${AWG_H2}
-H3 = ${AWG_H3}
-H4 = ${AWG_H4}
-PostUp = iptables -A FORWARD -i awg0 -j ACCEPT; iptables -A FORWARD -o awg0 -j ACCEPT; iptables -t nat -A POSTROUTING -o ${WAN_IFACE} -j MASQUERADE
-PostDown = iptables -D FORWARD -i awg0 -j ACCEPT; iptables -D FORWARD -o awg0 -j ACCEPT; iptables -t nat -D POSTROUTING -o ${WAN_IFACE} -j MASQUERADE
+echo "==> Client keys → $ROOT/creds/awg"
+python3 "$ROOT/modes/vps/awg_clients.py" ensure
 
-[Peer]
-PublicKey = ${AWG_CLIENT_PUBLIC}
-PresharedKey = ${AWG_PSK}
-AllowedIPs = ${AWG_ADDRESS_CLIENT}
-EOF
-chmod 600 "$CONF"
+echo "==> Writing $CONF (iface $WAN_IFACE, UDP :$AWG_PORT)"
+python3 "$ROOT/modes/vps/awg_clients.py" emit
 
 sysctl -w net.ipv4.ip_forward=1 >/dev/null
 mkdir -p /etc/sysctl.d
@@ -249,21 +218,16 @@ fi
 sleep 1
 ss -lunp 2>/dev/null | grep -E ":${AWG_PORT}\\b" || echo "WARN: UDP :$AWG_PORT not listening"
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-EMIT="$ROOT/modes/vps/emit_client_json.py"
-if [[ -f "$EMIT" ]]; then
-  python3 "$EMIT"
-else
-  echo "WARN: $EMIT missing — client.json не собран" >&2
-fi
-
 cat <<EOF
 
 ========================================================================
 OK: AmneziaWG UDP :${AWG_PORT} (sing-box Reality не трогали)
-JSON: $STATE_DIR/client.json
-AWG:  $STATE_DIR/amneziawg.conf
-В клиенте: Настройки → Из файла (JSON), затем Загрузить .conf.
+Ключи в репозитории: $ROOT/creds/awg/
+  client.json     — Reality
+  pc.conf         — первый AWG (и pc2.conf, phone.conf, …)
+Добавить ещё: bash modes/vps/add_amneziawg_client.sh phone
+              bash modes/vps/add_amneziawg_client.sh --count 5
+В клиенте: Из файла (client.json), затем Загрузить .conf.
 На VPS в панели хостинга откройте UDP ${AWG_PORT}.
 ========================================================================
 EOF

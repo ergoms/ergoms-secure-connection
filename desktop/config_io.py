@@ -473,7 +473,7 @@ def apply_corporate_profile(cfg: dict[str, Any]) -> dict[str, Any]:
         out["socks_scope"] = "full"
     else:
         out["socks_scope"] = "github"
-    if not filled_str(out.get("corporate_proxy")):
+    if not filled_str(out.get("corporate_proxy")) and CORPORATE_PROXY_PRESET:
         out["corporate_proxy"] = CORPORATE_PROXY_PRESET
     if not out.get("proxy_bypass"):
         out["proxy_bypass"] = list(CORPORATE_BYPASS_PRESET)

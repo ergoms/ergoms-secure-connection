@@ -90,12 +90,10 @@ class OpsClient(ConnectionOps, ProbeOps, IntegrationOps):
         self._exit_probe_error: str | None = None
         self._exit_probe_hint: str | None = None
         self._pending_win_tun = False
-        self._defer_win_tun = False
         self._defer_win_ks = False
         self._fail_closed = False
         self._hold_watchdog = False
         self._want_watchdog = False
-        self._box_boot: dict[str, Any] = {}
         self._pending_allow: list[str] = []
         atexit.register(self._atexit_teardown)
         if startup_cleanup:
