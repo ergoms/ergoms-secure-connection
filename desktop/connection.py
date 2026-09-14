@@ -124,46 +124,7 @@ class ConnectionOps:
         enable_tun = get_tun_enabled() or kill_switch
         if kill_switch and not get_tun_enabled():
             self.log("kill switch: поднимаю TUN")
-        leftover = leftover_vpn_ifaces()
-        leftover_cmds = leftover_vpn_default_cmds()
-        keep_gw = gateway_via_dest(host) or ""
-        stale = stale_default_cmds(keep_gw) if keep_gw else []
-        leftover_cmds = list(dict.fromkeys(leftover_cmds + stale))
-        idle_procs = foreign_vpn_processes()
-        live = leftover or foreign_vpn_live()
-        if leftover:
-            names = ", ".join(name for _idx, name in leftover)
-            self.log(
-                f"чужой туннель ещё поднят ({names}) — UDP с Ethernet, "
-                f"маршруты {keep_gw or 'underlay'} не трогаю"
-            )
-        elif live:
-            self.log(
-                "чужой туннель ещё поднят ("
-                + ", ".join(str(x) for x in live)
-                + ") — UDP с Ethernet"
-            )
-        elif idle_procs:
-            self.log(
-                "служба "
-                + ", ".join(str(x) for x in idle_procs)
-                + " установлена, туннель не поднят"
-            )
-        for row in default_route_lines():
-            self.log(f"default: {row}")
-        home = not bool(office_proxy)
-        if stale and not home:
-            shown = [c for c in stale if "-p" not in c]
-            self.log(
-                "лишний default второго VPN сниму: " + "; ".join(shown)
-            )
-        if leftover_cmds and procutil.is_admin() and not home:
-            for line in leftover_cmds:
-                args = [p for p in line.split(" ") if p]
-                procutil.run(args, timeout=8)
-            leftover_cmds = []
-        if home:
-            leftover_cmds = []
+        leftover_cmds = self._log_foreign_vpn(host, office_proxy)
         prelude: list[str] = []
         allow = self._kill_switch_hosts(cfg)
         # Home Windows: kill-switch /1 via 127.0.0.1 and TUN inbound both
@@ -297,13 +258,22 @@ class ConnectionOps:
         ).start()
 
 
-    def stop_singbox_mode(self, *, teardown: bool = True) -> None:
+    def _stop_session_core(self) -> Exception | None:
+        stop_err: Exception | None = None
         try:
             self.reverse_ssh.stop(scan_cmdline=False)
         except Exception as exc:  # noqa: BLE001
             self.log(f"reverse-ssh stop: {exc}")
-        self.singbox.stop()
+        try:
+            self.singbox.stop()
+        except Exception as exc:  # noqa: BLE001
+            stop_err = exc
+            self.log(f"sing-box не остановился: {exc}")
         self.stop_pac_server()
+        return stop_err
+
+    def stop_singbox_mode(self, *, teardown: bool = True) -> None:
+        self._stop_session_core()
         if teardown:
             self.teardown_overrides_if_dirty()
         self.paths.state_path.unlink(missing_ok=True)
@@ -525,10 +495,51 @@ class ConnectionOps:
             pin_kill_switch_underlay(
                 allow,
                 var_dir=self.paths.var_dir,
-                log=self.log if i in (0, 3) else (lambda _m: None),
+                log=self.log if i == 0 else (lambda _m: None),
                 elevate=False,
             )
 
+
+    def _log_foreign_vpn(self, host: str, office_proxy: str) -> list[str]:
+        leftover = leftover_vpn_ifaces()
+        leftover_cmds = leftover_vpn_default_cmds()
+        keep_gw = gateway_via_dest(host) or ""
+        stale = stale_default_cmds(keep_gw) if keep_gw else []
+        leftover_cmds = list(dict.fromkeys(leftover_cmds + stale))
+        idle_procs = foreign_vpn_processes()
+        live = leftover or foreign_vpn_live()
+        if leftover:
+            names = ", ".join(name for _idx, name in leftover)
+            self.log(
+                f"чужой туннель ещё поднят ({names}) — UDP с Ethernet, "
+                f"маршруты {keep_gw or 'underlay'} не трогаю"
+            )
+        elif live:
+            self.log(
+                "чужой туннель ещё поднят ("
+                + ", ".join(str(x) for x in live)
+                + ") — UDP с Ethernet"
+            )
+        elif idle_procs:
+            self.log(
+                "служба "
+                + ", ".join(str(x) for x in idle_procs)
+                + " установлена, туннель не поднят"
+            )
+        for row in default_route_lines():
+            self.log(f"default: {row}")
+        home = not bool(office_proxy)
+        if stale and not home:
+            shown = [c for c in stale if "-p" not in c]
+            self.log("лишний default второго VPN сниму: " + "; ".join(shown))
+        if leftover_cmds and procutil.is_admin() and not home:
+            for line in leftover_cmds:
+                args = [p for p in line.split(" ") if p]
+                procutil.run(args, timeout=8)
+            leftover_cmds = []
+        if home:
+            leftover_cmds = []
+        return leftover_cmds
 
     def _kill_switch_hosts(self, cfg: dict[str, Any]) -> list[str]:
         hosts = [get_server_host(cfg)]
@@ -597,12 +608,7 @@ class ConnectionOps:
         self._exit_probe_hint = None
         self._fail_closed = False
         self._stop_watchdog_inprocess()
-        stop_err: Exception | None = None
-        try:
-            self.singbox.stop()
-        except Exception as exc:  # noqa: BLE001
-            stop_err = exc
-            self.log(f"sing-box не остановился: {exc}")
+        stop_err = self._stop_session_core()
         try:
             self.tun.stop()
         except Exception as exc:  # noqa: BLE001
@@ -621,11 +627,6 @@ class ConnectionOps:
             )
             ks_thread.start()
 
-        try:
-            self.reverse_ssh.stop(scan_cmdline=False)
-        except Exception as exc:  # noqa: BLE001
-            self.log(f"reverse-ssh stop: {exc}")
-        self.stop_pac_server()
         self.teardown_overrides_if_dirty()
         self.paths.state_path.unlink(missing_ok=True)
         self._reap_helpers()

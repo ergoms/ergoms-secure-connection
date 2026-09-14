@@ -17,6 +17,7 @@ from typing import Callable
 from desktop import procutil
 from desktop.logutil import noop
 from desktop.net_host import resolve_host
+from desktop.sys.win_net import best_interface_index, route_print_v4
 from lib.netutil import port_open
 
 LogFn = Callable[[str], None]
@@ -42,9 +43,6 @@ _WIN_BLACKHOLE_HI = re.compile(
     r"128\.0\.0\.0\s+128\.0\.0\.0\s+\S+\s+127\.0\.0\.1",
     re.IGNORECASE,
 )
-_WIN_BLACKHOLE = _WIN_BLACKHOLE_LO
-
-
 def _host_open(host: str, port: int = 443, timeout: float = 2.5) -> bool:
     return port_open(host, port, timeout=timeout)
 
@@ -123,11 +121,9 @@ def _route_print_win(*, force: bool = False) -> str:
     ):
         return _route_print_cache[1]
     try:
-        r = procutil.run(["route", "print", "-4"], timeout=8)
+        text = route_print_v4()
     except (OSError, FileNotFoundError):
         text = ""
-    else:
-        text = r.stdout or ""
     _route_print_cache = (now, text)
     return text
 
@@ -192,20 +188,7 @@ def _iface_index_win(dest: str) -> int | None:
     ip = resolve_host(dest) if dest else None
     if not ip:
         return None
-    try:
-        import ctypes
-        from ctypes import wintypes
-
-        dest_n = ctypes.windll.ws2_32.inet_addr(ip.encode("ascii"))  # type: ignore[attr-defined]
-        if dest_n == 0xFFFFFFFF:
-            return None
-        idx = wintypes.DWORD()
-        err = ctypes.windll.iphlpapi.GetBestInterface(dest_n, ctypes.byref(idx))  # type: ignore[attr-defined]
-        if err or not idx.value:
-            return None
-        return int(idx.value)
-    except Exception:
-        return None
+    return best_interface_index(ip)
 
 
 def _win_loopback_index() -> int:
@@ -749,19 +732,9 @@ def _elevate_win_script(
 
 
 def _elevate_linux_script(script: Path, *, log: LogFn) -> bool:
-    for wrapper in (
-        ["pkexec", "sh", str(script)],
-        ["sudo", "-n", "sh", str(script)],
-        ["sudo", "sh", str(script)],
-    ):
-        try:
-            r = procutil.run(wrapper, timeout=60)
-        except FileNotFoundError:
-            continue
-        except Exception as exc:  # noqa: BLE001
-            log(f"kill switch: {wrapper[0]}: {exc}")
-            continue
-        if r.returncode == 0:
-            return True
-    log("kill switch: нужен pkexec/sudo")
-    return False
+    from desktop.elevate import run_linux_privileged
+
+    ok = run_linux_privileged(["sh", str(script)], log=log, timeout=60)
+    if not ok:
+        log("kill switch: нужен pkexec/sudo")
+    return ok

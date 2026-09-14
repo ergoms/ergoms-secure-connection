@@ -196,7 +196,7 @@ ERGOMS SECURE CONNECTION/
 ├── ergoms-secure-connection.ps1/.sh
 ├── deploy.ps1/.sh
 ├── config/            образцы
-├── lib/               connect_socks, http_via_socks (PAC)
+├── lib/               connect.py (ProxyCommand), pac.py
 ├── installer/         Inno Setup (Windows)
 ├── modes/linux/       systemd-служба клиента
 ├── modes/windows/     WinSW-служба клиента

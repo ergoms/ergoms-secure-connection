@@ -132,7 +132,7 @@ def run(
     text: bool = True,
     env: dict[str, str] | None = None,
     cwd: str | None = None,
-    timeout: float | None = None,
+    timeout: float | None = 30.0,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         list(args),
@@ -210,15 +210,9 @@ def process_basename(pid: int) -> str:
 
 
 def is_sing_box_pid(pid: int) -> bool:
-    return process_basename(pid) in {
-        "sing-box",
-        "sing-box.exe",
-        "sing-box-awg",
-        "ergoms-tun.exe",
-        "ergoms-tun",
-        "ergoms-tun-awg.exe",
-        "ergoms-tun-awg",
-    }
+    from desktop.sys.constants import SINGBOX_PROCESS_NAMES
+
+    return process_basename(pid) in {n.lower() for n in SINGBOX_PROCESS_NAMES}
 
 
 def pids_named(*names: str) -> list[int]:
@@ -451,38 +445,6 @@ def _elevate_kill_linux(pids: Sequence[int]) -> bool:
         if r.returncode == 0 or not any(pid_alive(int(p)) for p in ids):
             return not any(pid_alive(int(p)) for p in ids)
     return not any(pid_alive(int(p)) for p in ids)
-
-
-def _pids_listening_on_netstat(port: int, host: str) -> list[int]:
-    """Fast Windows path via netstat (~10–50 ms vs seconds for Get-NetTCPConnection)."""
-    r = run(["netstat", "-ano", "-p", "tcp"])
-    found: list[int] = []
-    seen: set[int] = set()
-    port_s = f":{int(port)}"
-    host_l = host.lower()
-    for line in (r.stdout or "").splitlines():
-        if "LISTENING" not in line.upper():
-            continue
-        parts = line.split()
-        if len(parts) < 5:
-            continue
-        local_addr = parts[1]
-        if not local_addr.endswith(port_s):
-            continue
-        addr = local_addr.rsplit(":", 1)[0]
-        if host_l not in ("127.0.0.1", "localhost", "::1"):
-            if addr not in (host_l, "0.0.0.0", "::", "[::]"):
-                continue
-        elif addr not in ("127.0.0.1", "0.0.0.0", "::", "[::]", "localhost"):
-            continue
-        pid_s = parts[-1]
-        if not pid_s.isdigit():
-            continue
-        pid = int(pid_s)
-        if pid not in seen:
-            seen.add(pid)
-            found.append(pid)
-    return found
 
 
 def pids_listening_on(

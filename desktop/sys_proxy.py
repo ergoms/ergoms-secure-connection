@@ -80,7 +80,9 @@ def enable_linux_env_proxy(
         return
 
     proxy = f"http://127.0.0.1:{http_port}"
-    noproxy = "localhost,127.0.0.1,::1"
+    from desktop.sys.constants import DEFAULT_NO_PROXY
+
+    noproxy = DEFAULT_NO_PROXY
     profile_body = "\n".join(
         [
             "# Managed by ERGOMS SECURE CONNECTION — do not edit by hand",

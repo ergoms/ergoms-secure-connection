@@ -4,12 +4,23 @@ from __future__ import annotations
 
 import json
 import os
-import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from PySide6.QtCore import Property, QObject, QTimer, Signal, Slot
+from PySide6.QtCore import (
+    Property,
+    QMetaObject,
+    QObject,
+    QRunnable,
+    Qt,
+    QThread,
+    QThreadPool,
+    QTimer,
+    Signal,
+    Slot,
+    Q_ARG,
+)
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlPropertyMap
 from PySide6.QtWidgets import QFileDialog, QInputDialog, QLineEdit
@@ -38,6 +49,10 @@ from desktop.config_io import (
     save_config,
 )
 from desktop.paths import Paths, gui_command
+from desktop.services.connection import ConnectionService
+from desktop.services.elevation import ElevationService
+from desktop.services.settings import SettingsService
+from desktop.services.status import C_MUTED, present_status
 from desktop.ui.settings_map import (
     apply_settings_to_cfg,
     cfg_to_settings,
@@ -46,7 +61,7 @@ from desktop.ui.settings_map import (
 
 LogFn = Callable[[str], None]
 
-_C_MUTED = "#9aa3b5"
+_C_MUTED = C_MUTED
 _C_ACCENT = "#2dd4a8"
 _C_OK = "#2dd4a8"
 _C_WARN = "#e6c07b"
@@ -55,6 +70,16 @@ _C_DANGER = "#f07178"
 
 def _scope_label(scope: str) -> str:
     return {"full": "Всё", "github": "GitHub"}.get(scope, scope or "—")
+
+
+class _BgTask(QRunnable):
+    def __init__(self, fn: Callable[[], None]) -> None:
+        super().__init__()
+        self._fn = fn
+        self.setAutoDelete(True)
+
+    def run(self) -> None:
+        self._fn()
 
 
 class GuiBridge(QObject):
@@ -68,31 +93,14 @@ class GuiBridge(QObject):
     quitRequested = Signal()
 
     activeChanged = Signal()
-    tunChanged = Signal()
-    killSwitchOnChanged = Signal()
     busyChanged = Signal()
     busyTextChanged = Signal()
     statusTitleChanged = Signal()
     statusSubChanged = Signal()
     statusColorChanged = Signal()
-    serverTargetChanged = Signal()
-    scopeChanged = Signal()
-    modeLabelChanged = Signal()
     logTextChanged = Signal()
     pageChanged = Signal()
-    socksPortChanged = Signal()
-    httpPortChanged = Signal()
-    pacPortChanged = Signal()
-    socksUpChanged = Signal()
-    httpUpChanged = Signal()
-    pacUpChanged = Signal()
-    watchdogUpChanged = Signal()
-    reverseSshUpChanged = Signal()
-    reverseSshPortChanged = Signal()
-    singboxUpChanged = Signal()
     powerTextChanged = Signal()
-    tunButtonTextChanged = Signal()
-    configReadyChanged = Signal()
     corporateChanged = Signal()
     autostartChanged = Signal()
 
@@ -115,6 +123,9 @@ class GuiBridge(QObject):
             startup_cleanup=False,
             inprocess_helpers=True,
         )
+        self.settings_svc = SettingsService(self.paths)
+        self.connection = ConnectionService(self.client)
+        self.elevation = ElevationService(self.client)
 
         self._active = False
         self._tun = False
@@ -200,14 +211,6 @@ class GuiBridge(QObject):
     def active(self) -> bool:
         return self._active
 
-    @Property(bool, notify=tunChanged)
-    def tun(self) -> bool:
-        return self._tun
-
-    @Property(bool, notify=killSwitchOnChanged)
-    def killSwitchOn(self) -> bool:
-        return self._kill_switch_on
-
     @Property(bool, notify=busyChanged)
     def busy(self) -> bool:
         return self._busy
@@ -228,18 +231,6 @@ class GuiBridge(QObject):
     def statusColor(self) -> str:
         return self._status_color
 
-    @Property(str, notify=serverTargetChanged)
-    def serverTarget(self) -> str:
-        return self._server_target
-
-    @Property(str, notify=scopeChanged)
-    def scope(self) -> str:
-        return self._scope
-
-    @Property(str, notify=modeLabelChanged)
-    def modeLabel(self) -> str:
-        return self._mode_label
-
     @Property(str, notify=logTextChanged)
     def logText(self) -> str:
         return "\n".join(self._log_lines)
@@ -248,57 +239,9 @@ class GuiBridge(QObject):
     def page(self) -> str:
         return self._page
 
-    @Property(int, notify=socksPortChanged)
-    def socksPort(self) -> int:
-        return self._socks_port
-
-    @Property(int, notify=httpPortChanged)
-    def httpPort(self) -> int:
-        return self._http_port
-
-    @Property(int, notify=pacPortChanged)
-    def pacPort(self) -> int:
-        return self._pac_port
-
-    @Property(bool, notify=socksUpChanged)
-    def socksUp(self) -> bool:
-        return self._socks_up
-
-    @Property(bool, notify=httpUpChanged)
-    def httpUp(self) -> bool:
-        return self._http_up
-
-    @Property(bool, notify=pacUpChanged)
-    def pacUp(self) -> bool:
-        return self._pac_up
-
-    @Property(bool, notify=watchdogUpChanged)
-    def watchdogUp(self) -> bool:
-        return self._watchdog_up
-
-    @Property(bool, notify=reverseSshUpChanged)
-    def reverseSshUp(self) -> bool:
-        return self._reverse_ssh_up
-
-    @Property(int, notify=reverseSshPortChanged)
-    def reverseSshPort(self) -> int:
-        return self._reverse_ssh_port
-
-    @Property(bool, notify=singboxUpChanged)
-    def singboxUp(self) -> bool:
-        return self._singbox_up
-
     @Property(str, notify=powerTextChanged)
     def powerText(self) -> str:
         return self._power_text
-
-    @Property(str, notify=tunButtonTextChanged)
-    def tunButtonText(self) -> str:
-        return self._tun_button_text
-
-    @Property(bool, notify=configReadyChanged)
-    def configReady(self) -> bool:
-        return self._config_ready
 
     @Property(bool, notify=corporateChanged)
     def corporate(self) -> bool:
@@ -311,10 +254,6 @@ class GuiBridge(QObject):
     @Property(bool, constant=True)
     def startHidden(self) -> bool:
         return self._start_hidden
-
-    @Property(str, constant=True)
-    def version(self) -> str:
-        return __version__
 
     @Property(str, constant=True)
     def dataRoot(self) -> str:
@@ -335,7 +274,7 @@ class GuiBridge(QObject):
 
     def _handoff_if_needed(self, action: str) -> bool:
         """Relaunch elevated once. True = caller must stop (handoff or cancel)."""
-        if not self.client.needs_elevation(action=action):
+        if not self.elevation.needed(action):
             return False
         flags = [f"--{action}"]
         if action == "on":
@@ -344,7 +283,7 @@ class GuiBridge(QObject):
             flags = ["--disconnect"]
         if self._start_hidden:
             flags.append("--autostart")
-        ok = procutil.relaunch_as_admin(
+        ok = self.elevation.relaunch(
             gui_command(*flags),
             cwd=str(self.paths.root),
         )
@@ -366,11 +305,11 @@ class GuiBridge(QObject):
         if self._active or self._kill_switch_on:
             if self._handoff_if_needed("off"):
                 return
-            self._run_bg(self.client.disable, waiting="Отключение…")
+            self._run_bg(self.connection.disable, waiting="Отключение…")
         else:
             if self._handoff_if_needed("on"):
                 return
-            self._run_bg(self.client.enable, waiting="Подключение…")
+            self._run_bg(self.connection.enable, waiting="Подключение…")
 
     @Slot()
     def enableConnection(self) -> None:
@@ -381,7 +320,7 @@ class GuiBridge(QObject):
             return
         if self._handoff_if_needed("on"):
             return
-        self._run_bg(self.client.enable, waiting="Подключение…")
+        self._run_bg(self.connection.enable, waiting="Подключение…")
 
     @Slot()
     def disableConnection(self) -> None:
@@ -389,7 +328,7 @@ class GuiBridge(QObject):
             return
         if self._handoff_if_needed("off"):
             return
-        self._run_bg(self.client.disable, waiting="Отключение…")
+        self._run_bg(self.connection.disable, waiting="Отключение…")
 
     @Slot()
     def toggleTun(self) -> None:
@@ -406,7 +345,7 @@ class GuiBridge(QObject):
             return
         if self._handoff_if_needed("tun-on"):
             return
-        self._run_bg(self.client.enable_tun, waiting="Включаю TUN…")
+        self._run_bg(self.connection.enable_tun, waiting="Включаю TUN…")
 
     @Slot()
     def disableTun(self) -> None:
@@ -414,7 +353,7 @@ class GuiBridge(QObject):
             return
         if self._handoff_if_needed("tun-off"):
             return
-        self._run_bg(self.client.disable_tun, waiting="Выключаю TUN…")
+        self._run_bg(self.connection.disable_tun, waiting="Выключаю TUN…")
 
     @Slot()
     def loadSettings(self) -> None:
@@ -424,7 +363,6 @@ class GuiBridge(QObject):
         cfg = load_config(self.paths.config_path)
         self._set_corporate(infer_corporate(cfg))
         self._mode_label = "Корпоративный" if self._corporate else "VPN"
-        self.modeLabelChanged.emit()
         for key, value in cfg_to_settings(cfg).items():
             self._settings.insert(key, value)
         self._sync_config_ready()
@@ -476,7 +414,6 @@ class GuiBridge(QObject):
         self._settings.insert("gitProxy", on)
         self._settings.insert("dockerProxy", on)
         self._mode_label = "Корпоративный" if on else "VPN"
-        self.modeLabelChanged.emit()
 
     @Slot()
     def importConfigFile(self) -> None:
@@ -584,7 +521,6 @@ class GuiBridge(QObject):
         ready = config_is_ready(cfg)
         if ready != self._config_ready:
             self._config_ready = ready
-            self.configReadyChanged.emit()
         if not ready and not self._active and not self._busy:
             self._status_title = "Нет конфига"
             self._status_sub = "Загрузите конфиг"
@@ -662,11 +598,24 @@ class GuiBridge(QObject):
                 pass
             self.quitRequested.emit()
 
-        threading.Thread(target=work, daemon=True).start()
+        self._spawn(work)
 
     # ── internals ───────────────────────────────────────────────────────
 
+    def _spawn(self, fn: Callable[[], None]) -> None:
+        QThreadPool.globalInstance().start(_BgTask(fn))
+
     def _enqueue_log(self, msg: str) -> None:
+        app = QGuiApplication.instance()
+        if app is not None and QThread.currentThread() is not app.thread():
+            QMetaObject.invokeMethod(
+                self, "_append_log", Qt.QueuedConnection, Q_ARG(str, msg)
+            )
+            return
+        self._append_log(msg)
+
+    @Slot(str)
+    def _append_log(self, msg: str) -> None:
         stamp = datetime.now().strftime("%H:%M:%S")
         line = f"{stamp}  {msg}"
         self._log_lines.append(line)
@@ -703,7 +652,7 @@ class GuiBridge(QObject):
                 self._enqueue_log(f"ошибка: {exc}")
             self._bgFinished.emit(err)
 
-        threading.Thread(target=work, daemon=True).start()
+        self._spawn(work)
 
     @Slot(str)
     def _on_bg_finished(self, err: str) -> None:
@@ -819,7 +768,7 @@ class GuiBridge(QObject):
             if not self._closing:
                 self._schedulePoll.emit(delay)
 
-        threading.Thread(target=work, daemon=True).start()
+        self._spawn(work)
 
     @Slot(object, bool)
     def _on_status_ready(self, st: object, force: bool) -> None:
@@ -862,113 +811,44 @@ class GuiBridge(QObject):
         if self._await_status and self._busy_intent == "off" and (singbox or tun):
             return
         self._last_status_sig = sig
-
-        self._active = active
-        self._tun = tun
-        self._kill_switch_on = ks_on
-        self._singbox_up = singbox
-        if active:
+        view = present_status(st, config_ready=self._config_ready, corporate=self._corporate)
+        self._active = view.active
+        self._tun = view.tun
+        self._kill_switch_on = view.kill_switch_on
+        self._singbox_up = view.singbox_up
+        if view.active:
             self._overrides_cleared = False
-        self._watchdog_up = bool(st.get("watchdog_running"))
-        self._reverse_ssh_up = bool(st.get("reverse_ssh_running"))
-        self._reverse_ssh_port = int(st.get("reverse_ssh_listen") or 2222)
-        self._socks_up = socks_up
-        self._http_up = http_up
-        self._pac_up = pac_up
-        self._socks_port = int(st.get("socks_port") or self._socks_port or 1080)
-        self._http_port = int(st.get("http_port") or 1088)
-        self._pac_port = int(st.get("pac_port") or 1089)
-        self._server_target = target
-        self._scope = scope
+        self._watchdog_up = view.watchdog_up
+        self._reverse_ssh_up = view.reverse_ssh_up
+        self._reverse_ssh_port = view.reverse_ssh_port
+        self._socks_up = view.socks_up
+        self._http_up = view.http_up
+        self._pac_up = view.pac_up
+        self._socks_port = view.socks_port
+        self._http_port = view.http_port
+        self._pac_port = view.pac_port
+        self._server_target = view.server_target
+        self._scope = view.scope
         self._mode_label = "Корпоративный" if self._corporate else "VPN"
-        self._tun_button_text = "TUN выкл" if tun else "TUN вкл"
-
+        self._tun_button_text = view.tun_button_text
         if self.paths.config_path.is_file():
             try:
-                cfg = load_config(self.paths.config_path)
+                cfg = self.settings_svc.load()
                 server = cfg.get("server") or {}
-                self._socks_port = int(server.get("local_socks_port") or 1080)
+                self._socks_port = int(server.get("local_socks_port") or self._socks_port)
             except Exception:  # noqa: BLE001
                 pass
-
-        socks_s = f"SOCKS :{self._socks_port}"
-        if singbox and socks_up and probe_err:
-            if probe_hint == "need-hy2":
-                title, sub, color = (
-                    "Нет выхода",
-                    "Reality не дал выход. Интернет закрыт — Hy2/AWG или отключите VPN",
-                    _C_DANGER,
-                )
-            elif probe_hint == "hy2-udp":
-                title, sub, color = (
-                    "Нет выхода",
-                    "UDP не дошёл. Интернет закрыт — проверьте порт на VPS или отключите VPN",
-                    _C_DANGER,
-                )
-            else:
-                title, sub, color = (
-                    "Нет выхода",
-                    "Туннель без выхода. Интернет закрыт — отключите VPN, чтобы снять блок",
-                    _C_DANGER,
-                )
-            power = "Отключить"
-            if probe_err != getattr(self, "_last_probe_toast", None):
-                self._last_probe_toast = probe_err
-                self.toast.emit(sub, "error")
-        elif singbox and tun and socks_up:
-            title, sub, color = "Защищено", "", _C_ACCENT
-            power = "Отключить"
+        if view.toast and probe_err != getattr(self, "_last_probe_toast", None):
+            self._last_probe_toast = probe_err
+            self.toast.emit(view.toast, "error")
+        elif not probe_err:
             self._last_probe_toast = None
-        elif singbox and not socks_up:
-            title, sub, color = (
-                "Сбой",
-                f"процесс есть, {socks_s} молчит — смотрите журнал",
-                _C_DANGER,
-            )
-            power = "Отключить"
-        elif singbox:
-            title, sub, color = "Подключено", "", _C_OK
-            power = "Отключить"
-        elif tun:
-            title, sub, color = "TUN", "Без VLESS", _C_WARN
-            power = "Отключить"
-        elif ks_on:
-            title, sub, color = (
-                "Нет сети",
-                "Интернет закрыт: туннель упал. Отключите VPN, чтобы снять блок",
-                _C_WARN,
-            )
-            power = "Отключить"
-        else:
-            title, sub, color = (
-                ("Нет конфига", "Загрузите конфиг", _C_MUTED)
-                if not self._config_ready
-                else ("Отключено", "", _C_MUTED)
-            )
-            power = "Подключить"
-
-        self._status_title = title
-        self._status_sub = sub
-        self._status_color = color
-        self._power_text = power
+        self._status_title = view.title
+        self._status_sub = view.subtitle
+        self._status_color = view.color
+        self._power_text = view.power_text
 
         self.activeChanged.emit()
-        self.tunChanged.emit()
-        self.killSwitchOnChanged.emit()
-        self.singboxUpChanged.emit()
-        self.watchdogUpChanged.emit()
-        self.reverseSshUpChanged.emit()
-        self.reverseSshPortChanged.emit()
-        self.socksUpChanged.emit()
-        self.httpUpChanged.emit()
-        self.pacUpChanged.emit()
-        self.socksPortChanged.emit()
-        self.httpPortChanged.emit()
-        self.pacPortChanged.emit()
-        self.serverTargetChanged.emit()
-        self.scopeChanged.emit()
-        self.modeLabelChanged.emit()
-        self.tunButtonTextChanged.emit()
         self.statusTitleChanged.emit()
         self.statusSubChanged.emit()
         self.statusColorChanged.emit()

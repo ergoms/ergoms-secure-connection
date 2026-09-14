@@ -13,7 +13,8 @@ from typing import Any, Callable
 from desktop import procutil
 from desktop.config_io import get_local_socks_port, get_reverse_ssh, get_server_host
 from desktop.logutil import noop
-from desktop.paths import Paths, bundle_dir, is_frozen, resolve_ssh_identity, self_command
+from desktop.client_util import find_pythonw
+from desktop.paths import Paths, bundle_dir, is_frozen, resolve_ssh_identity
 
 LogFn = Callable[[str], None]
 
@@ -34,34 +35,6 @@ def _ensure_script(paths: Paths, name: str) -> Path:
     return dst
 
 
-def find_pythonw() -> str | None:
-    if sys.platform != "win32":
-        return _which("python3") or _which("python")
-    candidates: list[Path] = []
-    exe = Path(sys.executable)
-    if exe.name.lower() in ("python.exe", "python3.exe"):
-        pw = exe.with_name("pythonw.exe")
-        if pw.is_file():
-            candidates.append(pw)
-    for name in ("pythonw.exe", "python.exe", "python3.exe"):
-        w = shutil.which(name)
-        if w and "WindowsApps" not in w:
-            candidates.append(Path(w))
-    candidates.append(exe)
-    seen: set[str] = set()
-    for c in candidates:
-        key = str(c.resolve()).lower() if c.is_file() else ""
-        if not key or key in seen or "WindowsApps" in key:
-            continue
-        seen.add(key)
-        if c.name.lower() == "pythonw.exe":
-            return str(c.resolve())
-    for c in candidates:
-        if c.is_file() and "WindowsApps" not in str(c):
-            return str(c.resolve())
-    return None
-
-
 def socks_proxy_command(paths: Paths) -> str:
     """OpenSSH ProxyCommand that dials through local SOCKS :1080."""
     if is_frozen():
@@ -70,8 +43,15 @@ def socks_proxy_command(paths: Paths) -> str:
     py = find_pythonw()
     if not py:
         raise RuntimeError("Python not found for SOCKS ProxyCommand")
+    for name in (
+        "connect.py",
+        "connect_proxy.py",
+        "socks5.py",
+        "http_connect.py",
+        "netutil.py",
+    ):
+        _ensure_script(paths, name)
     script = _ensure_script(paths, "connect_socks.py")
-    _ensure_script(paths, "connect_proxy.py")
     return f'"{py}" "{script}" %h %p'
 
 

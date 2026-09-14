@@ -57,7 +57,7 @@
   },
   "transport": {
     "type": "vless-reality",
-    "dial": "hysteria2",
+    "dial": "amneziawg",
     "uuid": "",
     "public_key": "",
     "short_id": "",

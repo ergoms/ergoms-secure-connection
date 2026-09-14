@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 import tempfile
 from pathlib import Path
+from typing import Callable
 from xml.sax.saxutils import escape
 
 from desktop import procutil
 from desktop.branding import APP_NAME, ENV_NO_ELEVATE, env
+from desktop.logutil import noop
 from desktop.paths import data_root, is_frozen
 
 TASK_DEMAND = APP_NAME
@@ -227,3 +230,31 @@ def ensure_elevated_gui(flags: list[str] | None = None) -> None:
     ok = procutil.relaunch_as_admin(gui_command(*flags), cwd=cwd)
     if ok:
         os._exit(0)
+
+
+def run_linux_privileged(
+    args: list[str],
+    *,
+    log: Callable[[str], None] = noop,
+    timeout: float = 60.0,
+) -> bool:
+    """Run args via pkexec, then sudo. Returns True if a wrapper succeeded."""
+    if sys.platform == "win32":
+        return False
+    for wrapper in (
+        ["pkexec", *args],
+        ["sudo", "-n", *args],
+        ["sudo", *args],
+    ):
+        if not shutil.which(wrapper[0]):
+            continue
+        try:
+            r = procutil.run(wrapper, timeout=timeout)
+        except FileNotFoundError:
+            continue
+        except Exception as exc:  # noqa: BLE001
+            log(f"{wrapper[0]}: {exc}")
+            continue
+        if r.returncode == 0:
+            return True
+    return False

@@ -13,6 +13,7 @@ from typing import Callable
 
 from desktop import procutil
 from desktop.logutil import noop
+from desktop.sys.constants import DOCKER_DESKTOP_HOST_GATEWAY, DOCKER_NO_PROXY
 
 LogFn = Callable[[str], None]
 
@@ -37,7 +38,7 @@ DEFAULT_DNS_HOSTS: tuple[str, ...] = (
 )
 
 # Docker Desktop (Windows/Mac) host gateway — used if live detect fails.
-_DOCKER_DESKTOP_HOST_FALLBACK = "192.168.65.254"
+_DOCKER_DESKTOP_HOST_FALLBACK = DOCKER_DESKTOP_HOST_GATEWAY
 
 # getaddrinfo has no native timeout; under broken TUN DNS it can hang forever.
 _RESOLVE_HOST_TIMEOUT = 2.0
@@ -197,10 +198,7 @@ def write_docker_env(
     else:
         proxy_host = "host.docker.internal"
     proxy = f"http://{proxy_host}:{port}"
-    base_noproxy = (
-        "localhost,127.0.0.1,::1,host.docker.internal,"
-        "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
-    )
+    base_noproxy = ",".join((*DOCKER_NO_PROXY, "192.168.0.0/16"))
     if proxy_ip:
         noproxy = f"{base_noproxy},{proxy_ip}"
     else:
@@ -396,28 +394,6 @@ def _write_run_wrappers(
             encoding="utf-8",
             newline="\n",
         )
-
-
-def clear_docker_env(
-    docker_env: Path,
-    compose_path: Path,
-    hosts_path: Path,
-    *,
-    http_port: int = 1088,
-    log: LogFn = noop,
-    run_ps1: Path | None = None,
-    run_sh: Path | None = None,
-) -> None:
-    write_docker_env(
-        http_port,
-        docker_env,
-        compose_path,
-        hosts_path,
-        active=False,
-        log=log,
-        run_ps1=run_ps1,
-        run_sh=run_sh,
-    )
 
 
 def docker_dns_probe(*, log: LogFn = noop, timeout: float = 60.0) -> int:

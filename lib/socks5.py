@@ -5,19 +5,10 @@ from __future__ import annotations
 import socket
 import struct
 
-
-def tune_tcp(sock: socket.socket, *, buffers: bool = False) -> None:
-    try:
-        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-    except OSError:
-        pass
-    if not buffers:
-        return
-    try:
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1 << 20)
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1 << 20)
-    except OSError:
-        pass
+try:
+    from lib.netutil import tune_tcp
+except ImportError:
+    from netutil import tune_tcp
 
 
 def consume_bind_addr(sock: socket.socket, atyp: int) -> None:

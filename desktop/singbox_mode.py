@@ -24,6 +24,7 @@ from desktop.config_io import (
 )
 from desktop.logutil import noop
 from desktop.net_host import resolve_host
+from desktop.sys.constants import SINGBOX_PROCESS_NAMES
 from desktop.tun import (
     RUSTDESK_PORTS,
     TUN_IFACE_NAME,
@@ -32,7 +33,7 @@ from desktop.tun import (
     detect_bind_interface,
     iface_ipv4s,
 )
-from lib.http_via_socks import bypass_to_singbox
+from lib.pac import bypass_to_singbox
 from lib.netutil import port_open
 
 LogFn = Callable[[str], None]
@@ -382,6 +383,148 @@ def choose_dial(transport: dict[str, Any], *, office: bool) -> str:
     return "vless-reality" if office else "amneziawg"
 
 
+def resolve_dial_bundle(
+    transport: dict[str, Any], *, office: bool
+) -> tuple[str, dict[str, Any] | None, dict[str, Any] | None]:
+    dial = choose_dial(transport, office=office)
+    hy = hysteria2_opts(transport) if dial == "hysteria2" else None
+    awg = amneziawg_opts(transport) if dial == "amneziawg" else None
+    return dial, hy, awg
+
+
+_PRIVATE_ROUTE_EXCLUDE = [
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "127.0.0.0/8",
+    "169.254.0.0/16",
+    "224.0.0.0/4",
+]
+
+_DOCKER_WSL_PROCS = [
+    "vmmem",
+    "vmmemWSL",
+    "wsl.exe",
+    "wslhost.exe",
+    "wslrelay.exe",
+    "wslservice.exe",
+    "WSLService.exe",
+    "vmcompute.exe",
+    "vmwp.exe",
+    "com.docker.backend.exe",
+    "com.docker.build.exe",
+    "com.docker.proxy.exe",
+    "com.docker.admin.exe",
+    "com.docker.dev-envs.exe",
+    "Docker Desktop.exe",
+    "docker.exe",
+    "dockerd.exe",
+    "vpnkit.exe",
+    "vpnkit-bridge.exe",
+]
+
+
+def _route_process_names() -> list[str]:
+    return [
+        "sing-box",
+        "sing-box.exe",
+        "sing-box-awg",
+        "ergoms-tun.exe",
+        "ergoms-tun-awg.exe",
+        f"{APP_EXE}.exe",
+        *[f"{name}.exe" for name in APP_EXE_LEGACY],
+    ]
+
+
+def _tun_inbound(mtu: int, *, kill_switch: bool, route_exclude: list[str]) -> dict[str, Any]:
+    return {
+        "type": "tun",
+        "tag": "tun-in",
+        "interface_name": TUN_IFACE_NAME,
+        "address": ["172.19.0.1/30"],
+        "mtu": max(1280, min(1500, int(mtu))),
+        "auto_route": sys.platform != "win32",
+        "strict_route": bool(kill_switch) and sys.platform != "win32",
+        "stack": "mixed" if sys.platform == "win32" else "system",
+        "route_exclude_address": route_exclude,
+    }
+
+
+def _vless_outbound(
+    server_host: str,
+    transport: dict[str, Any],
+    *,
+    bind_iface: str,
+    use_office_proxy: bool,
+) -> dict[str, Any]:
+    outbound: dict[str, Any] = {
+        "type": "vless",
+        "tag": "proxy",
+        "server": server_host,
+        "server_port": int(transport["port"]),
+        "uuid": transport["uuid"],
+        "flow": "xtls-rprx-vision",
+        "packet_encoding": "xudp",
+        "tls": {
+            "enabled": True,
+            "server_name": str(transport["server_name"]),
+            "utls": {"enabled": True, "fingerprint": "chrome"},
+            "reality": {
+                "enabled": True,
+                "public_key": transport["public_key"],
+                "short_id": transport["short_id"],
+            },
+        },
+    }
+    if use_office_proxy:
+        outbound["detour"] = "squid"
+    elif bind_iface:
+        outbound["bind_interface"] = bind_iface
+    return outbound
+
+
+def _build_route_rules(
+    *,
+    server_host: str,
+    exclude_ips: list[str],
+    vpn_port: int,
+    vps_proxy_ports: list[int] | None,
+    bypass_hosts: list[str],
+) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+    rules: list[dict[str, Any]] = []
+    vps_ip = resolve_host(server_host)
+    if vps_ip:
+        rules.append({"ip_cidr": [f"{vps_ip}/32"], "port": vpn_port, "outbound": "direct"})
+        rules.append(
+            {"ip_cidr": [f"{vps_ip}/32"], "port": RUSTDESK_PORTS, "outbound": "proxy"}
+        )
+        ssh_ports = [int(p) for p in (vps_proxy_ports or [22]) if 1 <= int(p) <= 65535]
+        if ssh_ports:
+            rules.append(
+                {
+                    "ip_cidr": [f"{vps_ip}/32"],
+                    "port": ssh_ports if len(ssh_ports) > 1 else ssh_ports[0],
+                    "outbound": "proxy",
+                }
+            )
+    if exclude_ips:
+        rules.append({"ip_cidr": [f"{ip}/32" for ip in exclude_ips], "outbound": "direct"})
+    bypass_suffixes, bypass_domains = bypass_to_singbox(bypass_hosts)
+    if bypass_suffixes:
+        rules.append({"domain_suffix": bypass_suffixes, "outbound": "direct"})
+    if bypass_domains:
+        rules.append({"domain": bypass_domains, "outbound": "direct"})
+    rules.append({"port": 53, "action": "hijack-dns"})
+    rules.append({"inbound": ["socks-in", "http-in"], "outbound": "proxy"})
+    rules.append({"process_name": _DOCKER_WSL_PROCS, "outbound": "direct"})
+    rules.append({"process_name": _route_process_names(), "outbound": "direct"})
+    py_paths = _direct_python_paths()
+    if py_paths:
+        rules.append({"process_path": py_paths, "outbound": "direct"})
+    rules.append({"ip_is_private": True, "outbound": "direct"})
+    return rules, bypass_suffixes, bypass_domains
+
+
 def require_transport(cfg: dict[str, Any]) -> dict[str, Any]:
     tr = cfg.get("transport")
     if not isinstance(tr, dict):
@@ -472,7 +615,6 @@ class SingboxModeManager:
     ) -> dict[str, Any]:
         squid_host, squid_port = parse_corporate_proxy(corporate_proxy)
         use_office_proxy = bool(squid_host)
-
         exclude_ips: list[str] = []
         hosts = [server_host]
         if use_office_proxy:
@@ -481,8 +623,6 @@ class SingboxModeManager:
             ip = resolve_host(h)
             if ip:
                 exclude_ips.append(ip)
-
-        # Prefer underlay NIC toward office proxy (or VPS) so TUN cannot steal dials.
         bind_target = exclude_ips[0] if exclude_ips else (squid_host or server_host)
         bind_iface = detect_bind_interface(bind_target) if bind_target else ""
         if bind_iface:
@@ -494,13 +634,9 @@ class SingboxModeManager:
             self.log("underlay NIC: не определён — outbound может уйти в TUN")
 
         office = bool(squid_host)
-        dial = choose_dial(transport, office=office)
-        hy = hysteria2_opts(transport) if dial == "hysteria2" else None
-        awg = amneziawg_opts(transport) if dial == "amneziawg" else None
+        dial, hy, awg = resolve_dial_bundle(transport, office=office)
         if awg and not enable_tun and not use_office_proxy:
-            self.log(
-                f"дом: AmneziaWG UDP :{awg['port']} (обфускация handshake)"
-            )
+            self.log(f"дом: AmneziaWG UDP :{awg['port']} (обфускация handshake)")
             return self._minimal_awg_config(
                 server_host=server_host,
                 awg=awg,
@@ -521,58 +657,11 @@ class SingboxModeManager:
                 http_port=http_port,
             )
 
-        route_exclude = [
-            "10.0.0.0/8",
-            "172.16.0.0/12",
-            "192.168.0.0/16",
-            "127.0.0.0/8",
-            "169.254.0.0/16",
-            "224.0.0.0/4",
-        ]
-        # Public VPS (and office Squid) must stay on the underlay NIC.
-        # Without this, Windows auto_route steals VLESS and DNS dies.
+        route_exclude = list(_PRIVATE_ROUTE_EXCLUDE)
         for ip in exclude_ips:
             cidr = f"{ip}/32"
             if cidr not in route_exclude:
                 route_exclude.append(cidr)
-        proc_names = [
-            "sing-box",
-            "sing-box.exe",
-            "sing-box-awg",
-            "ergoms-tun.exe",
-            "ergoms-tun-awg.exe",
-            f"{APP_EXE}.exe",
-            *[f"{name}.exe" for name in APP_EXE_LEGACY],
-        ]
-        docker_wsl_procs = [
-            "vmmem",
-            "vmmemWSL",
-            "wsl.exe",
-            "wslhost.exe",
-            "wslrelay.exe",
-            "wslservice.exe",
-            "WSLService.exe",
-            "vmcompute.exe",
-            "vmwp.exe",
-            "com.docker.backend.exe",
-            "com.docker.build.exe",
-            "com.docker.proxy.exe",
-            "com.docker.admin.exe",
-            "com.docker.dev-envs.exe",
-            "Docker Desktop.exe",
-            "docker.exe",
-            "dockerd.exe",
-            "vpnkit.exe",
-            "vpnkit-bridge.exe",
-        ]
-
-        rules: list[dict[str, Any]] = []
-        # Dial Squid / avoid looping VPS:443 through TUN.
-        # Office RST-kills :21114/:21116 on the VPS IP — send those via VLESS :443.
-        office = bool(squid_host)
-        dial = choose_dial(transport, office=office)
-        hy = hysteria2_opts(transport) if dial == "hysteria2" else None
-        awg = amneziawg_opts(transport) if dial == "amneziawg" else None
         vpn_port = int(
             (awg or {}).get("port")
             or (hy or {}).get("port")
@@ -588,73 +677,45 @@ class SingboxModeManager:
             self.log(f"{place}: Hysteria2 UDP :{hy['port']}{extra}")
         elif office:
             self.log("офис: VLESS+Reality через Squid")
-        vps_ip = resolve_host(server_host)
-        if vps_ip:
-            rules.append(
-                {"ip_cidr": [f"{vps_ip}/32"], "port": vpn_port, "outbound": "direct"}
-            )
-            rules.append(
-                {
-                    "ip_cidr": [f"{vps_ip}/32"],
-                    "port": RUSTDESK_PORTS,
-                    "outbound": "proxy",
-                }
-            )
-            # Office RST on VPS :22. Reverse SSH and ssh-to-VPS must go via VLESS.
-            ssh_ports = [int(p) for p in (vps_proxy_ports or [22]) if 1 <= int(p) <= 65535]
-            if ssh_ports:
-                rules.append(
-                    {
-                        "ip_cidr": [f"{vps_ip}/32"],
-                        "port": ssh_ports if len(ssh_ports) > 1 else ssh_ports[0],
-                        "outbound": "proxy",
-                    }
-                )
-        if exclude_ips:
-            rules.append(
-                {"ip_cidr": [f"{ip}/32" for ip in exclude_ips], "outbound": "direct"}
-            )
-        bypass_suffixes, bypass_domains = bypass_to_singbox(bypass_hosts or [])
-        if bypass_suffixes:
-            rules.append({"domain_suffix": bypass_suffixes, "outbound": "direct"})
-        if bypass_domains:
-            rules.append({"domain": bypass_domains, "outbound": "direct"})
-        rules.append({"port": 53, "action": "hijack-dns"})
-        # HTTP/SOCKS inbounds (Docker Desktop httpproxy, git, curl) must use
-        # VLESS. process_name docker→direct would steal CONNECT and send it
-        # out the office NIC.
-        rules.append({"inbound": ["socks-in", "http-in"], "outbound": "proxy"})
-        rules.append({"process_name": docker_wsl_procs, "outbound": "direct"})
-        rules.append({"process_name": proc_names, "outbound": "direct"})
-        py_paths = _direct_python_paths()
-        if py_paths:
-            rules.append({"process_path": py_paths, "outbound": "direct"})
-        rules.append({"ip_is_private": True, "outbound": "direct"})
-
+        rules, bypass_suffixes, bypass_domains = _build_route_rules(
+            server_host=server_host,
+            exclude_ips=exclude_ips,
+            vpn_port=vpn_port,
+            vps_proxy_ports=vps_proxy_ports,
+            bypass_hosts=bypass_hosts or [],
+        )
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
-        mtu_val = max(1280, min(1500, int(mtu)))
-        sni = str(transport["server_name"])
-        vless_port = int(transport["port"])
-
         inbounds: list[dict[str, Any]] = local_inbounds(socks_port, http_port)
         if enable_tun:
-            inbounds.append(
+            inbounds.append(_tun_inbound(mtu, kill_switch=kill_switch, route_exclude=route_exclude))
+        bind = {"bind_interface": bind_iface} if bind_iface else {}
+        outbounds: list[dict[str, Any]] = []
+        if use_office_proxy:
+            outbounds.append(
                 {
-                    "type": "tun",
-                    "tag": "tun-in",
-                    "interface_name": TUN_IFACE_NAME,
-                    "address": ["172.19.0.1/30"],
-                    "mtu": mtu_val,
-                    # Windows auto_route steals VPS UDP (Hysteria2 QUIC dies)
-                    # while SOCKS CONNECT still looks fine. We add 0.0.0.0/1
-                    # ourselves after the adapter is up, with VPS /32 pinned.
-                    "auto_route": sys.platform != "win32",
-                    "strict_route": bool(kill_switch) and sys.platform != "win32",
-                    "stack": "mixed" if sys.platform == "win32" else "system",
-                    "route_exclude_address": route_exclude,
+                    "type": "http",
+                    "tag": "squid",
+                    "server": squid_host,
+                    "server_port": int(squid_port),
+                    **bind,
                 }
             )
-
+        if hy:
+            outbounds.append(hy2_outbound(server_host, hy, bind_iface=bind_iface))
+        else:
+            outbounds.append(
+                _vless_outbound(
+                    server_host,
+                    transport,
+                    bind_iface=bind_iface,
+                    use_office_proxy=use_office_proxy,
+                )
+            )
+        outbounds.append({"type": "direct", "tag": "direct", **bind})
+        outbounds.append({"type": "block", "tag": "block"})
+        sniff = [{"inbound": ["socks-in", "http-in"], "action": "sniff", "timeout": "1s"}]
+        if enable_tun:
+            sniff.append({"inbound": ["tun-in"], "action": "sniff", "timeout": "1s"})
         box: dict[str, Any] = {
             **config_skeleton(
                 log_path=self.log_path,
@@ -662,94 +723,29 @@ class SingboxModeManager:
                 http_port=http_port,
                 dns=dns_block(
                     schema="v11",
-                    docker_wsl_procs=docker_wsl_procs,
+                    docker_wsl_procs=_DOCKER_WSL_PROCS,
                     bypass_suffixes=bypass_suffixes,
                     bypass_domains=bypass_domains,
                 ),
             ),
             "inbounds": inbounds,
-            "outbounds": [
-                *(
-                    [
-                        {
-                            "type": "http",
-                            "tag": "squid",
-                            "server": squid_host,
-                            "server_port": int(squid_port),
-                            **({"bind_interface": bind_iface} if bind_iface else {}),
-                        }
-                    ]
-                    if use_office_proxy
-                    else []
-                ),
-                (
-                    hy2_outbound(server_host, hy, bind_iface=bind_iface)
-                    if hy
-                    else {
-                        "type": "vless",
-                        "tag": "proxy",
-                        "server": server_host,
-                        "server_port": vless_port,
-                        "uuid": transport["uuid"],
-                        "flow": "xtls-rprx-vision",
-                        "packet_encoding": "xudp",
-                        "tls": {
-                            "enabled": True,
-                            "server_name": sni,
-                            "utls": {"enabled": True, "fingerprint": "chrome"},
-                            "reality": {
-                                "enabled": True,
-                                "public_key": transport["public_key"],
-                                "short_id": transport["short_id"],
-                            },
-                        },
-                        **({"detour": "squid"} if use_office_proxy else {}),
-                        **(
-                            {"bind_interface": bind_iface}
-                            if bind_iface and not use_office_proxy
-                            else {}
-                        ),
-                    }
-                ),
-                {
-                    "type": "direct",
-                    "tag": "direct",
-                    **({"bind_interface": bind_iface} if bind_iface else {}),
-                },
-                {"type": "block", "tag": "block"},
-            ],
+            "outbounds": outbounds,
             "route": {
                 "auto_detect_interface": not bool(bind_iface),
                 **({"default_interface": bind_iface} if bind_iface else {}),
                 "final": "proxy",
-                "rules": [
-                    {"inbound": ["socks-in", "http-in"], "action": "sniff", "timeout": "1s"},
-                    *(
-                        [{"inbound": ["tun-in"], "action": "sniff", "timeout": "1s"}]
-                        if enable_tun
-                        else []
-                    ),
-                    *rules,
-                ],
+                "rules": [*sniff, *rules],
             },
         }
         if awg:
             box["dns"] = dns_block(
                 schema="v12",
-                docker_wsl_procs=docker_wsl_procs,
+                docker_wsl_procs=_DOCKER_WSL_PROCS,
                 bypass_suffixes=bypass_suffixes,
                 bypass_domains=bypass_domains,
             )
-            box["endpoints"] = [
-                awg_endpoint(server_host, awg, bind_iface=bind_iface)
-            ]
-            box["outbounds"] = [
-                {
-                    "type": "direct",
-                    "tag": "direct",
-                    **({"bind_interface": bind_iface} if bind_iface else {}),
-                }
-            ]
+            box["endpoints"] = [awg_endpoint(server_host, awg, bind_iface=bind_iface)]
+            box["outbounds"] = [{"type": "direct", "tag": "direct", **bind}]
             box["route"]["default_domain_resolver"] = "dns-local"
         return box
 
@@ -1061,15 +1057,7 @@ class SingboxModeManager:
         pid = self.pid()
         if pid:
             targets.append(pid)
-        for orphan in procutil.pids_named(
-            "sing-box.exe",
-            "sing-box",
-            "sing-box-awg",
-            "ergoms-tun.exe",
-            "ergoms-tun",
-            "ergoms-tun-awg.exe",
-            "ergoms-tun-awg",
-        ):
+        for orphan in procutil.pids_named(*SINGBOX_PROCESS_NAMES):
             if orphan not in targets:
                 targets.append(orphan)
         if not targets:
@@ -1233,15 +1221,7 @@ class SingboxModeManager:
         )
 
     def _find_pid(self) -> int | None:
-        for pid in procutil.pids_named(
-            "sing-box.exe",
-            "sing-box",
-            "sing-box-awg",
-            "ergoms-tun.exe",
-            "ergoms-tun",
-            "ergoms-tun-awg.exe",
-            "ergoms-tun-awg",
-        ):
+        for pid in procutil.pids_named(*SINGBOX_PROCESS_NAMES):
             return pid
         return None
 

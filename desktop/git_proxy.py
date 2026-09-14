@@ -117,7 +117,9 @@ def clear_cli_env_proxy(cli_env: Path, cli_ps1: Path) -> None:
 
 def write_cli_env(http_port: int, cli_env: Path, cli_ps1: Path) -> None:
     proxy = f"http://127.0.0.1:{http_port}"
-    noproxy = "localhost,127.0.0.1,::1"
+    from desktop.sys.constants import DEFAULT_NO_PROXY
+
+    noproxy = DEFAULT_NO_PROXY
     cli_env.parent.mkdir(parents=True, exist_ok=True)
     cli_env.write_text(
         "\n".join(
@@ -271,22 +273,3 @@ def clear_git_proxy(
     clear_cli_env_proxy(cli_env, cli_ps1)
     if restored or keys or had_cli:
         log("git proxy restored" if restored else "git proxy cleared")
-
-
-def clear_stale_git_proxy(
-    cli_env: Path,
-    cli_ps1: Path,
-    log: LogFn = noop,
-    *,
-    backup_path: Path | None = None,
-) -> bool:
-    """Remove our leftover git/CLI proxy when the VPN is not using it."""
-    has_cli = cli_env.is_file() or cli_ps1.is_file()
-    has_backup = bool(backup_path and backup_path.is_file())
-    dirty = _gitconfig_looks_dirty()
-    if not dirty and not has_cli and not has_backup:
-        return False
-    clear_git_proxy(cli_env, cli_ps1, log=log, backup_path=backup_path)
-    if dirty:
-        log("снят git proxy")
-    return True

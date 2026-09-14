@@ -110,70 +110,7 @@ class ProbeOps:
             self._exit_probe_error = self._exit_probe_error or "sing-box stopped"
             return
         if err:
-            connect_err = socks_probe(socks_port, timeout=6.0)
-            self._exit_probe_error = connect_err or err
-            if connect_err:
-                self.log(f"проверка выхода: НЕ ОК — {connect_err}")
-            else:
-                self.log(
-                    f"проверка выхода: НЕ ОК — CONNECT есть, HTTPS нет ({err})"
-                )
-            tail = "\n".join(self.singbox.tail_log(40)).lower()
-            if "no recent network activity" in tail:
-                self._exit_probe_hint = "hy2-udp"
-                try:
-                    tr_now = require_transport(self.config())
-                    office_now = bool(resolve_corporate_proxy(self.config()))
-                    dial_now = choose_dial(tr_now, office=office_now)
-                    awg_now = amneziawg_opts(tr_now)
-                    hy_now = hysteria2_opts(tr_now)
-                    if dial_now == "amneziawg":
-                        udp_port = int((awg_now or {}).get("port") or 0)
-                    elif dial_now == "hysteria2":
-                        udp_port = int((hy_now or {}).get("port") or 0)
-                    else:
-                        udp_port = 0
-                except Exception:  # noqa: BLE001
-                    dial_now, udp_port = "hysteria2", 0
-                proto = "AmneziaWG" if dial_now == "amneziawg" else "Hysteria2"
-                if udp_port and udp_port != 443:
-                    live = foreign_vpn_live()
-                    if live:
-                        self.log(
-                            f"{proto} UDP :{udp_port} не дошёл до VPS. "
-                            "Чужой туннель поднят ("
-                            + ", ".join(live)
-                            + ") — его split default перехватывает UDP."
-                        )
-                    else:
-                        self.log(
-                            f"{proto} UDP :{udp_port} не дошёл до VPS. "
-                            "Проверьте, что на VPS слушает UDP и порт открыт в панели хостинга."
-                        )
-                else:
-                    self.log(
-                        f"{proto} не дошёл до VPS (UDP timeout). "
-                        "UDP :443 часто режет домашний DPI"
-                    )
-            else:
-                try:
-                    cfg = self.config()
-                    office = bool(resolve_corporate_proxy(cfg))
-                    tr = require_transport(cfg)
-                    dial_now = choose_dial(tr, office=office)
-                    hy = hysteria2_opts(tr)
-                    awg = amneziawg_opts(tr)
-                except Exception:  # noqa: BLE001
-                    office, hy, awg, dial_now = False, None, None, "vless-reality"
-                if not office and not hy and not awg and dial_now == "vless-reality":
-                    self._exit_probe_hint = "need-hy2"
-                    self.log(
-                        "домашний DPI съел Reality: TCP до VPS живой, "
-                        "внутри туннеля — тишина. Без Hysteria2 или AmneziaWG дома интернет "
-                        "не заработает. На VPS: bash modes/vps/enable_hysteria2.sh "
-                        "или bash modes/vps/enable_amneziawg.sh"
-                    )
-            self._log_singbox_tail("после неудачной проверки")
+            self._diagnose_failed_exit(socks_port, err)
             return
         tail = "\n".join(self.singbox.tail_log(40)).lower()
         if "i/o timeout" in tail or "deadline exceeded" in tail:
@@ -184,6 +121,81 @@ class ProbeOps:
             )
             self._log_singbox_tail("после частичного OK")
             return
+        self._on_exit_probe_ok(probe_host)
+
+    def _diagnose_failed_exit(self, socks_port: int, err: str) -> None:
+        from desktop.watchdog import socks_probe
+
+        connect_err = socks_probe(socks_port, timeout=6.0)
+        self._exit_probe_error = connect_err or err
+        if connect_err:
+            self.log(f"проверка выхода: НЕ ОК — {connect_err}")
+        else:
+            self.log(f"проверка выхода: НЕ ОК — CONNECT есть, HTTPS нет ({err})")
+        tail = "\n".join(self.singbox.tail_log(40)).lower()
+        if "no recent network activity" in tail:
+            self._log_udp_timeout_hint()
+        else:
+            self._log_reality_dpi_hint()
+        self._log_singbox_tail("после неудачной проверки")
+
+    def _log_udp_timeout_hint(self) -> None:
+        self._exit_probe_hint = "hy2-udp"
+        try:
+            tr_now = require_transport(self.config())
+            office_now = bool(resolve_corporate_proxy(self.config()))
+            dial_now = choose_dial(tr_now, office=office_now)
+            awg_now = amneziawg_opts(tr_now)
+            hy_now = hysteria2_opts(tr_now)
+            if dial_now == "amneziawg":
+                udp_port = int((awg_now or {}).get("port") or 0)
+            elif dial_now == "hysteria2":
+                udp_port = int((hy_now or {}).get("port") or 0)
+            else:
+                udp_port = 0
+        except Exception:  # noqa: BLE001
+            dial_now, udp_port = "hysteria2", 0
+        proto = "AmneziaWG" if dial_now == "amneziawg" else "Hysteria2"
+        if udp_port and udp_port != 443:
+            live = foreign_vpn_live()
+            if live:
+                self.log(
+                    f"{proto} UDP :{udp_port} не дошёл до VPS. "
+                    "Чужой туннель поднят ("
+                    + ", ".join(live)
+                    + ") — его split default перехватывает UDP."
+                )
+            else:
+                self.log(
+                    f"{proto} UDP :{udp_port} не дошёл до VPS. "
+                    "Проверьте, что на VPS слушает UDP и порт открыт в панели хостинга."
+                )
+        else:
+            self.log(
+                f"{proto} не дошёл до VPS (UDP timeout). "
+                "UDP :443 часто режет домашний DPI"
+            )
+
+    def _log_reality_dpi_hint(self) -> None:
+        try:
+            cfg = self.config()
+            office = bool(resolve_corporate_proxy(cfg))
+            tr = require_transport(cfg)
+            dial_now = choose_dial(tr, office=office)
+            hy = hysteria2_opts(tr)
+            awg = amneziawg_opts(tr)
+        except Exception:  # noqa: BLE001
+            office, hy, awg, dial_now = False, None, None, "vless-reality"
+        if not office and not hy and not awg and dial_now == "vless-reality":
+            self._exit_probe_hint = "need-hy2"
+            self.log(
+                "домашний DPI съел Reality: TCP до VPS живой, "
+                "внутри туннеля — тишина. Без Hysteria2 или AmneziaWG дома интернет "
+                "не заработает. На VPS: bash modes/vps/enable_hysteria2.sh "
+                "или bash modes/vps/enable_amneziawg.sh"
+            )
+
+    def _on_exit_probe_ok(self, probe_host: str) -> None:
         self._exit_probe_error = None
         self._exit_probe_hint = None
         self._fail_closed = False

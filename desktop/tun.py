@@ -19,6 +19,13 @@ from desktop import procutil
 from desktop.logutil import noop
 from desktop.net_host import resolve_host, underlay_gateway
 from desktop.paths import bundle_dir, is_frozen
+from desktop.sys.constants import SINGBOX_PROCESS_NAMES
+from desktop.sys.win_net import (
+    best_interface_index,
+    netsh_ipv4_interfaces,
+    route_print_v4,
+    run_route_lines,
+)
 
 LogFn = Callable[[str], None]
 
@@ -139,9 +146,6 @@ _FOREIGN_PROCS = (
     "outline.exe",
     "wireguard.exe",
 )
-_IFACE_UP = frozenset({"connected", "подключен", "подключено"})
-
-
 def foreign_vpn_processes() -> list[str]:
     """Third-party VPN front-ends running (informational, never a blocker)."""
     found: list[str] = []
@@ -179,35 +183,19 @@ def leftover_vpn_ifaces() -> list[tuple[int, str]]:
     found: list[tuple[int, str]] = []
     if sys.platform != "win32":
         return found
-    try:
-        r = subprocess.run(
-            ["netsh", "interface", "ipv4", "show", "interfaces"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return found
-    for line in (r.stdout or "").splitlines():
-        m = re.match(r"^\s*(\d+)\s+\d+\s+\d+\s+(\S+)\s+(.+?)\s*$", line)
-        if not m:
+    for iface in netsh_ipv4_interfaces():
+        if not iface.up or _is_tun_iface(iface.name):
             continue
-        state = m.group(2).lower()
-        name = m.group(3).strip()
-        if state not in _IFACE_UP or _is_tun_iface(name):
-            continue
-        low = name.lower()
+        low = iface.name.lower()
         if not any(tag in low for tag in _FOREIGN_VPN):
             continue
         routable = [
             ip
-            for ip in iface_ipv4s(name)
+            for ip in iface_ipv4s(iface.name)
             if not ip.startswith(("169.254.", "0."))
         ]
         if routable:
-            found.append((int(m.group(1)), name))
+            found.append((iface.idx, iface.name))
     return found
 
 
@@ -231,19 +219,11 @@ def foreign_split_default_cmds() -> list[str]:
     cmds: list[str] = []
     if sys.platform != "win32":
         return cmds
-    try:
-        r = subprocess.run(
-            ["route", "print", "-4"],
-            capture_output=True,
-            text=True,
-            timeout=8,
-            check=False,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-    except (OSError, subprocess.TimeoutExpired):
+    text = route_print_v4()
+    if not text:
         return cmds
     seen: set[str] = set()
-    for raw in (r.stdout or "").splitlines():
+    for raw in text.splitlines():
         m = re.match(
             r"^\s*(0\.0\.0\.0|128\.0\.0\.0)\s+128\.0\.0\.0\s+(\S+)\s+(\S+)\s+(\d+)\s*$",
             raw,
@@ -282,31 +262,16 @@ def underlay_ifaces() -> list[tuple[int, int, str]]:
     """Up IPv4 NICs except loopback and our TUN: (if_index, metric, alias)."""
     if sys.platform != "win32":
         return []
-    try:
-        r = subprocess.run(
-            ["netsh", "interface", "ipv4", "show", "interfaces"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return []
     out: list[tuple[int, int, str]] = []
-    for line in (r.stdout or "").splitlines():
-        m = re.match(r"^\s*(\d+)\s+(\d+)\s+\d+\s+(\S+)\s+(.+?)\s*$", line)
-        if not m:
+    for iface in netsh_ipv4_interfaces():
+        if not iface.up:
             continue
-        if m.group(3).lower() not in _IFACE_UP:
-            continue
-        name = m.group(4).strip()
-        low = name.lower()
+        low = iface.name.lower()
         if "loopback" in low or "петл" in low:
             continue
-        if _is_tun_iface(name):
+        if _is_tun_iface(iface.name):
             continue
-        out.append((int(m.group(1)), int(m.group(2)), name))
+        out.append((iface.idx, iface.metric, iface.name))
     return out
 
 
@@ -314,25 +279,9 @@ def _win_if_index_by_alias(alias: str) -> int | None:
     want = (alias or "").strip().lower()
     if not want:
         return None
-    try:
-        r = subprocess.run(
-            ["netsh", "interface", "ipv4", "show", "interfaces"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    for line in (r.stdout or "").splitlines():
-        m = re.match(r"^\s*(\d+)\s+\d+\s+\d+\s+(\S+)\s+(.+?)\s*$", line)
-        if not m:
-            continue
-        if m.group(2).lower() not in _IFACE_UP:
-            continue
-        if m.group(3).strip().lower() == want:
-            return int(m.group(1))
+    for iface in netsh_ipv4_interfaces():
+        if iface.up and iface.name.lower() == want:
+            return iface.idx
     return None
 
 
@@ -353,19 +302,8 @@ def tun_split_rows() -> list[str]:
     """IPv4 /1 rows that steal default (TUN or leftover)."""
     if sys.platform != "win32":
         return []
-    try:
-        r = subprocess.run(
-            ["route", "print", "-4"],
-            capture_output=True,
-            text=True,
-            timeout=8,
-            check=False,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return []
     out: list[str] = []
-    for raw in (r.stdout or "").splitlines():
+    for raw in route_print_v4().splitlines():
         if re.match(r"^\s*(0\.0\.0\.0|128\.0\.0\.0)\s+128\.0\.0\.0\s+", raw):
             out.append(" ".join(raw.split()))
     return out
@@ -398,35 +336,11 @@ def ensure_tun_split_default(if_idx: int, *, metric: int = 5) -> tuple[bool, str
     """Install /1+/1 on TUN; hop 172.19.0.1 first (same as the working build)."""
     from desktop.kill_switch import lift_ipv4_blackhole_commands
 
-    for line in lift_ipv4_blackhole_commands():
-        args = [p for p in line.split(" ") if p]
-        try:
-            subprocess.run(
-                args,
-                capture_output=True,
-                text=True,
-                timeout=8,
-                check=False,
-                creationflags=subprocess.CREATE_NO_WINDOW,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            pass
+    run_route_lines(lift_ipv4_blackhole_commands())
     hops = ("172.19.0.1", "172.19.0.2")
     last = ""
     for hop in hops:
-        for line in install_tun_split_default(if_idx, metric=metric, hop=hop):
-            args = [p for p in line.split(" ") if p]
-            try:
-                subprocess.run(
-                    args,
-                    capture_output=True,
-                    text=True,
-                    timeout=8,
-                    check=False,
-                    creationflags=subprocess.CREATE_NO_WINDOW,
-                )
-            except (OSError, subprocess.TimeoutExpired):
-                pass
+        run_route_lines(install_tun_split_default(if_idx, metric=metric, hop=hop))
         if tun_split_installed(if_idx):
             rows = " | ".join(tun_split_rows()[:4])
             return True, f"TUN split: {rows}"
@@ -486,18 +400,7 @@ def stale_default_cmds(keep_gw: str) -> list[str]:
     seen: set[str] = set()
     if sys.platform != "win32" or not keep:
         return cmds
-    try:
-        r = subprocess.run(
-            ["route", "print", "-4"],
-            capture_output=True,
-            text=True,
-            timeout=8,
-            check=False,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return cmds
-    for raw in (r.stdout or "").splitlines():
+    for raw in route_print_v4().splitlines():
         m = re.match(
             r"^\s*0\.0\.0\.0\s+0\.0\.0\.0\s+(\S+)\s+(\S+)(?:\s+(\d+|Default))?\s*$",
             raw,
@@ -523,93 +426,16 @@ def stale_default_cmds(keep_gw: str) -> list[str]:
 def default_route_lines() -> list[str]:
     """Short IPv4 default-route rows for diagnostics."""
     if sys.platform == "win32":
-        try:
-            r = subprocess.run(
-                ["route", "print", "-4"],
-                capture_output=True,
-                text=True,
-                timeout=8,
-                check=False,
-                creationflags=subprocess.CREATE_NO_WINDOW,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            return []
         out: list[str] = []
-        for raw in (r.stdout or "").splitlines():
+        for raw in route_print_v4().splitlines():
             if re.match(r"^\s*0\.0\.0\.0\s+0\.0\.0\.0\s+", raw):
                 out.append(" ".join(raw.split()))
         return out[:8]
     try:
-        r = subprocess.run(
-            ["ip", "-4", "route", "show", "default"],
-            capture_output=True,
-            text=True,
-            timeout=3,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
+        r = procutil.run(["ip", "-4", "route", "show", "default"], timeout=3)
+    except OSError:
         return []
     return [ln.strip() for ln in (r.stdout or "").splitlines() if ln.strip()][:8]
-
-
-def foreign_vpn_adapters() -> list[str]:
-    """Other VPN NICs/processes that will fight TUN routes (Amnezia, …)."""
-    found: list[str] = []
-    if sys.platform == "win32":
-        try:
-            r = subprocess.run(
-                ["netsh", "interface", "show", "interface"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-                check=False,
-                creationflags=subprocess.CREATE_NO_WINDOW,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            r = None
-        if r:
-            for line in (r.stdout or "").splitlines():
-                low = line.lower()
-                if "disconnected" in low or "connected" not in low:
-                    continue
-                if _is_tun_iface(line):
-                    continue
-                hit = next((tag for tag in _FOREIGN_VPN if tag in low), None)
-                if hit and hit not in found:
-                    found.append(hit)
-        for proc in _FOREIGN_PROCS:
-            try:
-                r = subprocess.run(
-                    ["tasklist", "/FI", f"IMAGENAME eq {proc}", "/NH"],
-                    capture_output=True,
-                    text=True,
-                    timeout=4,
-                    check=False,
-                    creationflags=subprocess.CREATE_NO_WINDOW,
-                )
-            except (OSError, subprocess.TimeoutExpired):
-                continue
-            if proc.lower() in (r.stdout or "").lower():
-                tag = proc.replace(".exe", "")
-                if tag not in found:
-                    found.append(tag)
-        return found
-    try:
-        r = subprocess.run(
-            ["ip", "-o", "link", "show"],
-            capture_output=True,
-            text=True,
-            timeout=3,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return []
-    for line in (r.stdout or "").splitlines():
-        low = line.lower()
-        hit = next((tag for tag in _FOREIGN_VPN if tag in low), None)
-        if hit and hit not in found:
-            found.append(hit)
-    return found
 
 
 def _detect_bind_win(dest: str) -> str | None:
@@ -617,43 +443,19 @@ def _detect_bind_win(dest: str) -> str | None:
     ip = _resolve_host(dest)
     if not ip:
         return None
-    try:
-        import ctypes
-        from ctypes import wintypes
-
-        dest_n = ctypes.windll.ws2_32.inet_addr(ip.encode("ascii"))  # type: ignore[attr-defined]
-        if dest_n == 0xFFFFFFFF:
-            return None
-        idx = wintypes.DWORD()
-        err = ctypes.windll.iphlpapi.GetBestInterface(dest_n, ctypes.byref(idx))  # type: ignore[attr-defined]
-        if err or not idx.value:
-            return None
-        name = _win_if_alias(int(idx.value))
-        if name and not _is_tun_iface(name):
-            return name
-    except Exception:
+    idx = best_interface_index(ip)
+    if not idx:
         return None
+    name = _win_if_alias(idx)
+    if name and not _is_tun_iface(name):
+        return name
     return None
 
 
 def _win_if_alias(if_index: int) -> str | None:
-    try:
-        r = subprocess.run(
-            ["netsh", "interface", "ipv4", "show", "interfaces"],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-            creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return None
-    for line in (r.stdout or "").splitlines():
-        m = re.match(r"^\s*(\d+)\s+\d+\s+\d+\s+\S+\s+(.+?)\s*$", line)
-        if not m or int(m.group(1)) != if_index:
-            continue
-        name = m.group(2).strip()
-        return name or None
+    for iface in netsh_ipv4_interfaces():
+        if iface.idx == if_index:
+            return iface.name or None
     return None
 
 
@@ -859,15 +661,7 @@ class TunManager:
         targets: list[int] = []
         if pid:
             targets.append(pid)
-        for orphan in procutil.pids_named(
-            "sing-box.exe",
-            "sing-box",
-            "sing-box-awg",
-            "ergoms-tun.exe",
-            "ergoms-tun",
-            "ergoms-tun-awg.exe",
-            "ergoms-tun-awg",
-        ):
+        for orphan in procutil.pids_named(*SINGBOX_PROCESS_NAMES):
             if orphan not in targets:
                 targets.append(orphan)
         died = procutil.kill_pids(targets)
@@ -886,15 +680,7 @@ class TunManager:
             self.log("TUN выключен")
 
     def _find_sing_box_pid(self) -> int | None:
-        for pid in procutil.pids_named(
-            "sing-box.exe",
-            "sing-box",
-            "sing-box-awg",
-            "ergoms-tun.exe",
-            "ergoms-tun",
-            "ergoms-tun-awg.exe",
-            "ergoms-tun-awg",
-        ):
+        for pid in procutil.pids_named(*SINGBOX_PROCESS_NAMES):
             return pid
         return None
 

@@ -135,7 +135,7 @@ class IntegrationOps:
 
     def _start_pac_inprocess(self, cfg: dict[str, Any], *, proxy_port: int) -> str:
         from desktop.pac_serve import PacServer
-        from lib.http_via_socks import build_pac
+        from lib.pac import build_pac
 
         mode = self._pac_mode(cfg)
         pac_port = get_pac_listen_port()
