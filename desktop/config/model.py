@@ -341,7 +341,10 @@ class AppConfig:
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         extra = payload.pop("extra", {}) or {}
-        out = {**extra, **payload}
+        out = dict(payload)
+        for key, val in extra.items():
+            if key not in out:
+                out[key] = val
         return out
 
 

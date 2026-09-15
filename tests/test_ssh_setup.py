@@ -3,14 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from desktop.ssh_setup import (
-    INCLUDE_NAME,
     _strip_managed_hosts,
     client_ssh_block,
     copy_id_targets,
     default_hosts,
-    ensure_user_include,
     posix_path,
     render_include,
+    ssh_identity_line,
+    write_user_config,
 )
 
 
@@ -32,7 +32,8 @@ def test_render_include_uses_wrapper_and_jump(tmp_path: Path) -> None:
     assert "HostName 127.0.0.1" in text
     assert "Port 2222" in text
     assert "User dohao" in text
-    assert f"IdentityFile {posix_path(identity)}" in text
+    assert f"IdentityFile {ssh_identity_line(identity)}" in text
+    assert "PreferredAuthentications" not in text
 
 
 def test_copy_id_targets_are_lab_aliases() -> None:
@@ -40,7 +41,7 @@ def test_copy_id_targets_are_lab_aliases() -> None:
     assert copy_id_targets(cfg) == ["bstu-server-laboratory-proxy-1"]
 
 
-def test_ensure_user_include_keeps_foreign_hosts(tmp_path: Path, monkeypatch) -> None:
+def test_write_user_config_keeps_foreign_hosts(tmp_path: Path) -> None:
     ssh_dir = tmp_path / ".ssh"
     ssh_dir.mkdir()
     (ssh_dir / "config").write_text(
@@ -57,12 +58,12 @@ def test_ensure_user_include_keeps_foreign_hosts(tmp_path: Path, monkeypatch) ->
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr("desktop.ssh_setup.Path.home", lambda: tmp_path)
-    ensure_user_include(ssh_dir)
+    write_user_config(ssh_dir, "Host vps-server server-vps\n  HostName 203.0.113.10\n")
     text = (ssh_dir / "config").read_text(encoding="utf-8")
-    assert f"Include {INCLUDE_NAME}" in text
     assert "Host bstu-adm" in text
-    assert "Host vps-server" not in text
+    assert "Include " not in text
+    assert "HostName 203.0.113.10" in text
+    assert "old.example" not in text
 
 
 def test_strip_managed_keeps_unrelated() -> None:
