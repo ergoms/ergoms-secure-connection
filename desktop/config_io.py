@@ -468,7 +468,7 @@ def migrate_env_into_config(cfg: dict[str, Any], env: dict[str, str]) -> dict[st
     if "WATCHDOG_INTERVAL" in env and env["WATCHDOG_INTERVAL"].strip():
         out["watchdog_interval"] = max(5, _as_int(env["WATCHDOG_INTERVAL"], 15))
     if "WATCHDOG_MAX_RETRIES" in env and env["WATCHDOG_MAX_RETRIES"].strip():
-        out["watchdog_max_retries"] = max(1, _as_int(env["WATCHDOG_MAX_RETRIES"], 5))
+        out["watchdog_max_retries"] = max(0, _as_int(env["WATCHDOG_MAX_RETRIES"], 0))
     if "KILL_SWITCH" in env:
         out["kill_switch"] = _as_bool(env["KILL_SWITCH"], True)
     if "TUN" in env:

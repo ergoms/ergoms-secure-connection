@@ -17,7 +17,6 @@ from desktop.config_io import (
     get_tun_enabled,
     get_watchdog_enabled,
     get_watchdog_interval,
-    get_watchdog_max_retries,
 )
 from desktop.logutil import noop
 from lib.netutil import port_open
@@ -355,23 +354,15 @@ class TunnelWatchdog:
             # Hard failure (port closed / process dead) — reset soft probe counter
             self._probe_fails = 0
 
-        max_retries = get_watchdog_max_retries()
-        if self._fail_streak >= max_retries:
-            # Back off hard — notify once per cooldown window
-            self._next_ok_at = now + max(60, get_watchdog_interval() * 6)
-            self.log(
-                f"watchdog: still broken ({problem}); "
-                f"paused after {max_retries} retries, next try later"
-            )
-            return
-
         self._fail_streak += 1
-        self.log(f"watchdog: {problem} — reconnect {self._fail_streak}/{max_retries}")
+        self.log(f"watchdog: {problem} — переподключение #{self._fail_streak}")
         if "sing-box down" in problem:
-            self._notify("TUN упал", f"{problem}. Поднимаю…")
+            if self._fail_streak <= 3 or self._fail_streak % 10 == 0:
+                self._notify("TUN упал", f"{problem}. Поднимаю…")
             self._reconnect(tun_only=True)
         else:
-            self._notify("Туннель упал", f"{problem}. Переподключаю…")
+            if self._fail_streak <= 3 or self._fail_streak % 10 == 0:
+                self._notify("Туннель упал", f"{problem}. Переподключаю…")
             self._reconnect(tun_only=False)
 
     def _reconnect(self, *, tun_only: bool = False) -> None:
@@ -405,12 +396,14 @@ class TunnelWatchdog:
                 delay = min(120, get_watchdog_interval() * (2 ** min(self._fail_streak, 4)))
                 self._next_ok_at = time.monotonic() + delay
                 self.log(f"watchdog: still unhealthy ({problem}), retry in {int(delay)}s")
-                self._notify("Переподключение не удалось", problem)
+                if self._fail_streak <= 3 or self._fail_streak % 10 == 0:
+                    self._notify("Переподключение не удалось", problem)
         except Exception as exc:  # noqa: BLE001
             delay = min(120, get_watchdog_interval() * (2 ** min(self._fail_streak, 4)))
             self._next_ok_at = time.monotonic() + delay
             self.log(f"watchdog: reconnect failed: {exc}; retry in {int(delay)}s")
-            self._notify("Ошибка переподключения", str(exc)[:120])
+            if self._fail_streak <= 3 or self._fail_streak % 10 == 0:
+                self._notify("Ошибка переподключения", str(exc)[:120])
         finally:
             self._reconnecting = False
 

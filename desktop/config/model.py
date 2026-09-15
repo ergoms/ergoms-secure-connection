@@ -293,7 +293,7 @@ class AppConfig:
         self.pac_listen_port = as_int(self.pac_listen_port, PAC_LISTEN_PORT)
         self.watchdog = as_bool(self.watchdog, True)
         self.watchdog_interval = max(5, as_int(self.watchdog_interval, WATCHDOG_INTERVAL))
-        self.watchdog_max_retries = max(1, as_int(self.watchdog_max_retries, WATCHDOG_MAX_RETRIES))
+        self.watchdog_max_retries = max(0, as_int(self.watchdog_max_retries, WATCHDOG_MAX_RETRIES))
         self.kill_switch = as_bool(self.kill_switch, True)
         self.git_proxy = as_bool(self.git_proxy, False)
         self.docker_proxy = as_bool(self.docker_proxy, False)

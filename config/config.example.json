@@ -7,7 +7,7 @@
   "pac_listen_port": 1089,
   "watchdog": true,
   "watchdog_interval": 15,
-  "watchdog_max_retries": 5,
+  "watchdog_max_retries": 0,
   "kill_switch": true,
   "git_proxy": false,
   "docker_proxy": false,

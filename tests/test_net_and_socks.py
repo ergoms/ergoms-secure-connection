@@ -213,6 +213,44 @@ def test_watchdog_does_not_import_client() -> None:
     assert not hasattr(wd, "OpsClient")
 
 
+def test_watchdog_reconnects_forever(monkeypatch: pytest.MonkeyPatch) -> None:
+    from desktop.watchdog import TunnelWatchdog
+
+    class Host:
+        log = staticmethod(lambda _m: None)
+
+        def reload_env(self) -> None:
+            return None
+
+        def enable(self, *, spawn_watchdog: bool = True) -> None:
+            del spawn_watchdog
+
+        def enable_tun(self, *, persist: bool = True) -> None:
+            del persist
+
+        def stop_singbox_mode(self) -> None:
+            return None
+
+    reconnects = {"n": 0}
+
+    def fake_health(_client, *, probe: bool = True) -> str:
+        del probe
+        return "sing-box down"
+
+    monkeypatch.setattr("desktop.watchdog.health_problem", fake_health)
+    monkeypatch.setattr("desktop.watchdog.get_watchdog_enabled", lambda: True)
+    monkeypatch.setattr("desktop.watchdog.get_watchdog_interval", lambda: 5)
+    monkeypatch.setattr("desktop.watchdog.get_kill_switch", lambda: False)
+    wd = TunnelWatchdog(Host())  # type: ignore[arg-type]
+    wd.set_desired(True)
+    wd._reconnect = lambda **_k: reconnects.__setitem__("n", reconnects["n"] + 1)  # noqa: SLF001
+    for _ in range(12):
+        wd._next_ok_at = 0.0  # noqa: SLF001
+        wd.tick()
+    assert reconnects["n"] == 12
+    assert wd._fail_streak == 12  # noqa: SLF001
+
+
 def test_settings_map_roundtrip() -> None:
     cfg = default_config_template()
     cfg["server"]["host"] = "vps.example"
