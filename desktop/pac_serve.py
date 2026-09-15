@@ -123,6 +123,10 @@ class PacServer:
         log(f"PAC server http://127.0.0.1:{listen_port}/proxy.pac")
         return listen_port
 
+    def replace_pac(self, pac_bytes: bytes) -> None:
+        """Swap PAC body without closing :1089 — Chrome keeps the AutoConfigURL."""
+        self._pac = pac_bytes
+
     def _handle(self, client: socket.socket) -> None:
         serve_pac_response(client, self._pac)
 

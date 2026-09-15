@@ -372,6 +372,11 @@ class OpsClient(ConnectionOps, ProbeOps, IntegrationOps):
             lines.append(f"git https.proxy = {info['git_https_proxy']}")
 
         self._status_fill_ports(info, lines)
+        if info.get("singbox_running"):
+            try:
+                self.ensure_office_browser_pac()
+            except Exception:  # noqa: BLE001
+                pass
 
         # TUN inbound inside sing-box
         info["tun_running"] = bool(info["singbox_running"] and get_tun_enabled())

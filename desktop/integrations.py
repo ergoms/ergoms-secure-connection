@@ -143,7 +143,6 @@ class IntegrationOps:
         if bypass_via not in ("direct", "corporate"):
             bypass_via = "direct"
         pac_hosts, bypass = self._bridge_hosts(cfg, mode)
-        self.stop_pac_server()
         corp = resolve_corporate_proxy(cfg)
         body = build_pac(
             int(proxy_port),
@@ -153,10 +152,21 @@ class IntegrationOps:
             corp,
             bypass_via,
         )
+        url = f"http://127.0.0.1:{pac_port}/proxy.pac"
+        srv = getattr(self, "_pac_server", None)
+        if (
+            srv is not None
+            and getattr(srv, "running", False)
+            and getattr(srv, "port", None) == pac_port
+        ):
+            srv.replace_pac(body)
+            return url
+        if port_open("127.0.0.1", pac_port, timeout=0.2) and srv is None:
+            return url
+        self.stop_pac_server()
         srv = PacServer()
         srv.start(body, listen_host="127.0.0.1", listen_port=pac_port, log=self.log)
         self._pac_server = srv
-        url = f"http://127.0.0.1:{pac_port}/proxy.pac"
         self.log(f"PAC {url} → PROXY 127.0.0.1:{proxy_port}")
         return url
 
@@ -167,6 +177,9 @@ class IntegrationOps:
             return self._start_pac_inprocess(cfg, proxy_port=proxy_port)
         mode = self._pac_mode(cfg)
         pac_port = get_pac_listen_port()
+        url = f"http://127.0.0.1:{pac_port}/proxy.pac"
+        if port_open("127.0.0.1", pac_port, timeout=0.2):
+            return url
         bypass_via = str(cfg.get("proxy_bypass_via") or "direct").strip().lower()
         if bypass_via not in ("direct", "corporate"):
             bypass_via = "direct"
@@ -240,7 +253,43 @@ class IntegrationOps:
         """Skip git/PAC/Docker undo when there are no leftover markers."""
         if not self._override_markers():
             return
+        try:
+            if self._vpn_process_up():
+                return
+        except Exception:  # noqa: BLE001
+            pass
         self.teardown_overrides()
+
+
+    def ensure_office_browser_pac(self) -> None:
+        """Re-pin office PAC if another process tore it down while VPN is up."""
+        try:
+            if not self._vpn_process_up():
+                return
+            cfg = self.config()
+        except Exception:  # noqa: BLE001
+            return
+        if not resolve_corporate_proxy(cfg):
+            return
+        http_port = get_http_bridge_port()
+        pac_port = get_pac_listen_port()
+        url = f"http://127.0.0.1:{pac_port}/proxy.pac"
+        repaired = False
+        if not port_open("127.0.0.1", pac_port, timeout=0.2):
+            try:
+                self.start_pac_server(cfg, proxy_port=http_port)
+                repaired = True
+            except Exception as exc:  # noqa: BLE001
+                self.log(f"PAC: не поднял :{pac_port} ({exc})")
+                return
+        if sys.platform == "win32":
+            from desktop.win_proxy import pac_url_active
+
+            if not pac_url_active(url):
+                self._enable_browser_pac(cfg, http_port, pac_url=url)
+                repaired = True
+        if repaired:
+            self.log("PAC браузера вернул — его снял другой процесс")
 
 
     def teardown_overrides(self) -> None:

@@ -105,6 +105,25 @@ def _is_our_pac(url: str) -> bool:
     return "proxy.pac" in text or ":1089" in text
 
 
+def current_auto_config_url() -> str:
+    if not _is_windows():
+        return ""
+    with _reg_key() as key:
+        return _get_reg_str(key, "AutoConfigURL", "").strip()
+
+
+def pac_url_active(url: str) -> bool:
+    """True if Internet Settings already point at this PAC and not a static proxy."""
+    want = (url or "").strip()
+    if not want or not _is_windows():
+        return False
+    with _reg_key() as key:
+        current = _get_reg_str(key, "AutoConfigURL", "").strip()
+        proxy_on = _get_reg_int(key, "ProxyEnable", 0)
+        auto = _get_reg_int(key, "AutoDetect", 0)
+    return current == want and proxy_on == 0 and auto == 0
+
+
 def restore_win_proxy(backup_path: Path, log: LogFn = noop) -> None:
     if not _is_windows():
         return
@@ -152,6 +171,8 @@ def enable_browser_pac(
         return
     url = (pac_url or "").strip() or f"http://127.0.0.1:{http_port}/proxy.pac"
     backup_win_proxy(backup_path)
+    if pac_url_active(url):
+        return
     with _reg_key() as key:
         _set_reg_int(key, "ProxyEnable", 0)
         _set_reg_int(key, "AutoDetect", 0)

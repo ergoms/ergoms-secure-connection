@@ -213,6 +213,116 @@ def test_watchdog_does_not_import_client() -> None:
     assert not hasattr(wd, "OpsClient")
 
 
+def test_teardown_if_dirty_skips_live_vpn() -> None:
+    from desktop.integrations import IntegrationOps
+
+    n = {"teardown": 0}
+
+    class Host(IntegrationOps):
+        def _override_markers(self) -> bool:
+            return True
+
+        def _vpn_process_up(self) -> bool:
+            return True
+
+        def teardown_overrides(self) -> None:
+            n["teardown"] += 1
+
+    Host().teardown_overrides_if_dirty()
+    assert n["teardown"] == 0
+
+    class Dead(Host):
+        def _vpn_process_up(self) -> bool:
+            return False
+
+    Dead().teardown_overrides_if_dirty()
+    assert n["teardown"] == 1
+
+
+def test_watchdog_reconnect_keeps_pac(monkeypatch: pytest.MonkeyPatch) -> None:
+    from desktop.watchdog import TunnelWatchdog
+
+    stops: list[bool] = []
+
+    class Host:
+        log = staticmethod(lambda _m: None)
+        paths = type("P", (), {"var_dir": None})()
+        singbox = type("S", (), {"running": staticmethod(lambda: False)})()
+        tun = type("T", (), {"running": staticmethod(lambda: False)})()
+        reverse_ssh = type("R", (), {"running": staticmethod(lambda: False)})()
+
+        def reload_env(self) -> None:
+            return None
+
+        def enable(self, *, spawn_watchdog: bool = True) -> None:
+            del spawn_watchdog
+
+        def enable_tun(self, *, persist: bool = True) -> None:
+            del persist
+
+        def stop_singbox_mode(self, *, teardown: bool = True) -> None:
+            stops.append(teardown)
+
+        def config(self) -> dict:
+            return {}
+
+        def _ensure_kill_switch(self, cfg: dict) -> list[str]:
+            del cfg
+            return []
+
+        def _maybe_start_reverse_ssh(self, cfg: dict | None = None) -> None:
+            del cfg
+
+    monkeypatch.setattr(
+        "desktop.watchdog.health_problem", lambda *_a, **_k: "SOCKS :1080 down"
+    )
+    monkeypatch.setattr("desktop.watchdog.get_watchdog_interval", lambda: 5)
+    wd = TunnelWatchdog(Host())  # type: ignore[arg-type]
+    wd._reconnect(tun_only=False)  # noqa: SLF001
+    assert stops == [False]
+
+
+def test_pac_server_replace_keeps_listener() -> None:
+    import socket
+
+    from desktop.pac_serve import PacServer
+
+    srv = PacServer()
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    port = int(sock.getsockname()[1])
+    sock.close()
+    srv.start(b"v1", listen_host="127.0.0.1", listen_port=port)
+    try:
+        assert srv.running and srv.port == port
+        srv.replace_pac(b"v2")
+        assert srv.running and srv.port == port
+    finally:
+        srv.stop()
+
+
+def test_enable_browser_pac_skips_notify_when_set(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from desktop import win_proxy
+
+    monkeypatch.setattr(win_proxy, "_is_windows", lambda: True)
+    monkeypatch.setattr(win_proxy, "pac_url_active", lambda _url: True)
+    monkeypatch.setattr(win_proxy, "backup_win_proxy", lambda *_a, **_k: None)
+    notified = {"n": 0}
+    monkeypatch.setattr(
+        win_proxy, "notify_proxy_change", lambda: notified.__setitem__("n", notified["n"] + 1)
+    )
+    win_proxy.enable_browser_pac(
+        1088,
+        "full",
+        3,
+        tmp_path / "bak.json",
+        pac_url="http://127.0.0.1:1089/proxy.pac",
+    )
+    assert notified["n"] == 0
+
+
 def test_watchdog_reconnects_forever(monkeypatch: pytest.MonkeyPatch) -> None:
     from desktop.watchdog import TunnelWatchdog
 
