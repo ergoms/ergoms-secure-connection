@@ -23,9 +23,12 @@ def test_render_include_uses_wrapper_and_jump(tmp_path: Path) -> None:
     identity = tmp_path / "server-vps"
     wrapper = tmp_path / "ergoms-connect-socks.cmd"
     text = render_include(cfg=cfg, identity=identity, wrapper=wrapper)
-    assert "Host vps-server server-vps" in text
     assert "Host vps-server-direct" in text
-    assert "Host bstu-server-laboratory-proxy-1 bstu-server-laboratory-1 lab" in text
+    assert "Host vps-server\n" in text
+    assert "Host bstu-server-laboratory-proxy-1" in text
+    assert "Host server-vps" not in text
+    assert "Host lab" not in text
+    assert "bstu-server-laboratory-1" not in text
     assert f"ProxyCommand {posix_path(wrapper)} %h %p" in text
     assert "ProxyJump vps-server" in text
     assert "HostName 203.0.113.10" in text

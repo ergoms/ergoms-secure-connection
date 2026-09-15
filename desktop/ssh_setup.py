@@ -77,9 +77,9 @@ def ssh_identity_line(identity: Path) -> str:
 def default_hosts(cfg: dict[str, Any]) -> list[dict[str, Any]]:
     return [
         {"host": "vps-server-direct", "via_socks": False},
-        {"host": "vps-server server-vps", "via_socks": True},
+        {"host": "vps-server", "via_socks": True},
         {
-            "host": "bstu-server-laboratory-proxy-1 bstu-server-laboratory-1 lab",
+            "host": "bstu-server-laboratory-proxy-1",
             "hostname": "127.0.0.1",
             "port": 2222,
             "user": "dohao",
