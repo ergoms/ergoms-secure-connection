@@ -75,6 +75,7 @@ class ProbeOps:
         if not self.singbox.running():
             self._exit_probe_error = self._exit_probe_error or "sing-box stopped"
             return
+        self._claim_default_route()
         home_udp = False
         probe_host, probe_path = "github.com", "/"
         try:
@@ -185,6 +186,30 @@ class ProbeOps:
                 "внутри туннеля — тишина. Без AmneziaWG дома интернет "
                 "не заработает. На VPS: bash modes/vps/enable_amneziawg.sh"
             )
+
+    def _claim_default_route(self) -> None:
+        """Steal default now so apps do not leak while the HTTPS probe runs."""
+        if not getattr(self, "_pending_win_tun", False):
+            return
+        allow = list(getattr(self, "_pending_allow", []) or [])
+        self.log("ставлю TUN split default сразу — трафик не ждёт проверку выхода")
+        try:
+            self._install_win_tun_routes(allow, strict=False)
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"TUN split: {exc}")
+            return
+        self._pending_win_tun = False
+        if getattr(self, "_defer_win_ks", False) and get_kill_switch():
+            try:
+                apply_kill_switch(
+                    allow,
+                    var_dir=self.paths.var_dir,
+                    log=self.log,
+                    blackhole=False,
+                )
+            except Exception as exc:  # noqa: BLE001
+                self.log(f"kill switch: {exc}")
+            self._defer_win_ks = False
 
     def _on_exit_probe_ok(self, probe_host: str) -> None:
         self._exit_probe_error = None

@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Layouts
 import "Theme.js" as T
 
 Item {
@@ -6,6 +7,7 @@ Item {
     property string message: ""
     property string kind: "info"
     property bool shown: false
+    property bool overlay: true
 
     function show(msg, k) {
         message = msg
@@ -14,15 +16,17 @@ Item {
         hideTimer.restart()
     }
 
-    // Compact banner under the title, left side — does not cover log Copy
-    // or the settings footer.
-    anchors.left: parent.left
-    anchors.top: parent.top
-    anchors.leftMargin: 14
-    anchors.topMargin: 58
-    width: Math.min(parent.width - 130, 268)
+    // Overlay: full-width strip under the window title.
+    // Inline (journal): lives in the page layout under «Журнал» / «Копировать».
+    anchors.left: overlay ? parent.left : undefined
+    anchors.right: overlay ? parent.right : undefined
+    anchors.top: overlay ? parent.top : undefined
+    anchors.leftMargin: overlay ? 14 : 0
+    anchors.rightMargin: overlay ? 14 : 0
+    anchors.topMargin: overlay ? 58 : 0
+    Layout.fillWidth: overlay ? false : true
     height: shown ? box.height : 0
-    visible: shown
+    visible: shown && (!overlay || bridge.page !== "log")
     z: 20
 
     Timer {

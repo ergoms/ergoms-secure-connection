@@ -116,7 +116,10 @@ ApplicationWindow {
 
     Connections {
         target: bridge
-        function onToast(message, kind) { toasts.show(message, kind) }
+        function onToast(message, kind) {
+            if (bridge.page !== "log")
+                toasts.show(message, kind)
+        }
         function onHideRequested() { win.hide() }
         function onShowRequested() {
             win.visible = true

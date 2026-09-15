@@ -119,9 +119,8 @@ class ConnectionOps:
             self.download_sing_box()
             sing_box_path = get_sing_box_path(cfg)
 
-        if infer_corporate(cfg):
-            bypass = [str(h) for h in cfg.get("proxy_bypass") or [] if h]
-        else:
+        bypass = [str(h) for h in cfg.get("proxy_bypass") or [] if h]
+        if not bypass:
             bypass = ["*.local", "*.lan"]
         kill_switch = get_kill_switch()
         enable_tun = get_tun_enabled() or kill_switch

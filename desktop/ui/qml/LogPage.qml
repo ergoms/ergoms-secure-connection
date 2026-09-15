@@ -107,6 +107,16 @@ Item {
                 color: Qt.rgba(1, 1, 1, 0.04)
             }
 
+            ToastHost {
+                id: logToast
+                overlay: false
+                Layout.fillWidth: true
+                Layout.leftMargin: 10
+                Layout.rightMargin: 10
+                Layout.topMargin: shown ? 8 : 0
+                Layout.bottomMargin: shown ? 4 : 0
+            }
+
             ListView {
                 id: logList
                 Layout.fillWidth: true
@@ -171,6 +181,10 @@ Item {
 
     Connections {
         target: bridge
+        function onToast(message, kind) {
+            if (bridge.page === "log")
+                logToast.show(message, kind)
+        }
         function onLogAppended(line) {
             if (logModel.count > 1800)
                 root.reloadAll()
