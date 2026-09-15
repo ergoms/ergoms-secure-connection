@@ -401,7 +401,7 @@ class GuiBridge(QObject):
     def saveExceptions(self) -> None:
         try:
             self._write_settings_to_disk()
-            self._enqueue_log("Обходы сохранены")
+            self._enqueue_log("Правила сохранены")
             if self._active:
                 self.toast.emit("Сохранено. Применится при следующем подключении.", "info")
         except Exception as exc:  # noqa: BLE001

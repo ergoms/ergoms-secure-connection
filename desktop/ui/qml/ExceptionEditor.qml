@@ -9,6 +9,7 @@ Column {
     property string settingKey: ""
     property bool presetEnabled: false
     property bool presetExpanded: false
+    property bool listOpen: true
     property var hint: ({})
     property bool analyzing: false
     property alias query: input.text
@@ -16,14 +17,19 @@ Column {
 
     width: parent ? parent.width : 280
     spacing: 8
+    clip: true
 
     readonly property string rawJson: root.settingKey === "routeVpn"
         ? String(bridge.settings.routeVpn || "[]")
         : String(bridge.settings.routeDirect || "[]")
-    readonly property var chipItems: {
+    readonly property var listItems: {
         var _watch = rawJson
         var _exp = presetExpanded
         return chipModel()
+    }
+    readonly property int listCount: {
+        var _watch = rawJson
+        return tokens().length
     }
 
     readonly property var presetList: {
@@ -65,6 +71,7 @@ Column {
         input.text = ""
         root.hint = {}
         root.analyzing = false
+        root.listOpen = true
     }
 
     function removeToken(raw) {
@@ -152,12 +159,46 @@ Column {
         wrapMode: Text.WordWrap
     }
 
-    Flow {
+    Rectangle {
         width: parent.width
+        height: 36
+        radius: 10
+        color: T.surface2
+        Text {
+            anchors.left: parent.left
+            anchors.leftMargin: 12
+            anchors.verticalCenter: parent.verticalCenter
+            text: root.listCount ? ("Список · " + root.listCount) : "Список пуст"
+            color: T.text
+            font.pixelSize: 12
+            font.weight: Font.DemiBold
+            font.family: T.fontUi
+        }
+        Text {
+            anchors.right: parent.right
+            anchors.rightMargin: 12
+            anchors.verticalCenter: parent.verticalCenter
+            text: root.listOpen ? "Скрыть" : "Показать"
+            color: T.accent
+            font.pixelSize: 12
+            font.weight: Font.DemiBold
+            font.family: T.fontUi
+        }
+        MouseArea {
+            anchors.fill: parent
+            cursorShape: Qt.PointingHandCursor
+            onClicked: root.listOpen = !root.listOpen
+        }
+    }
+
+    Column {
+        visible: root.listOpen
+        width: parent.width
+        height: visible ? implicitHeight : 0
         spacing: 6
         Repeater {
-            model: root.chipItems
-            delegate: TokenChip {
+            model: root.listItems
+            delegate: ExceptionRow {
                 required property var modelData
                 raw: String(modelData)
                 group: raw === "__preset__"

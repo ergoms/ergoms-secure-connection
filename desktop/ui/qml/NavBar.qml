@@ -20,7 +20,7 @@ Rectangle {
             model: [
                 { key: "home", label: "Главная" },
                 { key: "settings", label: "Настройки" },
-                { key: "exceptions", label: "Обходы" },
+                { key: "exceptions", label: "Правила" },
                 { key: "log", label: "Журнал" }
             ]
             delegate: Item {

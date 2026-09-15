@@ -26,6 +26,7 @@ COMMANDS = (
     "tun-off",
     "reverse-on",
     "reverse-off",
+    "ssh-setup",
     "download-sing-box",
     "download-sing-box-awg",
     "sing-box",
@@ -69,6 +70,7 @@ def _show_help() -> int:
   sandbox              песочница (мимо TUN/Amnezia; прямой Ethernet, свои :18080)
   tun-on / tun-off     TUN в процессе sing-box
   reverse-on / reverse-off  SSH с VPS на этот ПК (через SOCKS, не :22 офиса)
+  ssh-setup [--no-copy-id] [HOST …]  ~/.ssh include + ключ на лабу (пароль один раз)
   download-sing-box    скачать sing-box 1.11 в tools/
   download-sing-box-awg  скачать AWG-сборку sing-box (AmneziaWG)
   docker-env           var/docker.env + compose (прокси для контейнеров)
@@ -257,6 +259,17 @@ def _run_cli(cmd: str, rest: list[str]) -> int:
             client.enable_reverse_ssh()
         elif cmd == "reverse-off":
             client.disable_reverse_ssh()
+        elif cmd == "ssh-setup":
+            from desktop.ssh_setup import setup_and_copy_id
+
+            extra = [a for a in rest if not a.startswith("-")]
+            copy_id = "--no-copy-id" not in rest
+            return setup_and_copy_id(
+                client.paths,
+                log=log,
+                copy_id=copy_id,
+                hosts=extra or None,
+            )
         elif cmd in ("download-sing-box", "sing-box"):
             client.download_sing_box()
         elif cmd in ("download-sing-box-awg", "sing-box-awg"):

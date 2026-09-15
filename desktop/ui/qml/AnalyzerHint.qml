@@ -19,7 +19,8 @@ Rectangle {
     readonly property bool shared: Boolean(result.shared)
 
     visible: busy || Object.keys(result).length > 0
-    implicitHeight: visible ? col.implicitHeight + 16 : 0
+    height: visible ? col.implicitHeight + 16 : 0
+    implicitHeight: height
     radius: 10
     color: T.surface2
     border.width: 1

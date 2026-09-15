@@ -86,6 +86,7 @@ ergoms install-service # автозапуск
 | `sandbox` | Песочница: путь до VPS мимо TUN/Amnezia |
 | `tun-on` / `tun-off` | TUN |
 | `reverse-on` / `reverse-off` | SSH с VPS на этот ПК |
+| `ssh-setup` | `~/.ssh` include + ключ на лабу. На новом ПК: тот же `config.json`, тот же ключ в `creds/` или `~/.ssh/server-vps`, снова `ssh-setup` |
 | `encrypt` / `decrypt` | Зашифровать / расшифровать конфиг |
 | `download-sing-box` | Скачать официальный sing-box 1.11 в `tools/` |
 | `download-sing-box-awg` | Скачать AWG-сборку (AmneziaWG) |

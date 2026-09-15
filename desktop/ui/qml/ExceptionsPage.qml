@@ -51,25 +51,36 @@ Item {
                 topPadding: 10
                 bottomPadding: 16
 
-                Text {
-                    width: parent.width
+                Rectangle {
                     visible: bridge.active || bridge.busy
-                    text: "Правила применятся при следующем подключении."
-                    color: T.warn
-                    font.pixelSize: 12
-                    font.family: T.fontUi
-                    wrapMode: Text.WordWrap
+                    width: parent.width
+                    height: visible ? bannerText.implicitHeight + 16 : 0
+                    radius: 10
+                    color: "#3a3220"
+                    clip: true
+                    Text {
+                        id: bannerText
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.margins: 10
+                        text: "Правила применятся при следующем подключении."
+                        color: T.warn
+                        font.pixelSize: 12
+                        font.family: T.fontUi
+                        wrapMode: Text.WordWrap
+                    }
                 }
 
                 Card {
                     width: parent.width
-                    implicitHeight: directEd.implicitHeight + 24
+                    implicitHeight: directEd.implicitHeight + 28
+                    clip: true
                     ExceptionEditor {
                         id: directEd
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.top: parent.top
-                        anchors.margins: 14
+                        width: parent.width - 28
+                        x: 14
+                        y: 14
                         title: "Напрямую"
                         subtitle: "Эти адреса и программы идут мимо VPN."
                         settingKey: "routeDirect"
@@ -82,13 +93,13 @@ Item {
 
                 Card {
                     width: parent.width
-                    implicitHeight: vpnEd.implicitHeight + 24
+                    implicitHeight: vpnEd.implicitHeight + 28
+                    clip: true
                     ExceptionEditor {
                         id: vpnEd
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.top: parent.top
-                        anchors.margins: 14
+                        width: parent.width - 28
+                        x: 14
+                        y: 14
                         title: "Только VPN"
                         subtitle: "Всегда через туннель, даже если правило выше отправило бы напрямую."
                         settingKey: "routeVpn"

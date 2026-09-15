@@ -27,4 +27,6 @@ alwaysApply: true
 - `ssh: Could not resolve hostname <алиас>: No such host is known` — конфиг SSH не применился или имя ушло в системный DNS под TUN
 - `ProxyCommand … 127.0.0.1 22` через SOCKS: `ip_is_private → direct` бьёт в локальный Windows `:22`, не в sshd на VPS. Цель SOCKS — `%h %p` (публичный IP VPS), hairpin уже в sing-box
 
+На новом ПК не править `~/.ssh/config` руками: тот же `config.json` + тот же ключ в `creds/server-vps` или `~/.ssh/server-vps`, затем `python -m desktop ssh-setup`. Include и ProxyCommand переписываются под локальные пути.
+
 Правка маршрутов/DNS/прокси без ручной проверки: `ssh -G <алиас>` видит `hostname` из конфига, затем Remote-SSH к этому хосту с включённым VPN.

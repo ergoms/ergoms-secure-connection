@@ -71,5 +71,20 @@
     "listen_port": 2222,
     "local_port": 22,
     "identity_file": ""
+  },
+  "client_ssh": {
+    "identity_file": "",
+    "hosts": [
+      {"host": "vps-server-direct", "via_socks": false},
+      {"host": "vps-server server-vps", "via_socks": true},
+      {
+        "host": "bstu-server-laboratory-proxy-1 bstu-server-laboratory-1 lab",
+        "hostname": "127.0.0.1",
+        "port": 2222,
+        "user": "dohao",
+        "proxy_jump": "vps-server",
+        "copy_id": true
+      }
+    ]
   }
 }
