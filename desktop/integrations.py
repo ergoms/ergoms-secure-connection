@@ -26,6 +26,7 @@ from desktop.sys_proxy import (
     disable_linux_env_proxy,
     enable_browser_pac,
     enable_linux_env_proxy,
+    force_direct_browser_proxy,
 )
 from desktop.tun import wait_tun_iface
 from lib.netutil import port_open
@@ -261,35 +262,31 @@ class IntegrationOps:
         self.teardown_overrides()
 
 
-    def ensure_office_browser_pac(self) -> None:
-        """Re-pin office PAC if another process tore it down while VPN is up."""
+    def ensure_tun_browser_direct(self) -> None:
+        """Drop leftover PAC while TUN is up — AutoConfigURL freezes Chrome."""
         try:
             if not self._vpn_process_up():
                 return
-            cfg = self.config()
         except Exception:  # noqa: BLE001
             return
-        if not resolve_corporate_proxy(cfg):
-            return
-        http_port = get_http_bridge_port()
-        pac_port = get_pac_listen_port()
-        url = f"http://127.0.0.1:{pac_port}/proxy.pac"
-        repaired = False
-        if not port_open("127.0.0.1", pac_port, timeout=0.2):
-            try:
-                self.start_pac_server(cfg, proxy_port=http_port)
-                repaired = True
-            except Exception as exc:  # noqa: BLE001
-                self.log(f"PAC: не поднял :{pac_port} ({exc})")
-                return
         if sys.platform == "win32":
-            from desktop.win_proxy import pac_url_active
+            tun_live = bool(wait_tun_iface(timeout=0.05))
+        else:
+            tun_live = bool(get_tun_enabled())
+        if not tun_live:
+            return
+        if sys.platform == "win32":
+            from desktop.win_proxy import _is_our_pac, current_auto_config_url
 
-            if not pac_url_active(url):
-                self._enable_browser_pac(cfg, http_port, pac_url=url)
-                repaired = True
-        if repaired:
-            self.log("PAC браузера вернул — его снял другой процесс")
+            if not _is_our_pac(current_auto_config_url()):
+                return
+        self.stop_pac_server()
+        try:
+            force_direct_browser_proxy(self.paths.proxy_backup, log=self.log)
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"PAC off (TUN): {exc}")
+            return
+        self.log("PAC снял — с TUN он подвешивает браузер")
 
 
     def teardown_overrides(self) -> None:
@@ -396,18 +393,17 @@ class IntegrationOps:
             except Exception as exc:  # noqa: BLE001
                 self.log(f"docker proxy off: {exc}")
 
-        # TUN already carries browser/CLI traffic. PAC + Windows Internet
-        # Settings look like a system proxy and fight the tunnel.
+        # TUN already carries browser/CLI traffic. PAC + WinINET fight the
+        # tunnel: Chrome waits on AutoConfigURL and the tab looks frozen.
         tun_live = False
         if sys.platform == "win32":
             tun_live = bool(wait_tun_iface(timeout=0.05))
         elif get_tun_enabled(cfg):
             tun_live = True
-        office = bool(resolve_corporate_proxy(cfg))
-        if tun_live and not office:
+        if tun_live:
             self.stop_pac_server()
             try:
-                disable_browser_proxy(self.paths.proxy_backup, log=self.log)
+                force_direct_browser_proxy(self.paths.proxy_backup, log=self.log)
             except Exception as exc:  # noqa: BLE001
                 self.log(f"PAC off (TUN): {exc}")
             try:
@@ -416,8 +412,6 @@ class IntegrationOps:
                 self.log(f"env proxy off (TUN): {exc}")
             self.log("системный прокси не ставится — трафик через TUN")
             return
-        if tun_live and office:
-            self.log("офис: PAC на весь трафик (не только GitHub) — браузер не умеет TUN")
         pac_url = self.start_pac_server(cfg, proxy_port=http_port)
         self._enable_browser_pac(cfg, http_port, pac_url=pac_url)
         enable_linux_env_proxy(

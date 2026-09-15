@@ -94,6 +94,10 @@ def test_build_config_home_awg_minimal_without_tun() -> None:
     assert "tun" not in inbound_types
     assert "socks" in inbound_types
     assert "http" in inbound_types
+    assert not any(
+        r.get("network") == "udp" and r.get("port") == 443 and r.get("action") == "reject"
+        for r in (box.get("route") or {}).get("rules") or []
+    )
 
 
 def test_build_config_office_vless_via_squid() -> None:
@@ -105,6 +109,15 @@ def test_build_config_office_vless_via_squid() -> None:
     assert tags["proxy"]["type"] == "vless"
     assert tags["proxy"]["detour"] == "squid"
     assert box["route"]["final"] == "proxy"
+    assert box["dns"]["strategy"] == "ipv4_only"
+    assert any(
+        r.get("network") == "udp" and r.get("port") == 443 and r.get("action") == "reject"
+        for r in box["route"]["rules"]
+    )
+    rules = box["route"]["rules"]
+    priv = next(i for i, r in enumerate(rules) if r.get("ip_is_private"))
+    hijack = next(i for i, r in enumerate(rules) if r.get("action") == "hijack-dns")
+    assert priv < hijack
 
 
 def test_office_tun_mtu_and_sniff_are_ssh_friendly() -> None:
@@ -114,6 +127,8 @@ def test_office_tun_mtu_and_sniff_are_ssh_friendly() -> None:
     sniff = [r for r in box["route"]["rules"] if r.get("action") == "sniff"]
     assert sniff
     assert all(r.get("timeout") == "100ms" for r in sniff)
+    tun_sniff = [r for r in sniff if r.get("inbound") == ["tun-in"]]
+    assert tun_sniff and all(r.get("network") == "tcp" for r in tun_sniff)
 
 
 def test_effective_tun_mtu_caps_fragments() -> None:

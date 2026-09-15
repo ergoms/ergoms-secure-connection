@@ -75,6 +75,14 @@ def test_tun_split_cmds_cover_both_halves() -> None:
     assert "ip route del 128.0.0.0/1 via 172.19.0.2" in linux
 
 
+def test_lan_underlay_cmds_pin_office_dns() -> None:
+    from desktop.tun import lan_underlay_commands, remove_lan_underlay_commands
+
+    cmds = lan_underlay_commands("10.193.0.1", 22)
+    assert any("10.0.0.0" in c and "10.193.0.1" in c and "add" in c for c in cmds)
+    assert any(c.startswith("route delete 10.0.0.0") for c in remove_lan_underlay_commands())
+
+
 def test_win_kill_switch_blackhole_is_onlink_loopback() -> None:
     from desktop.kill_switch import _cmds_win_install
 
@@ -95,6 +103,7 @@ def test_win_kill_switch_remove_drops_tun_split() -> None:
     joined = "\n".join(win)
     assert "route delete 0.0.0.0 mask 128.0.0.0 172.19.0.1" in joined
     assert "route delete 128.0.0.0 mask 128.0.0.0 172.19.0.2" in joined
+    assert "route delete 10.0.0.0 mask 255.0.0.0" in joined
     linux = "\n".join(_cmds_linux_remove(["203.0.113.10"], "10.193.0.1"))
     assert "ip route del 0.0.0.0/1 via 172.19.0.1" in linux
     assert "ip route del 0.0.0.0/1 dev lo" in linux
@@ -299,6 +308,22 @@ def test_pac_server_replace_keeps_listener() -> None:
         assert srv.running and srv.port == port
     finally:
         srv.stop()
+
+
+def test_force_wininet_direct_skips_notify_when_direct(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from desktop import win_proxy
+
+    monkeypatch.setattr(win_proxy, "_is_windows", lambda: True)
+    monkeypatch.setattr(win_proxy, "wininet_is_direct", lambda: True)
+    monkeypatch.setattr(win_proxy, "backup_win_proxy", lambda *_a, **_k: None)
+    notified = {"n": 0}
+    monkeypatch.setattr(
+        win_proxy, "notify_proxy_change", lambda: notified.__setitem__("n", notified["n"] + 1)
+    )
+    win_proxy.force_wininet_direct(tmp_path / "bak.json")
+    assert notified["n"] == 0
 
 
 def test_enable_browser_pac_skips_notify_when_set(
@@ -602,6 +627,8 @@ def test_leak_shield_apply_restore_roundtrip(tmp_path: Path, monkeypatch: pytest
         assert existed and val == "off"
         existed, val, _typ = reg.get(HIVE_HKCU, chrome, "WebRtcIPHandling")
         assert existed and val == "default_public_interface_only"
+        existed, val, _typ = reg.get(HIVE_HKCU, chrome, "QuicAllowed")
+        assert existed and val == 0
         assert consume_browser_toast(tmp_path) is True
         assert consume_browser_toast(tmp_path) is False
         assert apply(var_dir=tmp_path) is False

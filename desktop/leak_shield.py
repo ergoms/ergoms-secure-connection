@@ -38,6 +38,13 @@ _BROWSER_KEYS: tuple[tuple[str, str, str, Any, str], ...] = (
     ),
     (
         HIVE_HKCU,
+        r"Software\Policies\Google\Chrome",
+        "QuicAllowed",
+        0,
+        TYPE_DWORD,
+    ),
+    (
+        HIVE_HKCU,
         r"Software\Policies\Microsoft\Edge",
         "DnsOverHttpsMode",
         "off",
@@ -49,6 +56,13 @@ _BROWSER_KEYS: tuple[tuple[str, str, str, Any, str], ...] = (
         "WebRtcIPHandling",
         "default_public_interface_only",
         TYPE_SZ,
+    ),
+    (
+        HIVE_HKCU,
+        r"Software\Policies\Microsoft\Edge",
+        "QuicAllowed",
+        0,
+        TYPE_DWORD,
     ),
     (
         HIVE_HKCU,
@@ -71,6 +85,20 @@ _DOH_KEYS: tuple[tuple[str, str, str, Any, str], ...] = (
         r"SOFTWARE\Policies\Microsoft\Windows NT\DNSClient",
         "DoHPolicy",
         2,
+        TYPE_DWORD,
+    ),
+    (
+        HIVE_HKLM,
+        r"SOFTWARE\Policies\Google\Chrome",
+        "QuicAllowed",
+        0,
+        TYPE_DWORD,
+    ),
+    (
+        HIVE_HKLM,
+        r"SOFTWARE\Policies\Microsoft\Edge",
+        "QuicAllowed",
+        0,
         TYPE_DWORD,
     ),
 )

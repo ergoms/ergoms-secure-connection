@@ -310,6 +310,10 @@ def _win_if_index_by_alias(alias: str) -> int | None:
 
 
 TUN_SPLIT_HOPS = ("172.19.0.1", "172.19.0.2")
+LAN_UNDERLAY_NETS = (
+    ("10.0.0.0", "255.0.0.0"),
+    ("192.168.0.0", "255.255.0.0"),
+)
 
 
 def install_tun_split_default(
@@ -325,11 +329,40 @@ def install_tun_split_default(
     ]
 
 
+def lan_underlay_commands(gw: str, if_idx: int) -> list[str]:
+    """Keep office/home LAN on the physical NIC — split /1 otherwise steals DNS."""
+    cmds: list[str] = []
+    hop = (gw or "").strip()
+    if not hop or not if_idx:
+        return cmds
+    for dest, mask in LAN_UNDERLAY_NETS:
+        cmds.append(f"route delete {dest} mask {mask}")
+        cmds.append(f"route add {dest} mask {mask} {hop} metric 1 if {if_idx}")
+    return cmds
+
+
+def remove_lan_underlay_commands() -> list[str]:
+    return [f"route delete {dest} mask {mask}" for dest, mask in LAN_UNDERLAY_NETS]
+
+
+def ensure_lan_underlay(
+    if_idx: int, *, gw: str | None = None, log: LogFn = noop
+) -> None:
+    if sys.platform != "win32" or not if_idx:
+        return
+    hop = (gw or underlay_gateway("") or "").strip()
+    if not hop:
+        return
+    run_route_lines(lan_underlay_commands(hop, if_idx))
+    log(f"LAN underlay: 10/8 и 192.168/16 via {hop} if={if_idx}")
+
+
 def remove_tun_split_default(*, windows: bool | None = None) -> list[str]:
     """Drop our 0.0.0.0/1 + 128.0.0.0/1 after sing-box exits (adapter may linger)."""
     win = sys.platform == "win32" if windows is None else windows
     cmds: list[str] = []
     if win:
+        cmds.extend(remove_lan_underlay_commands())
         for hop in TUN_SPLIT_HOPS:
             cmds.append(f"route delete 0.0.0.0 mask 128.0.0.0 {hop}")
             cmds.append(f"route delete 128.0.0.0 mask 128.0.0.0 {hop}")
@@ -461,6 +494,7 @@ def ensure_tun_split_default(if_idx: int, *, metric: int = 5) -> tuple[bool, str
     for hop in hops:
         run_route_lines(install_tun_split_default(if_idx, metric=metric, hop=hop))
         if tun_split_installed(if_idx):
+            ensure_lan_underlay(if_idx)
             rows = " | ".join(tun_split_rows()[:4])
             return True, f"TUN split: {rows}"
         last = hop

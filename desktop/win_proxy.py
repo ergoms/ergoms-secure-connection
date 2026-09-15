@@ -124,6 +124,31 @@ def pac_url_active(url: str) -> bool:
     return current == want and proxy_on == 0 and auto == 0
 
 
+def wininet_is_direct() -> bool:
+    if not _is_windows():
+        return True
+    with _reg_key() as key:
+        proxy_on = _get_reg_int(key, "ProxyEnable", 0)
+        auto = _get_reg_int(key, "AutoDetect", 0)
+        pac = _get_reg_str(key, "AutoConfigURL", "").strip()
+    return proxy_on == 0 and auto == 0 and not pac
+
+
+def force_wininet_direct(backup_path: Path, log: LogFn = noop) -> None:
+    """Clear PAC/proxy so Chrome follows TUN routes. Keep backup for explicit off."""
+    if not _is_windows():
+        return
+    backup_win_proxy(backup_path)
+    if wininet_is_direct():
+        return
+    with _reg_key() as key:
+        _set_reg_int(key, "ProxyEnable", 0)
+        _set_reg_int(key, "AutoDetect", 0)
+        _delete_reg(key, "AutoConfigURL")
+    notify_proxy_change()
+    log("Windows proxy: DIRECT — браузер через TUN")
+
+
 def restore_win_proxy(backup_path: Path, log: LogFn = noop) -> None:
     if not _is_windows():
         return

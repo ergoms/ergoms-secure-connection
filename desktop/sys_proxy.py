@@ -232,6 +232,15 @@ def disable_linux_env_proxy(backup_path: Path, log: LogFn = noop) -> None:
     log("Системный proxy восстановлен (/etc/environment, profile.d удалён)")
 
 
+def force_direct_browser_proxy(backup_path: Path, log: LogFn = noop) -> None:
+    if sys.platform == "win32":
+        from desktop.win_proxy import force_wininet_direct
+
+        force_wininet_direct(backup_path, log=log)
+        return
+    disable_browser_proxy(backup_path, log=log)
+
+
 def enable_browser_pac(
     http_port: int,
     scope: str,

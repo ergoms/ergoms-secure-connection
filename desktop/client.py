@@ -374,7 +374,7 @@ class OpsClient(ConnectionOps, ProbeOps, IntegrationOps):
         self._status_fill_ports(info, lines)
         if info.get("singbox_running"):
             try:
-                self.ensure_office_browser_pac()
+                self.ensure_tun_browser_direct()
             except Exception:  # noqa: BLE001
                 pass
 

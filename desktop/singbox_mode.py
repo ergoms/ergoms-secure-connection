@@ -185,7 +185,7 @@ def _dns_v12(
         ],
         "rules": rules,
         "final": "dns-proxy",
-        "strategy": "prefer_ipv4",
+        "strategy": "ipv4_only",
     }
 
 
@@ -239,7 +239,7 @@ def dns_block(
                 }
             ],
             "final": "dns-proxy",
-            "strategy": "prefer_ipv4",
+            "strategy": "ipv4_only",
         }
     return {
         "servers": [
@@ -277,7 +277,7 @@ def dns_block(
             },
         ],
         "final": "dns-proxy",
-        "strategy": "prefer_ipv4",
+        "strategy": "ipv4_only",
     }
 
 
@@ -533,14 +533,20 @@ def _build_route_rules(
         rules.append({"domain_suffix": bypass_suffixes, "outbound": "direct"})
     if bypass_domains:
         rules.append({"domain": bypass_domains, "outbound": "direct"})
+    # Office DNS (10.16.0.9) is private. Hijack-before-private sent every
+    # Chrome lookup through VLESS→DoH (~200ms) and YouTube crawled.
+    rules.append({"ip_is_private": True, "outbound": "direct"})
     rules.append({"port": 53, "action": "hijack-dns"})
+    if via_proxy:
+        # Chrome HTTP/3 over VLESS→Squid CONNECT stalls for seconds, then
+        # falls back to TCP. Fail QUIC immediately so the tab does not lag.
+        rules.append({"network": "udp", "port": 443, "action": "reject"})
     rules.append({"inbound": ["socks-in", "http-in"], "outbound": "proxy"})
     rules.append({"process_name": _DOCKER_WSL_PROCS, "outbound": "direct"})
     rules.append({"process_name": _route_process_names(), "outbound": "direct"})
     py_paths = _direct_python_paths()
     if py_paths:
         rules.append({"process_path": py_paths, "outbound": "direct"})
-    rules.append({"ip_is_private": True, "outbound": "direct"})
     return rules, bypass_suffixes, bypass_domains
 
 
@@ -727,7 +733,14 @@ class SingboxModeManager:
             {"inbound": ["socks-in", "http-in"], "action": "sniff", "timeout": "100ms"}
         ]
         if enable_tun:
-            sniff.append({"inbound": ["tun-in"], "action": "sniff", "timeout": "100ms"})
+            sniff.append(
+                {
+                    "inbound": ["tun-in"],
+                    "network": "tcp",
+                    "action": "sniff",
+                    "timeout": "100ms",
+                }
+            )
         box: dict[str, Any] = {
             **config_skeleton(
                 log_path=self.log_path,
