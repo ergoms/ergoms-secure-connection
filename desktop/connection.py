@@ -37,7 +37,7 @@ from desktop.kill_switch import install_commands as kill_switch_install_cmds
 from desktop.kill_switch import is_applied as kill_switch_is_applied
 from desktop.kill_switch import planned_pin_commands as kill_switch_pin_cmds
 from desktop.kill_switch import pin_underlay as pin_kill_switch_underlay
-from desktop.kill_switch import prefer_tun_ipv4
+from desktop.kill_switch import prefer_tun_ipv4, suppress_underlay_ipv6
 from desktop.kill_switch import remember_plan as remember_kill_switch_plan
 from desktop.kill_switch import state_path as kill_switch_state_path
 from desktop.singbox_mode import (
@@ -418,6 +418,9 @@ class ConnectionOps:
             )
         else:
             prefer_tun_ipv4(idx, var_dir=self.paths.var_dir, log=self.log)
+            suppress_underlay_ipv6(
+                var_dir=self.paths.var_dir, tun_idx=idx, log=self.log
+            )
         pin_kill_switch_underlay(
             allow, var_dir=self.paths.var_dir, log=self.log, elevate=False
         )

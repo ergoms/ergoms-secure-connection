@@ -374,7 +374,7 @@ class OpsClient(ConnectionOps, ProbeOps, IntegrationOps):
         self._status_fill_ports(info, lines)
         if info.get("singbox_running"):
             try:
-                self.ensure_tun_browser_direct()
+                self.ensure_browser_proxy()
             except Exception:  # noqa: BLE001
                 pass
 
@@ -470,9 +470,12 @@ class OpsClient(ConnectionOps, ProbeOps, IntegrationOps):
         except Exception:  # noqa: BLE001
             socks_port = 1080
         info["socks_port"] = socks_port
-        info["socks_up"] = port_open("127.0.0.1", socks_port)
-        info["http_up"] = port_open("127.0.0.1", int(info["http_port"]))
-        info["pac_up"] = port_open("127.0.0.1", int(info["pac_port"]))
+        listening = procutil.pids_listening_on_many(
+            [socks_port, int(info["http_port"]), int(info["pac_port"])]
+        )
+        info["socks_up"] = bool(listening.get(socks_port))
+        info["http_up"] = bool(listening.get(int(info["http_port"])))
+        info["pac_up"] = bool(listening.get(int(info["pac_port"])))
         if not info["singbox_running"]:
             return
         lines.append(f"singbox mode pid={info['singbox_pid']} running")

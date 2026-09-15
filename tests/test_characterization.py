@@ -292,6 +292,7 @@ def test_linux_kill_switch_install_blackhole() -> None:
 def test_build_pac_full_and_github() -> None:
     full = build_pac(1088, "full", [], ["*.local"], "", "direct").decode()
     assert "PROXY 127.0.0.1:1088" in full
+    assert "ERGOMS" in full
     assert "shExpMatch(host, \"*.local\")" in full
     assert "return \"DIRECT\"" in full
     github = build_pac(

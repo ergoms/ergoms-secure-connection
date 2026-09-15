@@ -44,7 +44,7 @@ def serve_pac_response(client: socket.socket, pac: bytes) -> None:
             client.sendall(
                 b"HTTP/1.1 200 OK\r\n"
                 b"Content-Type: application/x-ns-proxy-autoconfig\r\n"
-                b"Cache-Control: no-cache\r\n"
+                b"Cache-Control: max-age=600\r\n"
                 b"Connection: close\r\n"
                 + f"Content-Length: {len(pac)}\r\n\r\n".encode("ascii")
                 + pac

@@ -314,6 +314,36 @@ LAN_UNDERLAY_NETS = (
     ("10.0.0.0", "255.0.0.0"),
     ("192.168.0.0", "255.255.0.0"),
 )
+_VIRTUAL_UNDERLAY = ("vethernet", "hyper-v", "default switch", "wsl")
+
+
+def _is_virtual_underlay(name: str) -> bool:
+    low = (name or "").lower()
+    return any(tag in low for tag in _VIRTUAL_UNDERLAY)
+
+
+def underlay_if_index(gw: str = "") -> int:
+    """Physical NIC for office/home LAN — never TUN, never Hyper-V."""
+    hop = (gw or underlay_gateway("") or "").strip()
+    tun_idx = _win_if_index_by_alias(TUN_IFACE_NAME) or 0
+    if hop:
+        for raw in default_route_lines():
+            parts = raw.split()
+            if len(parts) < 4 or parts[2] != hop:
+                continue
+            iface_ip = parts[3]
+            if iface_ip.startswith(TUN_ADDR_PREFIX):
+                continue
+            for idx, _metric, name in underlay_ifaces():
+                if iface_ip in iface_ipv4s(name):
+                    return idx
+        _alias, _ip, idx = underlay_bind_info(hop)
+        if idx and idx != tun_idx:
+            return idx
+    for idx, _metric, name in underlay_ifaces():
+        if not _is_virtual_underlay(name):
+            return idx
+    return 0
 
 
 def install_tun_split_default(
@@ -346,15 +376,22 @@ def remove_lan_underlay_commands() -> list[str]:
 
 
 def ensure_lan_underlay(
-    if_idx: int, *, gw: str | None = None, log: LogFn = noop
+    if_idx: int = 0, *, gw: str | None = None, log: LogFn = noop
 ) -> None:
-    if sys.platform != "win32" or not if_idx:
+    """Pin 10/8 and 192.168/16 to the physical NIC, never the TUN index."""
+    if sys.platform != "win32":
         return
     hop = (gw or underlay_gateway("") or "").strip()
     if not hop:
         return
-    run_route_lines(lan_underlay_commands(hop, if_idx))
-    log(f"LAN underlay: 10/8 и 192.168/16 via {hop} if={if_idx}")
+    tun_idx = _win_if_index_by_alias(TUN_IFACE_NAME) or 0
+    idx = underlay_if_index(hop)
+    if not idx and if_idx and if_idx != tun_idx:
+        idx = if_idx
+    if not idx:
+        return
+    run_route_lines(lan_underlay_commands(hop, idx))
+    log(f"LAN underlay: 10/8 и 192.168/16 via {hop} if={idx}")
 
 
 def remove_tun_split_default(*, windows: bool | None = None) -> list[str]:
@@ -494,7 +531,7 @@ def ensure_tun_split_default(if_idx: int, *, metric: int = 5) -> tuple[bool, str
     for hop in hops:
         run_route_lines(install_tun_split_default(if_idx, metric=metric, hop=hop))
         if tun_split_installed(if_idx):
-            ensure_lan_underlay(if_idx)
+            ensure_lan_underlay()
             rows = " | ".join(tun_split_rows()[:4])
             return True, f"TUN split: {rows}"
         last = hop

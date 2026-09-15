@@ -106,7 +106,8 @@ def build_pac(
         bypass_body += " ||\n        " + " ||\n        ".join(bypass_conds)
 
     if mode == "full":
-        pac = f"""function FindProxyForURL(url, host) {{
+        pac = f"""// ERGOMS: office browser → local HTTP :{listen_port}; LAN/bypass stay DIRECT.
+function FindProxyForURL(url, host) {{
     host = host.toLowerCase();
     if ({bypass_body})
         return "{bypass_ret}";

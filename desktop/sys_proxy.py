@@ -241,6 +241,26 @@ def force_direct_browser_proxy(backup_path: Path, log: LogFn = noop) -> None:
     disable_browser_proxy(backup_path, log=log)
 
 
+def enable_browser_static_proxy(
+    http_port: int,
+    bypass_hosts: list[str] | None,
+    backup_path: Path,
+    log: LogFn = noop,
+) -> None:
+    if sys.platform == "win32":
+        from desktop.win_proxy import enable_browser_static_proxy as win_enable
+
+        win_enable(http_port, bypass_hosts, backup_path, log=log)
+        return
+    enable_browser_pac(
+        http_port,
+        "full",
+        len(bypass_hosts or []),
+        backup_path,
+        log=log,
+    )
+
+
 def enable_browser_pac(
     http_port: int,
     scope: str,

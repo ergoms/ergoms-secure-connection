@@ -422,40 +422,99 @@ def pin_commands(
     return [f"ip route replace {ip}/32 via {hop}" for ip in unique]
 
 
-def suppress_underlay_ipv6(*, var_dir: Path, log: LogFn = noop) -> None:
-    """Stop GitHub/Chrome Happy Eyeballs from skipping TUN over IPv6."""
+def _ipv6_binding_args(name: str, *, enable: bool) -> list[str]:
+    verb = "Enable-NetAdapterBinding" if enable else "Disable-NetAdapterBinding"
+    safe = (name or "").replace("'", "''")
+    return [
+        "powershell",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        f"{verb} -Name '{safe}' -ComponentID ms_tcpip6",
+    ]
+
+
+def _ipv6_binding_line(name: str, *, enable: bool) -> str:
+    verb = "Enable-NetAdapterBinding" if enable else "Disable-NetAdapterBinding"
+    safe = (name or "").replace("'", "''")
+    return (
+        "powershell -NoProfile -NonInteractive -Command "
+        f"\"{verb} -Name '{safe}' -ComponentID ms_tcpip6\""
+    )
+
+
+def _set_ipv6_binding(
+    names: list[str], *, enable: bool, log: LogFn = noop
+) -> None:
+    clean = [n for n in names if (n or "").strip()]
+    if not clean:
+        return
+    if procutil.is_admin():
+        for name in clean:
+            try:
+                procutil.run(_ipv6_binding_args(name, enable=enable), timeout=15)
+            except OSError:
+                continue
+        return
+    _run_privileged_lines(
+        [_ipv6_binding_line(n, enable=enable) for n in clean],
+        log=log,
+        ignore_fail=True,
+    )
+
+
+def suppress_underlay_ipv6(
+    *, var_dir: Path, tun_idx: int = 0, log: LogFn = noop
+) -> None:
+    """Unbind IPv6 on Ethernet and TUN. netsh admin=disabled is not valid here.
+
+    TUN IPv6 metric 5 + fec0:: DNS made Windows resolve over a dead IPv6 stack
+    while YouTube/Google return AAAA. Chrome waited on that timeout.
+    """
     if sys.platform != "win32":
         return
-    from desktop.tun import underlay_ifaces
+    from desktop.tun import (
+        TUN_IFACE_NAME,
+        _is_virtual_underlay,
+        _win_if_index_by_alias,
+        underlay_ifaces,
+    )
 
-    ifaces = underlay_ifaces()
-    if not ifaces:
+    names: list[str] = []
+    for _idx, _met, name in underlay_ifaces():
+        if _is_virtual_underlay(name):
+            continue
+        names.append(name)
+    tun = int(tun_idx or 0) or int(_win_if_index_by_alias(TUN_IFACE_NAME) or 0)
+    if tun and TUN_IFACE_NAME not in names:
+        names.append(TUN_IFACE_NAME)
+    if not names:
         return
-    cmds = [
-        f"netsh interface ipv6 set interface {idx} admin=disabled"
-        for idx, _met, _name in ifaces
-    ]
-    if procutil.is_admin():
-        _run_lines_now(cmds, ignore_fail=True)
-    else:
-        _run_privileged_lines(cmds, log=log, ignore_fail=True)
+    _set_ipv6_binding(names, enable=False, log=log)
     st = _load_state(var_dir)
-    st["ipv6_disabled"] = [idx for idx, _met, _name in ifaces]
+    st["ipv6_disabled_names"] = [n for n in names if n != TUN_IFACE_NAME]
     _save_state(var_dir, st)
-    log("kill switch: IPv6 выкл на " + ", ".join(name for _i, _m, name in ifaces))
+    log("kill switch: IPv6 выкл на " + ", ".join(names))
 
 
 def prefer_tun_ipv4(tun_idx: int, *, var_dir: Path, log: LogFn = noop) -> None:
-    """Make Windows pick TUN as the default NIC (dual Wi-Fi+Ethernet otherwise leaks)."""
+    """Keep Ethernet as the Windows DNS NIC. /1 split already owns internet.
+
+    TUN metric=1 with empty DNS made Chrome wait on a resolver that is not there.
+    Ethernet metric 5000 made Windows treat the office NIC as broken.
+    """
     if sys.platform != "win32" or not tun_idx:
         return
-    from desktop.tun import underlay_ifaces
+    from desktop.tun import _is_virtual_underlay, underlay_ifaces
 
     saved: list[dict[str, int | str]] = []
-    cmds = [f"netsh interface ipv4 set interface {int(tun_idx)} metric=1"]
+    cmds = [f"netsh interface ipv4 set interface {int(tun_idx)} metric=75"]
     for idx, metric, name in underlay_ifaces():
         saved.append({"idx": idx, "metric": metric, "name": name})
-        cmds.append(f"netsh interface ipv4 set interface {idx} metric=5000")
+        if _is_virtual_underlay(name):
+            continue
+        if metric >= 1000:
+            cmds.append(f"netsh interface ipv4 set interface {idx} metric=25")
     if procutil.is_admin():
         _run_lines_now(cmds, ignore_fail=True)
     else:
@@ -464,8 +523,7 @@ def prefer_tun_ipv4(tun_idx: int, *, var_dir: Path, log: LogFn = noop) -> None:
     st["ipv4_metrics"] = saved
     st["tun_idx"] = int(tun_idx)
     _save_state(var_dir, st)
-    names = ", ".join(str(x["name"]) for x in saved)
-    log(f"TUN if {tun_idx} metric=1, underlay metric=5000 ({names or 'нет'})")
+    log(f"TUN if {tun_idx} metric=75, DNS остаётся на Ethernet")
 
 
 def restore_underlay_ipv4_metrics(*, var_dir: Path, log: LogFn = noop) -> None:
@@ -498,17 +556,14 @@ def restore_underlay_ipv6(*, var_dir: Path, log: LogFn = noop) -> None:
     if sys.platform != "win32":
         return
     st = _load_state(var_dir)
-    raw = [x for x in (st.get("ipv6_disabled") or []) if x]
-    if not raw:
-        return
-    cmds = [f"netsh interface ipv6 set interface {idx} admin=enabled" for idx in raw]
-    if procutil.is_admin():
-        _run_lines_now(cmds, ignore_fail=True)
-    else:
-        _run_privileged_lines(cmds, log=log, ignore_fail=True)
+    names = [str(x) for x in (st.get("ipv6_disabled_names") or []) if x]
+    if names:
+        _set_ipv6_binding(names, enable=True, log=log)
     st["ipv6_disabled"] = []
+    st["ipv6_disabled_names"] = []
     _save_state(var_dir, st)
-    log("kill switch: IPv6 на underlay включил обратно")
+    if names:
+        log("kill switch: IPv6 на underlay включил обратно")
 
 
 def pin_underlay(

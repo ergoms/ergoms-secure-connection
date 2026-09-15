@@ -79,8 +79,33 @@ def test_lan_underlay_cmds_pin_office_dns() -> None:
     from desktop.tun import lan_underlay_commands, remove_lan_underlay_commands
 
     cmds = lan_underlay_commands("10.193.0.1", 22)
-    assert any("10.0.0.0" in c and "10.193.0.1" in c and "add" in c for c in cmds)
+    assert any(
+        "10.0.0.0" in c and "10.193.0.1" in c and "if 22" in c and "add" in c
+        for c in cmds
+    )
     assert any(c.startswith("route delete 10.0.0.0") for c in remove_lan_underlay_commands())
+
+
+def test_virtual_underlay_skips_hyperv() -> None:
+    from desktop.tun import _is_virtual_underlay
+
+    assert _is_virtual_underlay("vEthernet (Default Switch)")
+    assert not _is_virtual_underlay("Ethernet 4")
+
+
+def test_ipv6_suppress_includes_tun() -> None:
+    from desktop.kill_switch import _ipv6_binding_args, suppress_underlay_ipv6
+
+    disable = _ipv6_binding_args("Ethernet 4", enable=False)
+    assert disable[0] == "powershell"
+    assert "Disable-NetAdapterBinding" in disable[-1]
+    assert "ms_tcpip6" in disable[-1]
+    assert "Ethernet 4" in disable[-1]
+    enable = _ipv6_binding_args("Ethernet 4", enable=True)
+    assert "Enable-NetAdapterBinding" in enable[-1]
+    import inspect
+
+    assert "tun_idx" in inspect.signature(suppress_underlay_ipv6).parameters
 
 
 def test_win_kill_switch_blackhole_is_onlink_loopback() -> None:
@@ -324,6 +349,15 @@ def test_force_wininet_direct_skips_notify_when_direct(
     )
     win_proxy.force_wininet_direct(tmp_path / "bak.json")
     assert notified["n"] == 0
+
+
+def test_proxy_override_list_has_lan_and_bypass() -> None:
+    from desktop.win_proxy import proxy_override_list
+
+    text = proxy_override_list(["*.tu-bryansk.ru", "*.local"])
+    assert "<local>" in text
+    assert "10.*" in text
+    assert "*.tu-bryansk.ru" in text
 
 
 def test_enable_browser_pac_skips_notify_when_set(

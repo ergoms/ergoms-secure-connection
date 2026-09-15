@@ -25,6 +25,7 @@ from desktop.sys_proxy import (
     disable_browser_proxy,
     disable_linux_env_proxy,
     enable_browser_pac,
+    enable_browser_static_proxy,
     enable_linux_env_proxy,
     force_direct_browser_proxy,
 )
@@ -262,23 +263,57 @@ class IntegrationOps:
         self.teardown_overrides()
 
 
-    def ensure_tun_browser_direct(self) -> None:
-        """Drop leftover PAC while TUN is up — AutoConfigURL freezes Chrome."""
+    def ensure_browser_proxy(self) -> None:
+        """Office: keep static :1088. Home+TUN: keep WinINET direct."""
         try:
             if not self._vpn_process_up():
                 return
+            cfg = self.config()
         except Exception:  # noqa: BLE001
             return
+        office = bool(resolve_corporate_proxy(cfg))
         if sys.platform == "win32":
             tun_live = bool(wait_tun_iface(timeout=0.05))
         else:
-            tun_live = bool(get_tun_enabled())
+            tun_live = bool(get_tun_enabled(cfg))
+        if office:
+            self._ensure_office_browser_proxy(cfg)
+            return
         if not tun_live:
             return
-        if sys.platform == "win32":
-            from desktop.win_proxy import _is_our_pac, current_auto_config_url
+        self._ensure_home_tun_direct()
 
-            if not _is_our_pac(current_auto_config_url()):
+    def _ensure_office_browser_proxy(self, cfg: dict[str, Any]) -> None:
+        if sys.platform != "win32":
+            return
+        from desktop.win_proxy import proxy_override_list, static_proxy_active
+
+        http_port = get_http_bridge_port()
+        bypass = [str(h) for h in (cfg.get("proxy_bypass") or []) if h]
+        override = proxy_override_list(bypass)
+        if static_proxy_active(http_port, override):
+            return
+        self.stop_pac_server()
+        enable_browser_static_proxy(
+            http_port,
+            bypass,
+            self.paths.proxy_backup,
+            log=self.log,
+        )
+
+    def _ensure_home_tun_direct(self) -> None:
+        if sys.platform == "win32":
+            from desktop.win_proxy import (
+                _is_our_pac,
+                _is_our_static,
+                current_auto_config_url,
+                current_proxy_server,
+            )
+
+            ours = _is_our_pac(current_auto_config_url()) or _is_our_static(
+                current_proxy_server()
+            )
+            if not ours:
                 return
         self.stop_pac_server()
         try:
@@ -286,7 +321,7 @@ class IntegrationOps:
         except Exception as exc:  # noqa: BLE001
             self.log(f"PAC off (TUN): {exc}")
             return
-        self.log("PAC снял — с TUN он подвешивает браузер")
+        self.log("дом: системный прокси снял — трафик через TUN")
 
 
     def teardown_overrides(self) -> None:
@@ -393,14 +428,14 @@ class IntegrationOps:
             except Exception as exc:  # noqa: BLE001
                 self.log(f"docker proxy off: {exc}")
 
-        # TUN already carries browser/CLI traffic. PAC + WinINET fight the
-        # tunnel: Chrome waits on AutoConfigURL and the tab looks frozen.
         tun_live = False
         if sys.platform == "win32":
             tun_live = bool(wait_tun_iface(timeout=0.05))
         elif get_tun_enabled(cfg):
             tun_live = True
-        if tun_live:
+        office = bool(resolve_corporate_proxy(cfg))
+        # Home+TUN: WinINET DIRECT. Office: static 127.0.0.1:1088 (no PAC).
+        if tun_live and not office:
             self.stop_pac_server()
             try:
                 force_direct_browser_proxy(self.paths.proxy_backup, log=self.log)
@@ -411,6 +446,21 @@ class IntegrationOps:
             except Exception as exc:  # noqa: BLE001
                 self.log(f"env proxy off (TUN): {exc}")
             self.log("системный прокси не ставится — трафик через TUN")
+            return
+        if office:
+            self.stop_pac_server()
+            bypass = [str(h) for h in (cfg.get("proxy_bypass") or []) if h]
+            enable_browser_static_proxy(
+                http_port,
+                bypass,
+                self.paths.proxy_backup,
+                log=self.log,
+            )
+            enable_linux_env_proxy(
+                http_port,
+                self.paths.env_proxy_backup,
+                log=self.log,
+            )
             return
         pac_url = self.start_pac_server(cfg, proxy_port=http_port)
         self._enable_browser_pac(cfg, http_port, pac_url=pac_url)

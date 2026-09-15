@@ -105,11 +105,46 @@ def _is_our_pac(url: str) -> bool:
     return "proxy.pac" in text or ":1089" in text
 
 
+def _is_our_static(server: str) -> bool:
+    text = (server or "").strip().lower().replace("http://", "")
+    return text.startswith("127.0.0.1:") or text.startswith("localhost:")
+
+
+def proxy_override_list(bypass_hosts: list[str] | None = None) -> str:
+    """WinINET ProxyOverride: LAN + config bypass, no PAC / no DNS."""
+    parts = [
+        "<local>",
+        "127.0.0.1",
+        "localhost",
+        "10.*",
+        "192.168.*",
+        "169.254.*",
+    ]
+    seen = {p.lower() for p in parts}
+    for raw in bypass_hosts or []:
+        host = str(raw or "").strip()
+        if not host:
+            continue
+        key = host.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        parts.append(host)
+    return ";".join(parts)
+
+
 def current_auto_config_url() -> str:
     if not _is_windows():
         return ""
     with _reg_key() as key:
         return _get_reg_str(key, "AutoConfigURL", "").strip()
+
+
+def current_proxy_server() -> str:
+    if not _is_windows():
+        return ""
+    with _reg_key() as key:
+        return _get_reg_str(key, "ProxyServer", "").strip()
 
 
 def pac_url_active(url: str) -> bool:
@@ -122,6 +157,25 @@ def pac_url_active(url: str) -> bool:
         proxy_on = _get_reg_int(key, "ProxyEnable", 0)
         auto = _get_reg_int(key, "AutoDetect", 0)
     return current == want and proxy_on == 0 and auto == 0
+
+
+def static_proxy_active(http_port: int, override: str) -> bool:
+    if not _is_windows():
+        return False
+    want = f"127.0.0.1:{int(http_port)}"
+    with _reg_key() as key:
+        proxy_on = _get_reg_int(key, "ProxyEnable", 0)
+        auto = _get_reg_int(key, "AutoDetect", 0)
+        server = _get_reg_str(key, "ProxyServer", "").strip()
+        pac = _get_reg_str(key, "AutoConfigURL", "").strip()
+        have_override = _get_reg_str(key, "ProxyOverride", "").strip()
+    return (
+        proxy_on == 1
+        and auto == 0
+        and not pac
+        and server.lower() == want
+        and have_override == override
+    )
 
 
 def wininet_is_direct() -> bool:
@@ -145,6 +199,8 @@ def force_wininet_direct(backup_path: Path, log: LogFn = noop) -> None:
         _set_reg_int(key, "ProxyEnable", 0)
         _set_reg_int(key, "AutoDetect", 0)
         _delete_reg(key, "AutoConfigURL")
+        if _is_our_static(_get_reg_str(key, "ProxyServer", "")):
+            _delete_reg(key, "ProxyServer")
     notify_proxy_change()
     log("Windows proxy: DIRECT — браузер через TUN")
 
@@ -174,12 +230,40 @@ def restore_win_proxy(backup_path: Path, log: LogFn = noop) -> None:
             notify_proxy_change()
             log("Windows proxy restored from backup")
             return
-        if _is_our_pac(current_pac):
+        server = _get_reg_str(key, "ProxyServer", "")
+        if _is_our_pac(current_pac) or _is_our_static(server):
             _delete_reg(key, "AutoConfigURL")
             _set_reg_int(key, "ProxyEnable", 0)
+            if _is_our_static(server):
+                _delete_reg(key, "ProxyServer")
             notify_proxy_change()
-            log("Windows PAC снят")
+            log("Windows PAC/прокси снят")
             return
+
+
+def enable_browser_static_proxy(
+    http_port: int,
+    bypass_hosts: list[str] | None,
+    backup_path: Path,
+    log: LogFn = noop,
+) -> None:
+    """Office: fixed 127.0.0.1:port — no PAC file, Chrome does not wait."""
+    if not _is_windows():
+        log("Browser proxy: Windows only")
+        return
+    server = f"127.0.0.1:{int(http_port)}"
+    override = proxy_override_list(bypass_hosts)
+    backup_win_proxy(backup_path)
+    if static_proxy_active(http_port, override):
+        return
+    with _reg_key() as key:
+        _set_reg_int(key, "ProxyEnable", 1)
+        _set_reg_int(key, "AutoDetect", 0)
+        _delete_reg(key, "AutoConfigURL")
+        _set_reg_str(key, "ProxyServer", server)
+        _set_reg_str(key, "ProxyOverride", override)
+    notify_proxy_change()
+    log(f"офис: системный прокси {server} (без PAC), bypass={override}")
 
 
 def enable_browser_pac(
