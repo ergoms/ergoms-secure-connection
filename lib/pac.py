@@ -3,6 +3,33 @@
 from __future__ import annotations
 
 import fnmatch
+import ipaddress
+
+
+def _is_host_pattern(raw: str) -> bool:
+    text = (raw or "").strip()
+    if not text:
+        return False
+    low = text.lower()
+    if low.startswith("exe:") or low.startswith("svc:"):
+        return False
+    if "\\" in text or "/" in text or low.endswith(".exe"):
+        return False
+    return True
+
+
+def _is_ip_or_cidr(raw: str) -> bool:
+    text = (raw or "").strip().strip("[]")
+    if not text:
+        return False
+    try:
+        if "/" in text:
+            ipaddress.ip_network(text, strict=False)
+            return True
+        ipaddress.ip_address(text)
+        return True
+    except ValueError:
+        return False
 
 
 class BypassMatcher:
@@ -48,7 +75,7 @@ def bypass_to_singbox(patterns: list[str]) -> tuple[list[str], list[str]]:
     domains: set[str] = set()
     for raw in patterns:
         p = raw.strip().lower()
-        if not p:
+        if not p or not _is_host_pattern(p) or _is_ip_or_cidr(p):
             continue
         if p.startswith("*."):
             suffixes.add(p[1:])
@@ -61,7 +88,9 @@ def bypass_to_singbox(patterns: list[str]) -> tuple[list[str], list[str]]:
 
 def _pac_cond(pattern: str) -> str:
     p = pattern.strip().lower()
-    if not p:
+    if not p or not _is_host_pattern(p):
+        return ""
+    if _is_ip_or_cidr(p) and "/" in p:
         return ""
     if "*" in p or "?" in p:
         return f'shExpMatch(host, "{p}")'

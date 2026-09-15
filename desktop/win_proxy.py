@@ -121,9 +121,11 @@ def proxy_override_list(bypass_hosts: list[str] | None = None) -> str:
         "169.254.*",
     ]
     seen = {p.lower() for p in parts}
+    from desktop.route_tokens import is_host_pattern
+
     for raw in bypass_hosts or []:
         host = str(raw or "").strip()
-        if not host:
+        if not host or not is_host_pattern(host):
             continue
         key = host.lower()
         if key in seen:

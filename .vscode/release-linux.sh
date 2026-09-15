@@ -71,6 +71,10 @@ if [[ ! -x "$BIN" ]]; then
   echo "missing executable: $BIN" >&2
   exit 1
 fi
+cp -f "$DST/modes/linux/install.sh" "$DST/dist/ERGOMS SECURE CONNECTION/install.sh"
+cp -f "$DST/modes/linux/uninstall.sh" "$DST/dist/ERGOMS SECURE CONNECTION/uninstall.sh"
+chmod +x "$DST/dist/ERGOMS SECURE CONNECTION/install.sh" \
+  "$DST/dist/ERGOMS SECURE CONNECTION/uninstall.sh"
 
 OUT="$WIN_ROOT/artifacts"
 mkdir -p "$OUT"

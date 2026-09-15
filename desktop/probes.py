@@ -75,7 +75,7 @@ class ProbeOps:
         if not self.singbox.running():
             self._exit_probe_error = self._exit_probe_error or "sing-box stopped"
             return
-        self._claim_default_route()
+        office = False
         home_udp = False
         probe_host, probe_path = "github.com", "/"
         try:
@@ -86,7 +86,10 @@ class ProbeOps:
             dial_now = choose_dial(tr_now, office=office)
             home_udp = dial_now == "amneziawg"
         except Exception:  # noqa: BLE001
-            office = False
+            pass
+        # AWG UDP dies if TUN /1 and KS land before the handshake.
+        if not home_udp:
+            self._claim_default_route()
         self.log(f"проверка выхода через SOCKS :{socks_port} → {probe_host}:443…")
         attempts = 3 if home_udp else 1
         err: str | None = None
@@ -141,6 +144,7 @@ class ProbeOps:
 
     def _log_udp_timeout_hint(self) -> None:
         self._exit_probe_hint = "udp-timeout"
+        office_now = False
         try:
             tr_now = require_transport(self.config())
             office_now = bool(resolve_corporate_proxy(self.config()))
@@ -158,6 +162,12 @@ class ProbeOps:
                     "Чужой туннель поднят ("
                     + ", ".join(live)
                     + ") — его split default перехватывает UDP."
+                )
+            elif office_now and dial_now == "amneziawg":
+                self.log(
+                    f"{proto} UDP :{udp_port} не ушёл с underlay. "
+                    "Handshake не дошёл до VPS: bind должен смотреть на VPS, "
+                    "не на Squid; проверьте маршрут /32 и резолв адреса сервера."
                 )
             else:
                 self.log(

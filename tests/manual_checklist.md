@@ -5,3 +5,6 @@
 - [ ] `disable` clears PAC / git / Docker / kill switch
 - [ ] Watchdog reconnect after SOCKS drop
 - [ ] GUI: load settings, save settings, import/export config
+- [ ] VPN on: `ssh -G <алиас>` читает `~/.ssh/config` (HostName не равен самому алиасу, если в конфиге задан другой)
+- [ ] VPN on: `ssh <алиас>` на хост из конфига (офис/лаба/VPS) — сессия живая, не NXDOMAIN и не мгновенный `CreateProcessW` / `posix_spawnp`
+- [ ] VPN on: Cursor Remote-SSH на тот же хост (не reverse-ssh)

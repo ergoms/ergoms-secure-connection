@@ -140,6 +140,10 @@ jobs:
             echo "missing executable: $BIN" >&2
             exit 1
           fi
+          cp -f modes/linux/install.sh 'dist/ERGOMS SECURE CONNECTION/install.sh'
+          cp -f modes/linux/uninstall.sh 'dist/ERGOMS SECURE CONNECTION/uninstall.sh'
+          chmod +x 'dist/ERGOMS SECURE CONNECTION/install.sh' \
+            'dist/ERGOMS SECURE CONNECTION/uninstall.sh'
           mkdir -p artifacts
           tar -C dist -czf "artifacts/ERGOMS-SECURE-CONNECTION-${VER}-linux-x64.tar.gz" \
             "ERGOMS SECURE CONNECTION"

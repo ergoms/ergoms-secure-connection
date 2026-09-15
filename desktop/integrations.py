@@ -37,8 +37,10 @@ class IntegrationOps:
     def _bridge_hosts(self, cfg: dict[str, Any], mode: str) -> tuple[list[str], list[str]]:
         bypass: list[str] = []
         seen: set[str] = set()
+        from desktop.route_tokens import is_host_pattern
+
         for h in cfg.get("proxy_bypass") or []:
-            if not h:
+            if not h or not is_host_pattern(str(h)):
                 continue
             k = str(h).lower()
             if k in seen:
@@ -66,7 +68,7 @@ class IntegrationOps:
             ]
             seen_t: set[str] = set()
             for h in list(cfg.get("blocked_hosts") or []) + extra:
-                if not h:
+                if not h or not is_host_pattern(str(h)):
                     continue
                 k = str(h).lower()
                 if k in seen_t:
@@ -289,7 +291,9 @@ class IntegrationOps:
         from desktop.win_proxy import proxy_override_list, static_proxy_active
 
         http_port = get_http_bridge_port()
-        bypass = [str(h) for h in (cfg.get("proxy_bypass") or []) if h]
+        from desktop.route_tokens import host_patterns
+
+        bypass = host_patterns(cfg.get("proxy_bypass") or [])
         override = proxy_override_list(bypass)
         if static_proxy_active(http_port, override):
             return
@@ -449,7 +453,9 @@ class IntegrationOps:
             return
         if office:
             self.stop_pac_server()
-            bypass = [str(h) for h in (cfg.get("proxy_bypass") or []) if h]
+            from desktop.route_tokens import host_patterns
+
+            bypass = host_patterns(cfg.get("proxy_bypass") or [])
             enable_browser_static_proxy(
                 http_port,
                 bypass,

@@ -6,14 +6,11 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 
-Write-Host '[deploy] VLESS+Reality TCP :443 + AmneziaWG UDP :51820' -ForegroundColor Cyan
-Write-Host 'On VPS (console):'
-Write-Host '  bash modes/vps/disable_sshd_443.sh'
-Write-Host '  bash modes/vps/bootstrap_singbox_443.sh'
-Write-Host '  bash modes/vps/enable_amneziawg.sh   # home UDP'
-Write-Host 'On PC: paste transport into config.json (server.host = VPS IP)'
-Write-Host '  .\ergoms-secure-connection.ps1 probe HOST 443'
-Write-Host '  .\ergoms-secure-connection.ps1 on'
+Write-Host '[deploy] VPS: одна команда с консоли хостинга (root)' -ForegroundColor Cyan
+Write-Host '  curl -fsSL https://raw.githubusercontent.com/DohaoSTR/ergoms-secure-connection/main/modes/vps/install.sh | bash'
+Write-Host 'Если репозиторий уже на сервере:'
+Write-Host '  sudo bash modes/vps/install.sh'
+Write-Host 'Только Reality, без AmneziaWG:  sudo bash modes/vps/install.sh --no-awg'
+Write-Host 'На ПК: Настройки → Из файла  (client.json с VPS: /var/lib/ops-content-singbox/client.json)'
 exit 0

@@ -97,10 +97,11 @@ ApplicationWindow {
             StackLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                currentIndex: bridge.page === "home" ? 0 : (bridge.page === "settings" ? 1 : 2)
+                currentIndex: bridge.page === "home" ? 0 : (bridge.page === "settings" ? 1 : (bridge.page === "exceptions" ? 2 : 3))
 
                 HomePage {}
                 SettingsPage {}
+                ExceptionsPage {}
                 LogPage {}
             }
 

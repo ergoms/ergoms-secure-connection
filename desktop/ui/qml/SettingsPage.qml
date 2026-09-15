@@ -8,17 +8,16 @@ Item {
 
     readonly property bool tunOn: Boolean(bridge.settings.tunAuto) || Boolean(bridge.settings.killSwitch)
     readonly property bool awgDial: String(bridge.settings.trDial) === "amneziawg"
-    readonly property bool settingsIncomplete: {
+    readonly property bool missingAppConfig: {
         var host = String(bridge.settings.serverHost || "").replace(/^\s+|\s+$/g, "")
         if (!host || host.indexOf("YOUR_VPS") >= 0)
             return true
-        if (root.awgDial) {
-            return !String(bridge.settings.awgPrivateKey || "").replace(/^\s+|\s+$/g, "")
-                || !String(bridge.settings.awgPeerPublicKey || "").replace(/^\s+|\s+$/g, "")
-        }
+        if (root.awgDial)
+            return false
         return !String(bridge.settings.trUuid || "").replace(/^\s+|\s+$/g, "")
             || !String(bridge.settings.trPublicKey || "").replace(/^\s+|\s+$/g, "")
     }
+    readonly property bool missingAwgConfig: !Boolean(bridge.settings.awgLoaded)
 
     ColumnLayout {
         anchors.fill: parent
@@ -54,21 +53,6 @@ Item {
                     font.pixelSize: 12
                     font.family: T.fontUi
                     wrapMode: Text.WordWrap
-                }
-
-                Text {
-                    visible: root.settingsIncomplete && !bridge.active && !bridge.busy
-                    width: parent.width
-                    text: "Не хватает данных для подключения. Загрузите конфиг."
-                    color: T.warn
-                    font.pixelSize: 12
-                    font.family: T.fontUi
-                    wrapMode: Text.WordWrap
-                    MouseArea {
-                        anchors.fill: parent
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: root.awgDial ? bridge.importAwgConfFile() : bridge.importConfigFile()
-                    }
                 }
 
                 SectionLabel { text: "VPN" }
@@ -293,11 +277,11 @@ Item {
                             wrapMode: Text.WordWrap
                         }
                         Text {
+                            visible: Boolean(bridge.settings.awgLoaded)
                             width: parent.width
-                            text: Boolean(bridge.settings.awgLoaded)
-                                  ? String(bridge.settings.awgSummary || "")
-                                  : "Файл ещё не загружен."
-                            color: Boolean(bridge.settings.awgLoaded) ? T.text : T.warn
+                            height: visible ? implicitHeight : 0
+                            text: String(bridge.settings.awgSummary || "")
+                            color: T.text
                             font.pixelSize: 12
                             font.family: T.fontUi
                             wrapMode: Text.WordWrap
@@ -306,42 +290,6 @@ Item {
                             width: parent.width
                             text: Boolean(bridge.settings.awgLoaded) ? "Заменить .conf" : "Загрузить .conf"
                             onClicked: bridge.importAwgConfFile()
-                        }
-                    }
-                }
-
-                SectionLabel {
-                    visible: bridge.corporate
-                    height: visible ? implicitHeight : 0
-                    text: "КОРПОРАТИВНАЯ СЕТЬ"
-                    topPadding: 8
-                }
-                Card {
-                    visible: bridge.corporate
-                    height: visible ? implicitHeight : 0
-                    width: parent.width
-                    implicitHeight: visible ? corpCol.implicitHeight + 24 : 0
-                    Column {
-                        id: corpCol
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.top: parent.top
-                        anchors.margins: 14
-                        spacing: 10
-
-                        Text { text: "Область трафика"; color: T.muted; font.pixelSize: 11; font.weight: Font.Medium; font.family: T.fontUi }
-                        Segmented {
-                            width: parent.width
-                            value: String(bridge.settings.socksScope)
-                            model: [
-                                { label: "Всё", value: "full" },
-                                { label: "GitHub + Cursor", value: "github" }
-                            ]
-                            onActivated: (v) => { bridge.settings.socksScope = v }
-                        }
-                        SettingField {
-                            label: "Исключения (через запятую)"
-                            settingKey: "proxyBypass"
                         }
                     }
                 }
@@ -395,7 +343,7 @@ Item {
 
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: 62
+            Layout.preferredHeight: 62 + missingBox.implicitHeight
             color: T.bg
 
             Rectangle {
@@ -406,12 +354,58 @@ Item {
                 color: Qt.rgba(1, 1, 1, 0.05)
             }
 
+            Column {
+                id: missingBox
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.leftMargin: 14
+                anchors.rightMargin: 14
+                anchors.topMargin: 8
+                spacing: 3
+
+                Text {
+                    visible: root.missingAppConfig
+                    width: parent.width
+                    height: visible ? implicitHeight : 0
+                    text: "Нет общего конфига"
+                    color: T.warn
+                    font.pixelSize: 12
+                    font.family: T.fontUi
+                    wrapMode: Text.WordWrap
+                    MouseArea {
+                        anchors.fill: parent
+                        enabled: !bridge.active && !bridge.busy
+                        cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                        onClicked: bridge.importConfigFile()
+                    }
+                }
+                Text {
+                    visible: root.missingAwgConfig
+                    width: parent.width
+                    height: visible ? implicitHeight : 0
+                    text: "Нет конфига Amnezia"
+                    color: T.warn
+                    font.pixelSize: 12
+                    font.family: T.fontUi
+                    wrapMode: Text.WordWrap
+                    MouseArea {
+                        anchors.fill: parent
+                        enabled: !bridge.active && !bridge.busy
+                        cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                        onClicked: bridge.importAwgConfFile()
+                    }
+                }
+            }
+
             RowLayout {
-                anchors.fill: parent
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.bottom: parent.bottom
                 anchors.leftMargin: 14
                 anchors.rightMargin: 14
                 anchors.bottomMargin: 10
-                anchors.topMargin: 6
+                height: 44
                 spacing: 8
                 PrimaryButton {
                     Layout.fillWidth: true

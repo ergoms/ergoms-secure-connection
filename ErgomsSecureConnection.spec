@@ -45,6 +45,7 @@ a = Analysis(
         "desktop.elevate",
         "desktop.pac_serve",
         "desktop.__main__",
+        "desktop.linux_service",
         "lib.connect",
         "lib.connect_socks",
         "lib.connect_proxy",

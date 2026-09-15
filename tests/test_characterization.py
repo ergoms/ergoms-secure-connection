@@ -17,6 +17,7 @@ from desktop.singbox_mode import (
     SingboxModeManager,
     amneziawg_opts,
     effective_tun_mtu,
+    underlay_bind_target,
     underlay_keep_hosts,
 )
 from desktop.ui.settings_map import apply_settings_to_cfg, cfg_to_settings, settings_defaults
@@ -189,6 +190,22 @@ def test_office_ssh_to_vps_via_proxy() -> None:
     assert hairpin
 
 
+def test_user_ssh_and_remote_ssh_are_not_rejected() -> None:
+    """Outgoing OpenSSH / Cursor Remote-SSH must stay usable under TUN."""
+    for office in (False, True):
+        box = _build(dial="vless-reality", office=office, enable_tun=True)
+        for rule in box["route"]["rules"]:
+            if rule.get("action") != "reject":
+                continue
+            names = [str(n).lower() for n in (rule.get("process_name") or [])]
+            assert "ssh.exe" not in names and "ssh" not in names
+            port = rule.get("port")
+            ports = port if isinstance(port, list) else [port] if port is not None else []
+            if rule.get("network") == "udp":
+                continue
+            assert 22 not in ports
+
+
 def test_underlay_keep_hosts_office_vless_pins_only_squid() -> None:
     assert underlay_keep_hosts("vps.example", "192.0.2.10:3128") == ["192.0.2.10"]
     assert underlay_keep_hosts("vps.example", "") == ["vps.example"]
@@ -197,12 +214,69 @@ def test_underlay_keep_hosts_office_vless_pins_only_squid() -> None:
     ) == ["192.0.2.10", "vps.example"]
 
 
+def test_underlay_bind_target_awg_uses_vps_not_squid() -> None:
+    assert underlay_bind_target(
+        "203.0.113.10",
+        ["192.0.2.10", "203.0.113.10"],
+        squid_host="192.0.2.10",
+        udp_dial=True,
+    ) == "203.0.113.10"
+    assert underlay_bind_target(
+        "203.0.113.10",
+        ["192.0.2.10"],
+        squid_host="192.0.2.10",
+        udp_dial=False,
+    ) == "192.0.2.10"
+
+
+def _office_awg_hairpin(box: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        r
+        for r in (box.get("route") or {}).get("rules") or []
+        if "203.0.113.10/32" in (r.get("ip_cidr") or [])
+        and r.get("outbound") == "proxy"
+        and r.get("override_address") == "127.0.0.1"
+        and not r.get("port")
+        and not r.get("inbound")
+    ]
+
+
 def test_build_config_office_awg_with_tun() -> None:
     box = _build(dial="amneziawg", office=True, awg=True, enable_tun=True)
     assert "endpoints" in box
     assert box["endpoints"][0]["type"] == "awg"
+    assert box["endpoints"][0]["peers"][0]["address"] == "203.0.113.10"
     assert any(ib["type"] == "tun" for ib in box["inbounds"])
     assert box["route"]["default_domain_resolver"] == "dns-local"
+    tags = [ob.get("tag") for ob in box["outbounds"]]
+    types = [ob.get("type") for ob in box["outbounds"]]
+    assert tags == ["direct"]
+    assert types == ["direct"]
+    tun = next(ib for ib in box["inbounds"] if ib["type"] == "tun")
+    excluded = tun.get("route_exclude_address") or []
+    assert "192.0.2.10/32" in excluded
+    assert "203.0.113.10/32" in excluded
+    assert not _office_awg_hairpin(box)
+    assert not any(
+        r.get("network") == "udp" and r.get("port") == 443 and r.get("action") == "reject"
+        for r in box["route"]["rules"]
+    )
+
+
+def test_build_config_office_awg_minimal_without_tun() -> None:
+    box = _build(dial="amneziawg", office=True, awg=True, enable_tun=False)
+    inbound_types = [ib["type"] for ib in box["inbounds"]]
+    assert "tun" not in inbound_types
+    assert "socks" in inbound_types
+    assert "http" in inbound_types
+    assert box["endpoints"][0]["type"] == "awg"
+    assert box["endpoints"][0]["peers"][0]["address"] == "203.0.113.10"
+    assert [ob.get("tag") for ob in box["outbounds"]] == ["direct"]
+    assert not any(
+        r.get("network") == "udp" and r.get("port") == 443 and r.get("action") == "reject"
+        for r in (box.get("route") or {}).get("rules") or []
+    )
+    assert not _office_awg_hairpin(box)
 
 
 def test_amneziawg_opts_requires_keys() -> None:

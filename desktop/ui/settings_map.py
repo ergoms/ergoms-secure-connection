@@ -21,6 +21,7 @@ from desktop.config_io import (
     infer_corporate,
     normalize_dial,
 )
+from desktop.route_tokens import tokens_from_json, tokens_json
 
 GetFn = Callable[[str], Any]
 
@@ -43,6 +44,8 @@ def settings_defaults() -> dict[str, Any]:
         "serverSocks": str(app.server.local_socks_port),
         "proxyBypass": "",
         "proxyBypassVia": app.proxy_bypass_via,
+        "routeDirect": "[]",
+        "routeVpn": "[]",
         "trUuid": app.transport.uuid,
         "trPublicKey": app.transport.public_key,
         "trShortId": app.transport.short_id,
@@ -77,7 +80,8 @@ def cfg_to_settings(cfg: dict[str, Any]) -> dict[str, Any]:
     server = cfg.get("server") or {}
     tun = cfg.get("tun") or {}
     tr = cfg.get("transport") or {}
-    bypass = cfg.get("proxy_bypass") or []
+    bypass = [str(x).strip() for x in (cfg.get("proxy_bypass") or []) if str(x).strip()]
+    blocked = [str(x).strip() for x in (cfg.get("blocked_hosts") or []) if str(x).strip()]
     awg = tr.get("amneziawg") if isinstance(tr.get("amneziawg"), dict) else {}
     rev = cfg.get("reverse_ssh") or {}
     corporate = infer_corporate(cfg)
@@ -96,8 +100,10 @@ def cfg_to_settings(cfg: dict[str, Any]) -> dict[str, Any]:
             "serverHost": str(server.get("host") or ""),
             "serverPort": str(server.get("port") or 443),
             "serverSocks": str(server.get("local_socks_port") or 1080),
-            "proxyBypass": ", ".join(str(x) for x in bypass),
+            "proxyBypass": ", ".join(bypass),
             "proxyBypassVia": str(cfg.get("proxy_bypass_via") or "direct"),
+            "routeDirect": tokens_json(bypass),
+            "routeVpn": tokens_json(blocked),
             "trUuid": str(tr.get("uuid") or ""),
             "trPublicKey": str(tr.get("public_key") or ""),
             "trShortId": str(tr.get("short_id") or ""),
@@ -150,16 +156,36 @@ def apply_mode_to_settings(
         put("socksScope", "full" if tun else "github")
         if not filled_str(get("corporateProxy")) and CORPORATE_PROXY_PRESET:
             put("corporateProxy", CORPORATE_PROXY_PRESET)
-        if not filled_str(get("proxyBypass")):
-            put("proxyBypass", ", ".join(CORPORATE_BYPASS_PRESET))
+        if not _bypass_filled(get):
+            _put_direct(put, CORPORATE_BYPASS_PRESET)
         if not filled_str(get("trDial")):
             put("trDial", "vless-reality")
         return
     put("socksScope", "full")
-    if not filled_str(get("proxyBypass")):
-        put("proxyBypass", ", ".join(STANDARD_BYPASS_PRESET))
+    if not _bypass_filled(get):
+        _put_direct(put, STANDARD_BYPASS_PRESET)
     if not filled_str(get("trDial")):
         put("trDial", "amneziawg")
+
+
+def _put_direct(put: Callable[[str, Any], None], items: list[str]) -> None:
+    put("proxyBypass", ", ".join(items))
+    put("routeDirect", tokens_json(items))
+
+
+def _bypass_filled(get: GetFn) -> bool:
+    if filled_str(get("proxyBypass")):
+        return True
+    return bool(tokens_from_json(get("routeDirect")))
+
+
+def _tokens_from_ui(get: GetFn, json_key: str, csv_key: str) -> list[str]:
+    parsed = tokens_from_json(get(json_key))
+    if parsed:
+        return parsed
+    if not csv_key:
+        return []
+    return [x.strip() for x in filled_str(get(csv_key)).split(",") if x.strip()]
 
 
 def _as_int(raw: Any, default: int) -> int:
@@ -176,6 +202,7 @@ def apply_settings_to_cfg(
     corporate: bool,
 ) -> dict[str, Any]:
     prev_bypass = [str(x).strip() for x in (cfg.get("proxy_bypass") or []) if str(x).strip()]
+    prev_blocked = [str(x).strip() for x in (cfg.get("blocked_hosts") or []) if str(x).strip()]
     prev_proxy = filled_str(cfg.get("corporate_proxy"))
     server = cfg.get("server")
     if not isinstance(server, dict):
@@ -210,13 +237,16 @@ def apply_settings_to_cfg(
     server["port"] = _as_int(get("serverPort"), 443)
     server["local_socks_port"] = _as_int(get("serverSocks"), 1080)
     cfg.pop("worker_base_url", None)
-    ui_bypass = [
-        x.strip() for x in filled_str(get("proxyBypass")).split(",") if x.strip()
-    ]
+    ui_bypass = _tokens_from_ui(get, "routeDirect", "proxyBypass")
     if ui_bypass:
         cfg["proxy_bypass"] = ui_bypass
     elif prev_bypass:
         cfg["proxy_bypass"] = prev_bypass
+    ui_vpn = _tokens_from_ui(get, "routeVpn", "")
+    if ui_vpn:
+        cfg["blocked_hosts"] = ui_vpn
+    elif prev_blocked:
+        cfg["blocked_hosts"] = prev_blocked
     if corporate:
         cfg["proxy_bypass_via"] = "direct"
     cfg["kill_switch"] = bool(get("killSwitch"))

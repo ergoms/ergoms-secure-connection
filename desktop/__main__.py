@@ -85,7 +85,8 @@ def _show_help() -> int:
 
 Запуск:
   python -m desktop <cmd> …
-  ./ergoms-secure-connection.sh <cmd> …           # Linux
+  ergoms <cmd> …                                  # Linux (после install.sh)
+  ./ergoms-secure-connection.sh <cmd> …           # Linux (репозиторий)
   .\\ergoms-secure-connection.ps1 <cmd> …         # Windows
 """
     )
@@ -146,6 +147,13 @@ def _run_service(cmd: str) -> int:
                 ]
             )
         )
+    from desktop.paths import is_frozen
+
+    if is_frozen():
+        from desktop.linux_service import install as linux_install
+        from desktop.linux_service import uninstall as linux_uninstall
+
+        return linux_install() if cmd == "install-service" else linux_uninstall()
     script = _ROOT / "modes" / "linux" / f"{cmd}.sh"
     if not script.is_file():
         print(f"[ERGOMS SECURE CONNECTION] ERROR: missing {script}", file=sys.stderr)

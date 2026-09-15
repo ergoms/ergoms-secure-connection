@@ -51,6 +51,10 @@ from desktop.services.connection import ConnectionService
 from desktop.services.elevation import ElevationService
 from desktop.services.settings import SettingsService
 from desktop.services.status import C_MUTED, present_status
+from desktop.config.constants import BLOCKED_HOSTS
+from desktop.proc_net import list_processes, list_services
+from desktop.route_analyzer import analyze_process, analyze_service, analyze_token
+from desktop.route_tokens import token_payload, tokens_json
 from desktop.ui.settings_map import (
     apply_mode_to_settings,
     apply_settings_to_cfg,
@@ -80,6 +84,25 @@ def _json_has_awg(data: Any) -> bool:
     return isinstance(tr, dict) and isinstance(tr.get("amneziawg"), dict) and bool(
         tr.get("amneziawg")
     )
+
+
+def _analyze_spec(spec: str) -> dict[str, Any]:
+    raw = (spec or "").strip()
+    if raw.lower().startswith("svc:"):
+        return analyze_service(raw)
+    if raw.lower().startswith("pid:"):
+        try:
+            pid = int(raw.split(":", 1)[1])
+        except ValueError:
+            pid = 0
+        return analyze_process(pid=pid)
+    path = ""
+    name = raw
+    if raw.lower().startswith("exe:"):
+        name = raw[4:].strip()
+    if "\\" in name or "/" in name:
+        path = name
+    return analyze_process(name=name, path=path)
 
 
 def _awg_import_note(migrated: bool, incoming: Any, conf_path: Path) -> str:
@@ -121,6 +144,11 @@ class GuiBridge(QObject):
     powerTextChanged = Signal()
     corporateChanged = Signal()
     autostartChanged = Signal()
+    analyzeReady = Signal(str, str)
+    processListReady = Signal(str)
+    serviceListReady = Signal(str)
+    peersReady = Signal(str, str)
+    executablePicked = Signal(str)
 
     _bgFinished = Signal(str)
     _statusReady = Signal(object, bool)
@@ -277,6 +305,10 @@ class GuiBridge(QObject):
     def dataRoot(self) -> str:
         return str(self.paths.root)
 
+    @Property(str, constant=True)
+    def vpnPresetJson(self) -> str:
+        return tokens_json(BLOCKED_HOSTS)
+
     @Property(QObject, constant=True)
     def settings(self) -> QQmlPropertyMap:
         return self._settings
@@ -285,10 +317,95 @@ class GuiBridge(QObject):
 
     @Slot(str)
     def setPage(self, page: str) -> None:
-        if page not in ("home", "settings", "log") or page == self._page:
+        if page not in ("home", "settings", "exceptions", "log") or page == self._page:
             return
         self._page = page
         self.pageChanged.emit()
+
+    @Slot(str, result=str)
+    def tokenKind(self, raw: str) -> str:
+        return str(token_payload(raw).get("kind") or "unknown")
+
+    @Slot(str, result=str)
+    def tokenLabel(self, raw: str) -> str:
+        return str(token_payload(raw).get("label") or raw)
+
+    @Slot(str, result=bool)
+    def tokenShared(self, raw: str) -> bool:
+        return bool(token_payload(raw).get("shared"))
+
+    @Slot(str, result=bool)
+    def tokenAmbiguous(self, raw: str) -> bool:
+        return bool(token_payload(raw).get("ambiguous"))
+
+    @Slot(str)
+    def analyzeToken(self, query: str) -> None:
+        text = (query or "").strip()
+
+        def work() -> None:
+            try:
+                result = analyze_token(text)
+            except Exception as exc:  # noqa: BLE001
+                result = {"query": text, "kind": "unknown", "warning": str(exc)}
+            self.analyzeReady.emit(text, json.dumps(result, ensure_ascii=False))
+
+        self._spawn(work)
+
+    @Slot()
+    def listProcesses(self) -> None:
+        def work() -> None:
+            try:
+                items = [p.as_dict() for p in list_processes()]
+            except Exception:  # noqa: BLE001
+                items = []
+            self.processListReady.emit(json.dumps(items, ensure_ascii=False))
+
+        self._spawn(work)
+
+    @Slot()
+    def listServices(self) -> None:
+        def work() -> None:
+            try:
+                items = [s.as_dict() for s in list_services()]
+            except Exception:  # noqa: BLE001
+                items = []
+            self.serviceListReady.emit(json.dumps(items, ensure_ascii=False))
+
+        self._spawn(work)
+
+    @Slot(str)
+    def collectProcessPeers(self, spec: str) -> None:
+        raw = (spec or "").strip()
+
+        def work() -> None:
+            try:
+                result = _analyze_spec(raw)
+            except Exception as exc:  # noqa: BLE001
+                result = {"query": raw, "kind": "process", "warning": str(exc), "peers": []}
+            self.peersReady.emit(raw, json.dumps(result, ensure_ascii=False))
+
+        self._spawn(work)
+
+    @Slot()
+    def browseExecutable(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            None,
+            "Исполняемый файл",
+            "",
+            "Programs (*.exe);;All files (*)",
+        )
+        if path:
+            self.executablePicked.emit(path)
+
+    @Slot()
+    def saveExceptions(self) -> None:
+        try:
+            self._write_settings_to_disk()
+            self._enqueue_log("Обходы сохранены")
+            if self._active:
+                self.toast.emit("Сохранено. Применится при следующем подключении.", "info")
+        except Exception as exc:  # noqa: BLE001
+            self.toast.emit(str(exc), "error")
 
     def _handoff_if_needed(self, action: str) -> bool:
         """Relaunch elevated once. True = caller must stop (handoff or cancel)."""

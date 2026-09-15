@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path
 
-from desktop.branding import APP_NAME, ENV_DATA, env
+from desktop.branding import APP_ID, APP_NAME, ENV_DATA, env
 
 
 def _proxy_backup_name() -> str:
@@ -48,21 +48,56 @@ def _under_program_files(path: Path) -> bool:
     return False
 
 
+def linux_data_dir(home: Path | None = None) -> Path:
+    """XDG data dir for the frozen Linux client (does not create it)."""
+    if home is None:
+        xdg = (os.environ.get("XDG_DATA_HOME") or "").strip()
+        if xdg:
+            return Path(xdg).expanduser() / APP_ID
+        home = Path.home()
+    return Path(home) / ".local" / "share" / APP_ID
+
+
+def _copy_if_missing(src: Path, dst: Path) -> None:
+    if dst.is_file() or not src.is_file():
+        return
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(src.read_bytes())
+    except OSError:
+        pass
+
+
+def _migrate_legacy_config(current: Path, *legacy_roots: Path) -> None:
+    dst = current / "config.json"
+    for base in legacy_roots:
+        for name in (APP_NAME, "ERGOMS VPN", "ops-content"):
+            src_dir = base / name
+            if not (src_dir / "config.json").is_file():
+                continue
+            _copy_if_missing(src_dir / "config.json", dst)
+            _copy_if_missing(src_dir / "amneziawg.conf", current / "amneziawg.conf")
+            return
+
+
 def _appdata_root() -> Path:
     local = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
     base = Path(local)
     current = base / APP_NAME
     current.mkdir(parents=True, exist_ok=True)
-    dst = current / "config.json"
-    if not dst.is_file():
-        for name in ("ERGOMS VPN", "ops-content"):
-            src = base / name / "config.json"
-            if src.is_file():
-                try:
-                    dst.write_bytes(src.read_bytes())
-                except OSError:
-                    pass
-                break
+    _migrate_legacy_config(current, base)
+    return current
+
+
+def _linux_frozen_root() -> Path:
+    current = linux_data_dir()
+    current.mkdir(parents=True, exist_ok=True)
+    legacy = Path.home() / "AppData" / "Local"
+    extra: list[Path] = [legacy]
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        extra.insert(0, Path(local))
+    _migrate_legacy_config(current, *extra)
     return current
 
 
@@ -70,7 +105,9 @@ def data_root() -> Path:
     """Writable project root.
 
     - Dev: repository root
-    - Frozen exe: %LOCALAPPDATA%\\ERGOMS SECURE CONNECTION
+    - Frozen Windows: %LOCALAPPDATA%\\ERGOMS SECURE CONNECTION
+    - Frozen Linux: $XDG_DATA_HOME/ergoms-secure-connection
+      or ~/.local/share/ergoms-secure-connection
     - Override: ERGOMS_SC_DATA
     """
     override = env(ENV_DATA)
@@ -78,7 +115,9 @@ def data_root() -> Path:
         return Path(override).expanduser()
 
     if is_frozen():
-        return _appdata_root()
+        if sys.platform == "win32":
+            return _appdata_root()
+        return _linux_frozen_root()
 
     return Path(__file__).resolve().parent.parent
 

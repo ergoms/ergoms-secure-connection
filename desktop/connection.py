@@ -124,6 +124,7 @@ class ConnectionOps:
         bypass = [str(h) for h in cfg.get("proxy_bypass") or [] if h]
         if not bypass:
             bypass = ["*.local", "*.lan"]
+        vpn_hosts = [str(h) for h in cfg.get("blocked_hosts") or [] if h]
         kill_switch = get_kill_switch()
         enable_tun = get_tun_enabled() or kill_switch
         if kill_switch and not get_tun_enabled():
@@ -170,6 +171,7 @@ class ConnectionOps:
             sing_box_path=sing_box_path,
             elevate=get_tun_elevate() if start_tun else False,
             bypass_hosts=bypass,
+            vpn_hosts=vpn_hosts,
             mtu=get_tun_mtu(cfg),
             vps_proxy_ports=get_vps_proxy_ports(cfg),
             force_restart=True,

@@ -1,14 +1,6 @@
 #!/usr/bin/env bash
-# Deploy hints — VLESS+Reality only
+# VPS setup — delegates to modes/vps/install.sh
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
-echo "[deploy] VLESS+Reality (sing-box) on VPS :443"
-echo 'On VPS (console):'
-echo '  bash modes/vps/disable_sshd_443.sh'
-echo '  bash modes/vps/bootstrap_singbox_443.sh'
-echo 'On PC: paste transport into config.json (server.host = VPS IP)'
-echo '  ./ergoms-secure-connection.sh probe HOST 443'
-echo '  ./ergoms-secure-connection.sh on'
-exit 0
+exec bash "$ROOT/modes/vps/install.sh" "$@"

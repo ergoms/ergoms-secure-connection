@@ -5,6 +5,17 @@ import "Theme.js" as T
 Item {
     id: root
 
+    readonly property bool missingAppConfig: {
+        var host = String(bridge.settings.serverHost || "").replace(/^\s+|\s+$/g, "")
+        if (!host || host.indexOf("YOUR_VPS") >= 0)
+            return true
+        if (String(bridge.settings.trDial) === "amneziawg")
+            return false
+        return !String(bridge.settings.trUuid || "").replace(/^\s+|\s+$/g, "")
+            || !String(bridge.settings.trPublicKey || "").replace(/^\s+|\s+$/g, "")
+    }
+    readonly property bool missingAwgConfig: !Boolean(bridge.settings.awgLoaded)
+
     ColumnLayout {
         anchors.fill: parent
         anchors.leftMargin: 22
@@ -61,5 +72,40 @@ Item {
         }
 
         Item { Layout.fillHeight: true }
+
+        Text {
+            visible: root.missingAppConfig
+            Layout.fillWidth: true
+            Layout.preferredHeight: visible ? implicitHeight : 0
+            horizontalAlignment: Text.AlignHCenter
+            text: "Нет общего конфига"
+            color: T.warn
+            font.pixelSize: 12
+            font.family: T.fontUi
+            wrapMode: Text.WordWrap
+            MouseArea {
+                anchors.fill: parent
+                enabled: !bridge.active && !bridge.busy
+                cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                onClicked: bridge.importConfigFile()
+            }
+        }
+        Text {
+            visible: root.missingAwgConfig
+            Layout.fillWidth: true
+            Layout.preferredHeight: visible ? implicitHeight : 0
+            horizontalAlignment: Text.AlignHCenter
+            text: "Нет конфига Amnezia"
+            color: T.warn
+            font.pixelSize: 12
+            font.family: T.fontUi
+            wrapMode: Text.WordWrap
+            MouseArea {
+                anchors.fill: parent
+                enabled: !bridge.active && !bridge.busy
+                cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                onClicked: bridge.importAwgConfFile()
+            }
+        }
     }
 }

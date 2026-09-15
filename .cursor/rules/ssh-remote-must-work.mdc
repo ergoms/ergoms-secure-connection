@@ -1,0 +1,30 @@
+---
+description: Cursor Remote-SSH and user OpenSSH must work while the VPN is on
+alwaysApply: true
+---
+
+# SSH / Cursor Remote-SSH — обязательно
+
+Пока туннель поднят (дом или офис), **обязан** работать обычный пользовательский SSH:
+
+- `ssh` на хосты из `~/.ssh/config` (алиасы вроде `server-vps`, `bstu-server-laboratory-proxy-1`, `lab`)
+- Cursor / VS Code **Remote-SSH** на те же хосты
+- `ProxyJump` / `ProxyCommand` из **пользовательского** конфига, ключи, `known_hosts`
+
+Это не reverse-ssh (вход с VPS на этот ПК). Это исходящий SSH с ПК на серверы.
+
+## Нельзя ломать
+
+- Не подменять глобальный `~/.ssh/config` и не вешать свой `ProxyCommand` / `ALL_PROXY` на чужой `ssh.exe`
+- Алиас из SSH-конфига не обязан резолвиться через DoH/публичный DNS. `hijack-dns` + `dns-proxy` не должны превращать `Host server-vps` в `Could not resolve hostname`
+- Приватные IP лаборатории / офиса, до которых путь только через туннель, нельзя глушить правилом `ip_is_private → direct`, если из-за этого Remote-SSH умирает
+- Не отправлять `ssh.exe` / `ssh` в `reject`. Не требовать, чтобы пользователь клал Cursor в исключения
+- Git-for-Windows `ssh.exe` (MSYS, `posix_spawnp`) и Windows OpenSSH — оба должны жить; не рассчитывать только на один бинарник
+
+## Симптомы регрессии (уже ловили)
+
+- `CreateProcessW failed error:2` + `posix_spawnp: No such file or directory` + `UNKNOWN port 65535` за ~100ms — локальный spawn (askpass / ProxyCommand / не тот ssh), не таймаут сервера. Живой пример: `ProxyCommand` на чужой `C:/Users/Admin/.../python.exe` и старый `ops-content-demo`.
+- `ssh: Could not resolve hostname <алиас>: No such host is known` — конфиг SSH не применился или имя ушло в системный DNS под TUN
+- `ProxyCommand … 127.0.0.1 22` через SOCKS: `ip_is_private → direct` бьёт в локальный Windows `:22`, не в sshd на VPS. Цель SOCKS — `%h %p` (публичный IP VPS), hairpin уже в sing-box
+
+Правка маршрутов/DNS/прокси без ручной проверки: `ssh -G <алиас>` видит `hostname` из конфига, затем Remote-SSH к этому хосту с включённым VPN.

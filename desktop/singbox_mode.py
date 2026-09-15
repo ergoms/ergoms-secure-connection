@@ -23,6 +23,8 @@ from desktop.config_io import (
 )
 from desktop.logutil import noop
 from desktop.net_host import resolve_host
+from desktop.proc_net import resolve_service_image
+from desktop.route_tokens import parse_routes, process_matchers
 from desktop.sys.constants import SINGBOX_PROCESS_NAMES
 from desktop.tun import (
     RUSTDESK_PORTS,
@@ -95,6 +97,12 @@ def amneziawg_opts(tr: dict[str, Any] | None) -> dict[str, Any] | None:
     }
 
 
+def awg_peer_address(server_host: str) -> str:
+    """Prefer resolved VPS IPv4 so office DNS/dns-local cannot stall the handshake."""
+    host = (server_host or "").strip()
+    return resolve_host(host) or host
+
+
 def awg_endpoint(
     server_host: str,
     opts: dict[str, Any],
@@ -108,7 +116,7 @@ def awg_endpoint(
         if part.strip()
     ]
     peer: dict[str, Any] = {
-        "address": server_host,
+        "address": awg_peer_address(server_host),
         "port": int(opts["port"]),
         "public_key": opts["peer_public_key"],
         "allowed_ips": ["0.0.0.0/0", "::/0"],
@@ -314,6 +322,21 @@ def _udp_bind(bind_iface: str) -> dict[str, Any]:
     return {"bind_interface": bind_iface}
 
 
+def underlay_bind_target(
+    server_host: str,
+    exclude_ips: list[str],
+    *,
+    squid_host: str = "",
+    udp_dial: bool = False,
+) -> str:
+    """NIC lookup dest. AWG must bind toward the VPS, not Squid."""
+    if udp_dial:
+        return awg_peer_address(server_host) or squid_host
+    if exclude_ips:
+        return exclude_ips[0]
+    return squid_host or (server_host or "").strip()
+
+
 def choose_dial(transport: dict[str, Any], *, office: bool) -> str:
     """Honor explicit dial. Empty: Reality in office, AmneziaWG at home."""
     raw = str((transport or {}).get("dial") or "").strip()
@@ -495,6 +518,61 @@ def _vps_loopback_rule(
     return rule
 
 
+def _token_host_rules(parsed, outbound: str) -> list[dict[str, Any]]:
+    rules: list[dict[str, Any]] = []
+    if parsed.suffixes:
+        rules.append({"domain_suffix": list(parsed.suffixes), "outbound": outbound})
+    if parsed.domains:
+        rules.append({"domain": list(parsed.domains), "outbound": outbound})
+    if parsed.ips:
+        rules.append({"ip_cidr": list(parsed.ips), "outbound": outbound})
+    return rules
+
+
+def _token_process_rules(parsed, outbound: str) -> list[dict[str, Any]]:
+    names: list[str] = []
+    paths: list[str] = []
+    seen_n: set[str] = set()
+    seen_p: set[str] = set()
+    for raw in parsed.processes:
+        proc_names, proc_paths = process_matchers(raw)
+        for name in proc_names:
+            key = name.lower()
+            if key in seen_n:
+                continue
+            seen_n.add(key)
+            names.append(name)
+        for path in proc_paths:
+            key = path.lower()
+            if key in seen_p:
+                continue
+            seen_p.add(key)
+            paths.append(path)
+    for svc in parsed.services:
+        info = resolve_service_image(svc)
+        if info is None or info.shared:
+            continue
+        if info.path:
+            key = info.path.lower()
+            if key not in seen_p:
+                seen_p.add(key)
+                paths.append(info.path)
+        elif info.exe:
+            proc_names, _ = process_matchers(info.exe)
+            for name in proc_names:
+                key = name.lower()
+                if key in seen_n:
+                    continue
+                seen_n.add(key)
+                names.append(name)
+    rules: list[dict[str, Any]] = []
+    if names:
+        rules.append({"process_name": names, "outbound": outbound})
+    if paths:
+        rules.append({"process_path": paths, "outbound": outbound})
+    return rules
+
+
 def _build_route_rules(
     *,
     server_host: str,
@@ -502,6 +580,7 @@ def _build_route_rules(
     vpn_port: int,
     vps_proxy_ports: list[int] | None,
     bypass_hosts: list[str],
+    vpn_hosts: list[str] | None = None,
     via_proxy: bool = False,
 ) -> tuple[list[dict[str, Any]], list[str], list[str]]:
     rules: list[dict[str, Any]] = []
@@ -528,11 +607,13 @@ def _build_route_rules(
                 )
     if exclude_ips:
         rules.append({"ip_cidr": [f"{ip}/32" for ip in exclude_ips], "outbound": "direct"})
+    vpn_parsed = parse_routes(vpn_hosts or [])
+    rules.extend(_token_host_rules(vpn_parsed, "proxy"))
+    rules.extend(_token_process_rules(vpn_parsed, "proxy"))
+    direct_parsed = parse_routes(bypass_hosts)
     bypass_suffixes, bypass_domains = bypass_to_singbox(bypass_hosts)
-    if bypass_suffixes:
-        rules.append({"domain_suffix": bypass_suffixes, "outbound": "direct"})
-    if bypass_domains:
-        rules.append({"domain": bypass_domains, "outbound": "direct"})
+    rules.extend(_token_host_rules(direct_parsed, "direct"))
+    rules.extend(_token_process_rules(direct_parsed, "direct"))
     # Office DNS (10.16.0.9) is private. Hijack-before-private sent every
     # Chrome lookup through VLESS→DoH (~200ms) and YouTube crawled.
     rules.append({"ip_is_private": True, "outbound": "direct"})
@@ -631,6 +712,7 @@ class SingboxModeManager:
         http_port: int,
         enable_tun: bool,
         bypass_hosts: list[str] | None = None,
+        vpn_hosts: list[str] | None = None,
         mtu: int = 1400,
         vps_proxy_ports: list[int] | None = None,
         kill_switch: bool = False,
@@ -646,7 +728,12 @@ class SingboxModeManager:
             ip = resolve_host(h)
             if ip:
                 exclude_ips.append(ip)
-        bind_target = exclude_ips[0] if exclude_ips else (squid_host or server_host)
+        bind_target = underlay_bind_target(
+            server_host,
+            exclude_ips,
+            squid_host=squid_host,
+            udp_dial=bool(awg),
+        )
         bind_iface = detect_bind_interface(bind_target) if bind_target else ""
         if bind_iface:
             self.log(
@@ -655,8 +742,10 @@ class SingboxModeManager:
             )
         elif enable_tun:
             self.log("underlay NIC: не определён — outbound может уйти в TUN")
-        if awg and not enable_tun and not use_office_proxy:
-            self.log(f"дом: AmneziaWG UDP :{awg['port']} (обфускация handshake)")
+        if awg and not enable_tun:
+            place = "офис" if office else "дом"
+            extra = " (минуя Squid)" if office else ""
+            self.log(f"{place}: AmneziaWG UDP :{awg['port']}{extra}")
             return self._minimal_awg_config(
                 server_host=server_host,
                 awg=awg,
@@ -692,7 +781,8 @@ class SingboxModeManager:
             vpn_port=vpn_port,
             vps_proxy_ports=vps_proxy_ports,
             bypass_hosts=bypass_hosts or [],
-            via_proxy=use_office_proxy,
+            vpn_hosts=vpn_hosts or [],
+            via_proxy=use_office_proxy and not awg,
         )
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         inbounds: list[dict[str, Any]] = local_inbounds(socks_port, http_port)
@@ -709,26 +799,29 @@ class SingboxModeManager:
             )
         bind = {"bind_interface": bind_iface} if bind_iface else {}
         outbounds: list[dict[str, Any]] = []
-        if use_office_proxy:
+        if awg:
+            outbounds.append({"type": "direct", "tag": "direct", **bind})
+        else:
+            if use_office_proxy:
+                outbounds.append(
+                    {
+                        "type": "http",
+                        "tag": "squid",
+                        "server": squid_host,
+                        "server_port": int(squid_port),
+                        **bind,
+                    }
+                )
             outbounds.append(
-                {
-                    "type": "http",
-                    "tag": "squid",
-                    "server": squid_host,
-                    "server_port": int(squid_port),
-                    **bind,
-                }
+                _vless_outbound(
+                    server_host,
+                    transport,
+                    bind_iface=bind_iface,
+                    use_office_proxy=use_office_proxy,
+                )
             )
-        outbounds.append(
-            _vless_outbound(
-                server_host,
-                transport,
-                bind_iface=bind_iface,
-                use_office_proxy=use_office_proxy,
-            )
-        )
-        outbounds.append({"type": "direct", "tag": "direct", **bind})
-        outbounds.append({"type": "block", "tag": "block"})
+            outbounds.append({"type": "direct", "tag": "direct", **bind})
+            outbounds.append({"type": "block", "tag": "block"})
         sniff = [
             {"inbound": ["socks-in", "http-in"], "action": "sniff", "timeout": "100ms"}
         ]
@@ -770,7 +863,6 @@ class SingboxModeManager:
                 bypass_domains=bypass_domains,
             )
             box["endpoints"] = [awg_endpoint(server_host, awg, bind_iface=bind_iface)]
-            box["outbounds"] = [{"type": "direct", "tag": "direct", **bind}]
             box["route"]["default_domain_resolver"] = "dns-local"
         return box
 
@@ -784,11 +876,11 @@ class SingboxModeManager:
         http_port: int,
     ) -> dict[str, Any]:
         """SOCKS/HTTP only — TUN after handshake."""
-        self.log("дом: AmneziaWG как в песочнице — без TUN на handshake")
+        self.log("AmneziaWG как в песочнице — без TUN на handshake")
         bind = _udp_bind(bind_iface)
         ip = str(bind.get("inet4_bind_address") or "")
         if ip:
-            self.log(f"дом: AWG UDP с {ip}")
+            self.log(f"AWG UDP с {ip}")
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         return {
             **config_skeleton(
@@ -862,6 +954,7 @@ class SingboxModeManager:
         sing_box_path: str = "",
         elevate: bool = True,
         bypass_hosts: list[str] | None = None,
+        vpn_hosts: list[str] | None = None,
         mtu: int = 1400,
         vps_proxy_ports: list[int] | None = None,
         force_restart: bool = False,
@@ -883,6 +976,7 @@ class SingboxModeManager:
             http_port=http_port,
             enable_tun=enable_tun,
             bypass_hosts=bypass_hosts,
+            vpn_hosts=vpn_hosts,
             mtu=mtu,
             vps_proxy_ports=vps_proxy_ports,
             kill_switch=kill_switch,

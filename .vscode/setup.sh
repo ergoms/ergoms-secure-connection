@@ -103,11 +103,21 @@ run_pyinstaller() {
   if [[ -f "${ROOT}/dist/ERGOMS SECURE CONNECTION/ERGOMS SECURE CONNECTION.exe" ]]; then
     echo "OK: ${ROOT}/dist/ERGOMS SECURE CONNECTION/ERGOMS SECURE CONNECTION.exe"
   elif [[ -x "${ROOT}/dist/ERGOMS SECURE CONNECTION/ERGOMS SECURE CONNECTION" ]]; then
+    stage_linux_bundle_scripts
     echo "OK: ${ROOT}/dist/ERGOMS SECURE CONNECTION/ERGOMS SECURE CONNECTION"
   else
     echo "pyinstaller finished but dist/ERGOMS SECURE CONNECTION/ is missing" >&2
     exit 1
   fi
+}
+
+stage_linux_bundle_scripts() {
+  local dest="${ROOT}/dist/ERGOMS SECURE CONNECTION"
+  [[ -d "$dest" ]] || return 0
+  [[ -x "$dest/ERGOMS SECURE CONNECTION" ]] || return 0
+  cp -f "${ROOT}/modes/linux/install.sh" "$dest/install.sh"
+  cp -f "${ROOT}/modes/linux/uninstall.sh" "$dest/uninstall.sh"
+  chmod +x "$dest/install.sh" "$dest/uninstall.sh"
 }
 
 case "${1:-setup}" in

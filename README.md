@@ -1,127 +1,100 @@
 # ERGOMS SECURE CONNECTION
 
-Клиент и серверные скрипты для выхода в интернет через корпоративный HTTP-прокси (Squid) на **свой VPS** по **VLESS+Reality** (sing-box на порту 443).
+Выход в интернет через **свой VPS**.
 
-Цепочка:
+- **офис:** программа → корпоративный Squid → VPS TCP 443 (VLESS+Reality)
+- **дом:** программа → VPS UDP 51820 (AmneziaWG)
 
-**офис:** программа → sing-box → Squid CONNECT → VPS TCP :443 (VLESS+Reality) → интернет
+Домашний провайдер часто режет Reality. Офисный Squid UDP не проводит — поэтому на одном VPS оба транспорта.
 
-**дом:** программа → sing-box AWG → VPS UDP :51820 (AmneziaWG) → интернет
-
-Домашний провайдер часто глотает TLS Reality. Офисный Squid UDP не проводит, поэтому Reality там остаётся. Дома — AmneziaWG.
-
-AmneziaWG (`transport.dial=amneziawg`). Официальный sing-box 1.11.15 его не говорит, клиент качает отдельную AWG-сборку (`download-sing-box-awg`, `tools/sing-box-awg` / `ergoms-tun-awg.exe`). На VPS это **отдельный** сервис рядом с sing-box, не замена Reality: `bash modes/vps/enable_amneziawg.sh`. Чужой туннель AmneziaVPN по-прежнему конфликт; наш AWG идёт gVisor-endpoint внутри sing-box и свой `wireguard` NIC не поднимает.
-
-**Что проверено**
-
-- корпоративный VPN (VLESS+Reality через Squid) — работает
-- дом, AmneziaWG — работает (Ethernet, Россия)
-- дом, VLESS+Reality напрямую — DPI глотает TLS ClientHello, не использовать
+Релизы: [GitHub Releases](https://github.com/DohaoSTR/ergoms-secure-connection/releases)
 
 ---
 
-## Подготовка VPS (один раз)
+## 1. VPS (один раз)
 
-С консоли хостинга:
-
-```bash
-bash modes/vps/disable_sshd_443.sh
-bash modes/vps/bootstrap_singbox_443.sh
-```
-
-Скрипт напечатает блок `server` + `transport` для `config.json`.
-
-Проверка: `systemctl status sing-box`, `ss -lntp | grep ':443'`.
-
-Дом, AmneziaWG (после bootstrap):
+С консоли хостинга, под root:
 
 ```bash
-bash modes/vps/enable_amneziawg.sh
+curl -fsSL https://raw.githubusercontent.com/DohaoSTR/ergoms-secure-connection/main/modes/vps/install.sh | bash
 ```
 
-Скрипт кладёт ключи в **`creds/awg/`** репозитория: `client.json` + `pc.conf` (первый клиент). Проверка: `systemctl status ergoms-amneziawg`, `ss -lunp | grep ':51820'`. В панели хостинга открыть **UDP 51820**.
+Если репозиторий уже на сервере: `sudo bash modes/vps/install.sh`
 
-Ещё клиенты (каждый — свой `.conf`, свой IP `10.66.66.x`):
+В панели хостинга откройте **TCP 443** и **UDP 51820**.
 
-```bash
-bash modes/vps/add_amneziawg_client.sh phone laptop
-bash modes/vps/add_amneziawg_client.sh --count 5
-python3 modes/vps/awg_clients.py list
-```
+Конфиг для компьютера: `/var/lib/ops-content-singbox/client.json`
 
-Подсказки: `.\deploy.ps1` / `./deploy.sh`.
+Только Reality, без AmneziaWG: `sudo bash modes/vps/install.sh --no-awg`
+
+Ещё устройства: `sudo bash modes/vps/add_amneziawg_client.sh phone`
 
 ---
 
-## Клиент (Windows / Linux)
+## 2. Windows
 
-Релиз: [GitHub Releases](https://github.com/DohaoSTR/ergoms-secure-connection/releases) — Windows `*-Setup.exe`, Linux x64 `*-linux-x64.tar.gz`.
+Скачайте `*-windows-x64-setup.exe` из [Releases](https://github.com/DohaoSTR/ergoms-secure-connection/releases) и установите как обычную программу.
 
-### Linux (tar.gz)
+---
 
-Архив сам не запускается. Распаковать и запустить бинарник (пробелы в имени — кавычки обязательны). Папку `_internal` не удалять и не отделять от программы.
+## 3. Linux
 
 ```bash
-cd ~/Downloads
+curl -fsSL https://raw.githubusercontent.com/DohaoSTR/ergoms-secure-connection/main/modes/linux/install.sh | sudo bash
+```
+
+Или из архива `*-linux-x64.tar.gz`:
+
+```bash
 tar -xzf ERGOMS-SECURE-CONNECTION-*-linux-x64.tar.gz
-cd "ERGOMS SECURE CONNECTION"
-chmod +x "ERGOMS SECURE CONNECTION"
-./"ERGOMS SECURE CONNECTION"                 # окно
-# CLI (нет DISPLAY или без GUI):
-./"ERGOMS SECURE CONNECTION" init
-# вставить server.host + transport из bootstrap, либо:
-./"ERGOMS SECURE CONNECTION" decrypt share.enc
-./"ERGOMS SECURE CONNECTION" on
-./"ERGOMS SECURE CONNECTION" status
-./"ERGOMS SECURE CONNECTION" off
+sudo bash "ERGOMS SECURE CONNECTION/install.sh"
 ```
 
-`on` спросит sudo (TUN / kill switch). Конфиг: `~/AppData/Local/ERGOMS SECURE CONNECTION/config.json` (своё место — `ERGOMS_SC_DATA`). Служба systemd — только из репозитория (`./ergoms-secure-connection.sh install-service`), в tar.gz её нет.
-
-### Из репозитория
-
-```powershell
-.\ergoms-secure-connection.ps1 init
-# в config.json: server.host + transport из bootstrap
-.\ergoms-secure-connection.ps1 probe АДРЕС_СЕРВЕРА 443
-.\ergoms-secure-connection.ps1 on
-.\ergoms-secure-connection.ps1 status
-.\ergoms-secure-connection.ps1 off
-```
-
-То же: `python -m desktop …` или `./ergoms-secure-connection.sh …`.
-
-Автозапуск (служба, одна команда — спросит админа/sudo):
-
-```powershell
-.\ergoms-secure-connection.ps1 install-service     # Windows (WinSW, LocalSystem, TUN без UAC)
-# снять: .\ergoms-secure-connection.ps1 uninstall-service
-```
+После этого:
 
 ```bash
-./ergoms-secure-connection.sh install-service      # Linux (systemd)
-# снять: ./ergoms-secure-connection.sh uninstall-service
+ergoms                 # окно
+ergoms on              # подключить
+ergoms off             # отключить
+ergoms install-service # автозапуск
 ```
 
-В `config.json` по умолчанию `tun.enabled` и `kill_switch` включены: TUN поднимается вместе с `on`, при обрыве интернет блокируется. Для окна: `poetry install --extras gui`, затем `python -m desktop gui` (или `poetry run python -m desktop gui`). Сборка Windows: `.\.vscode\setup.ps1 -Target build` → папка `dist/ERGOMS SECURE CONNECTION/` и установщик `dist/ERGOMS SECURE CONNECTION-Setup.exe`.
-
-Локально после `on`: SOCKS `:1080`, HTTP `:1088`, PAC `:1089`.
-
-Окно: в трее три пункта — **Открыть**, **Подключить / Отключить** (текст и доступность меняются по статусу), **Выход**. Во вкладке «Журнал» кнопка **Копировать всё** кладёт текущий лог в буфер обмена. Служба Amnezia без поднятого туннеля AWG не ломает. Если Amnezia-туннель всё же включён — в split добавьте IP VPS `/32` (домены и exe не нужны). Kill switch Amnezia (`WinError 10013`) UDP всё равно может резать.
+Конфиг: `~/.local/share/ergoms-secure-connection/config.json`  
+Снять: `sudo bash /opt/ergoms-secure-connection/uninstall.sh`
 
 ---
 
-## Дом (Россия) / Windows — что реально ломалось
+## 4. Первый запуск
 
-Проверено на домашнем Ethernet: TCP до VPS `:443` живой, SOCKS CONNECT до `1.1.1.1:443` тоже, а сайты мёртвые (`HTTPS probe timeout` / `no recent network activity`). Это **не** «клиент не стартовал».
+1. Скопируйте `client.json` с VPS (или зашифрованный `share.enc`).
+2. В окне: **Настройки → Из файла**. Либо: `ergoms decrypt share.enc`
+3. **Подключить** / `ergoms on` (спросит пароль sudo: TUN и kill switch).
 
-Что помогло (без этого дома не поднимается):
+Локально после подключения: SOCKS `:1080`, HTTP `:1088`, PAC `:1089`.
 
-1. **AmneziaWG UDP :51820**, не Reality. Домашний DPI глотает VLESS+Reality на TCP :443 (`TLS handshake timed out`, HTTP 400 с VPS при этом живой). На VPS: `ss -lunp | grep 51820` и `bash modes/vps/enable_amneziawg.sh`.
-2. **Дом: AWG без чужого default `0.0.0.0/0`.** Amnezia / Tailscale через `100.x` / `10.13.13.2` metric 5 перехватывают UDP. Idle-служба Amnezia (туннель не поднят) не влияет. В `route print` у persistent-строки слово `Default` вместо метрики — клиент такие снимает. Если второй VPN нужен: split `/32` на IP VPS через Ethernet.
-3. На VPS в панели хостинга открыть **UDP 51820** (не путать с TCP 443).
+---
 
-В журнале при норме: `дом: AmneziaWG UDP :51820`, затем `проверка выхода: OK`, затем TUN split default. Песочница (`python -m desktop sandbox`): `AWG CONNECT` + `AWG HTTPS` OK.
+## Команды
+
+Одинаковы везде: `ergoms …`, `./ergoms-secure-connection.sh …`, `.\ergoms-secure-connection.ps1 …`, `python -m desktop …`.
+
+| Команда | Смысл |
+|---------|--------|
+| `init` | Создать `config.json` |
+| `on` / `off` | Включить / выключить |
+| `status` / `probe` / `test` | Состояние и проверки |
+| `sandbox` | Песочница: путь до VPS мимо TUN/Amnezia |
+| `tun-on` / `tun-off` | TUN |
+| `reverse-on` / `reverse-off` | SSH с VPS на этот ПК |
+| `encrypt` / `decrypt` | Зашифровать / расшифровать конфиг |
+| `download-sing-box` | Скачать официальный sing-box 1.11 в `tools/` |
+| `download-sing-box-awg` | Скачать AWG-сборку (AmneziaWG) |
+| `docker-env` / `docker-test` | Прокси для контейнеров |
+| `install-service` / `uninstall-service` | служба VPN (Windows / Linux) |
+| `gui` | Окно |
+| `help` | Справка |
+
+Из репозитория (разработка): `./ergoms-secure-connection.sh …` / `.\ergoms-secure-connection.ps1 …`. Служба: `install-service`. VPS: `./deploy.sh`.
 
 ---
 
@@ -145,6 +118,8 @@ chmod +x "ERGOMS SECURE CONNECTION"
 
 Старый `.env` при `init` один раз мигрируется в `config.json`.
 
+По умолчанию `tun.enabled` и `kill_switch` включены. Окно: в трее **Открыть**, **Подключить / Отключить**, **Выход**. Во вкладке «Журнал» — **Копировать всё**.
+
 ### Передача конфига (шифрование)
 
 ```powershell
@@ -158,43 +133,28 @@ chmod +x "ERGOMS SECURE CONNECTION"
 
 ---
 
-## Команды
+## Дом (Россия) — если сайты не открываются
 
-| Команда | Смысл |
-|---------|--------|
-| `init` | Создать `config.json` |
-| `on` / `off` | Включить / выключить |
-| `status` / `probe` / `test` | Состояние и проверки |
-| `sandbox` | Песочница: путь до VPS мимо TUN/Amnezia |
-| `tun-on` / `tun-off` | TUN |
-| `reverse-on` / `reverse-off` | SSH с VPS на этот ПК |
-| `encrypt` / `decrypt` | Зашифровать / расшифровать конфиг |
-| `download-sing-box` | Скачать официальный sing-box 1.11 в `tools/` |
-| `download-sing-box-awg` | Скачать AWG-сборку (AmneziaWG) |
-| `docker-env` / `docker-test` | Прокси для контейнеров |
-| `install-service` / `uninstall-service` | служба VPN (Windows / Linux) |
-| `gui` | Окно |
-| `deploy` | Подсказки по VPS |
-| `help` | Справка |
+Проверено на домашнем Ethernet: TCP до VPS `:443` живой, а сайты мёртвые (`HTTPS probe timeout`). Это не «клиент не стартовал».
+
+1. Нужен **AmneziaWG UDP :51820**, не Reality. Домашний DPI глотает VLESS+Reality на TCP :443. На VPS: `ss -lunp | grep 51820`.
+2. Чужой туннель AmneziaVPN / Tailscale с default `0.0.0.0/0` перехватывает UDP. Если второй VPN нужен — split `/32` на IP VPS.
+3. В панели хостинга открыть **UDP 51820** (не путать с TCP 443).
+
+В журнале при норме: `дом: AmneziaWG UDP :51820`, затем `проверка выхода: OK`. Песочница: `ergoms sandbox` — `AWG CONNECT` + `AWG HTTPS` OK.
+
+Служба Amnezia без поднятого туннеля не мешает. Kill switch чужого Amnezia (`WinError 10013`) UDP всё равно может резать.
 
 ---
 
 ## SSH на клиент без публичного IP
 
-По умолчанию выключено. Если включить, пока VPN поднят, с VPS можно зайти на этот ПК. Офисный Squid рвёт прямые соединения на VPS `:22`, поэтому клиент открывает обратный туннель **через SOCKS** (AWG или Reality).
+По умолчанию выключено. Если включить, пока VPN поднят, с VPS можно зайти на этот ПК. Офисный Squid рвёт прямые соединения на VPS `:22`, поэтому клиент открывает обратный туннель **через SOCKS**.
 
-На клиенте нужны OpenSSH Server и ключ в `creds/` (тот же, что в `authorized_keys` на VPS). В настройках: **SSH с сервера**.
-
-После обновления один раз `off` / `on`.
-
-```powershell
-.\ergoms-secure-connection.ps1 on
-.\ergoms-secure-connection.ps1 status
-```
-
-С этого VPS:
+На клиенте нужны OpenSSH Server и ключ в `creds/` (тот же, что в `authorized_keys` на VPS). В настройках: **SSH с сервера**. После обновления один раз `off` / `on`.
 
 ```bash
+# с VPS:
 bash modes/vps/ssh-to-client.sh 2222 ПОЛЬЗОВАТЕЛЬ_КЛИЕНТА
 # то же: ssh -p 2222 ПОЛЬЗОВАТЕЛЬ_КЛИЕНТА@127.0.0.1
 ```
@@ -221,28 +181,26 @@ poetry install --extras gui # + окно (PySide6)
 
 ```
 ERGOMS SECURE CONNECTION/
-├── desktop/           CLI/GUI-клиент (VLESS+Reality)
+├── desktop/           CLI/GUI-клиент
 ├── ergoms-secure-connection.ps1/.sh
 ├── deploy.ps1/.sh
 ├── config/            образцы
 ├── lib/               connect.py (ProxyCommand), pac.py
 ├── installer/         Inno Setup (Windows)
-├── modes/linux/       systemd-служба клиента
+├── modes/linux/       установщик клиента + systemd
 ├── modes/windows/     WinSW-служба клиента
-└── modes/vps/         bootstrap sing-box на :443
+└── modes/vps/         установщик VPS (Reality + AmneziaWG)
 ```
 
 Не коммитьте `config.json`, `config.json.enc`, `creds/`, `logs/`, `var/`.
 
 ---
 
-## Сборка (Windows)
+## Сборка
 
 ```powershell
 .\.vscode\setup.ps1 -Target build
 ```
-
-Результат:
 
 | Путь | Что это |
 |------|---------|
@@ -253,7 +211,7 @@ ERGOMS SECURE CONNECTION/
 
 Только папка без Setup: `.\.vscode\setup.ps1 -Target pyinstaller`. Только Setup (после сборки): `-Target installer`. Если Inno Setup нет — ставится через `winget` (`JRSoftware.InnoSetup`).
 
-Linux: `./.vscode/setup.sh build` → `dist/ERGOMS SECURE CONNECTION/ERGOMS SECURE CONNECTION` (релизный `*-linux-x64.tar.gz` — см. [Linux (tar.gz)](#linux-targz)).
+Linux: `./.vscode/setup.sh build` → `dist/ERGOMS SECURE CONNECTION/` (в папке `install.sh`; релизный `*-linux-x64.tar.gz`).
 
 ### GitHub Release (локально)
 

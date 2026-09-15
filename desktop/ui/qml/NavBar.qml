@@ -20,11 +20,12 @@ Rectangle {
             model: [
                 { key: "home", label: "Главная" },
                 { key: "settings", label: "Настройки" },
+                { key: "exceptions", label: "Обходы" },
                 { key: "log", label: "Журнал" }
             ]
             delegate: Item {
                 required property var modelData
-                width: root.width / 3
+                width: root.width / 4
                 height: root.height
 
                 Rectangle {
@@ -38,7 +39,7 @@ Rectangle {
                         anchors.centerIn: parent
                         text: modelData.label
                         color: bridge.page === modelData.key ? T.text : T.muted
-                        font.pixelSize: 12
+                        font.pixelSize: 11
                         font.weight: Font.DemiBold
                         font.letterSpacing: 0.2
                         font.family: T.fontUi
