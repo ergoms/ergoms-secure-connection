@@ -1,6 +1,6 @@
 [project]
 name = "ergoms-secure-connection"
-version = "1.2.3"
+version = "1.2.4"
 description = "ERGOMS SECURE CONNECTION — клиент VLESS+Reality через корпоративный Squid на VPS"
 readme = "README.md"
 requires-python = ">=3.10,<3.15"
