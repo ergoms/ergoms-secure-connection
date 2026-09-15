@@ -198,10 +198,18 @@ function Get-AppVersion {
 
 function Get-IsccExe {
     $candidates = @(
-        (Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe')
-        (Join-Path $env:ProgramFiles 'Inno Setup 6\ISCC.exe')
+        'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+        'C:\Program Files\Inno Setup 6\ISCC.exe'
         (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe')
     )
+    foreach ($root in @(${env:ProgramFiles(x86)}, $env:ProgramFiles, $env:LOCALAPPDATA)) {
+        if (-not $root) { continue }
+        $candidates += if ($root -eq $env:LOCALAPPDATA) {
+            (Join-Path $root 'Programs\Inno Setup 6\ISCC.exe')
+        } else {
+            (Join-Path $root 'Inno Setup 6\ISCC.exe')
+        }
+    }
     $cmd = Get-Command iscc -ErrorAction SilentlyContinue
     if ($cmd) { $candidates += $cmd.Source }
     foreach ($c in $candidates) {
