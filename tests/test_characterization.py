@@ -16,6 +16,7 @@ from desktop.kill_switch import _cmds_linux_install, _cmds_win_install
 from desktop.singbox_mode import (
     SingboxModeManager,
     amneziawg_opts,
+    effective_tun_mtu,
     underlay_keep_hosts,
 )
 from desktop.ui.settings_map import apply_settings_to_cfg, cfg_to_settings, settings_defaults
@@ -104,6 +105,21 @@ def test_build_config_office_vless_via_squid() -> None:
     assert tags["proxy"]["type"] == "vless"
     assert tags["proxy"]["detour"] == "squid"
     assert box["route"]["final"] == "proxy"
+
+
+def test_office_tun_mtu_and_sniff_are_ssh_friendly() -> None:
+    box = _build(dial="vless-reality", office=True, enable_tun=True)
+    tun = next(ib for ib in box["inbounds"] if ib["type"] == "tun")
+    assert tun["mtu"] == 1280
+    sniff = [r for r in box["route"]["rules"] if r.get("action") == "sniff"]
+    assert sniff
+    assert all(r.get("timeout") == "100ms" for r in sniff)
+
+
+def test_effective_tun_mtu_caps_fragments() -> None:
+    assert effective_tun_mtu(1500) == 1400
+    assert effective_tun_mtu(1500, via_office_proxy=True) == 1280
+    assert effective_tun_mtu(1400, awg_mtu=1280) == 1280
 
 
 def test_build_config_home_vless_with_tun() -> None:
@@ -207,13 +223,13 @@ def test_ensure_config_defaults_fills_and_migrates() -> None:
     assert out["socks_scope"] == "full"
     assert out["transport"]["dial"] == "amneziawg"
     assert "hysteria2" not in out["transport"]
-    assert 1280 <= out["tun"]["mtu"] <= 1500
+    assert 1280 <= out["tun"]["mtu"] <= 1400
     assert out["transport"]["amneziawg"]["address"] == "10.66.66.2/32"
 
 
 def test_ensure_config_defaults_clamps_mtu() -> None:
     out = ensure_config_defaults({"tun": {"mtu": 9000}, "transport": {"amneziawg": {"mtu": 500}}})
-    assert out["tun"]["mtu"] == 1500
+    assert out["tun"]["mtu"] == 1400
     assert out["transport"]["amneziawg"]["mtu"] == 1280
 
 

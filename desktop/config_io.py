@@ -17,6 +17,8 @@ from desktop.config.constants import (
     CORPORATE_PROXY_PRESET,
     REALITY_DEFAULT_SNI,
     STANDARD_BYPASS_PRESET,
+    TUN_MTU_MAX,
+    TUN_MTU_MIN,
 )
 from desktop.config.model import (
     AppConfig,
@@ -479,7 +481,7 @@ def migrate_env_into_config(cfg: dict[str, Any], env: dict[str, str]) -> dict[st
         tun["sing_box_path"] = env["SING_BOX_PATH"].strip()
     if "TUN_MTU" in env and env["TUN_MTU"].strip():
         mtu = _as_int(env["TUN_MTU"], 1400)
-        tun["mtu"] = max(1280, min(1500, mtu))
+        tun["mtu"] = max(TUN_MTU_MIN, min(TUN_MTU_MAX, mtu))
     if "REVERSE_SSH" in env:
         rev = out.setdefault("reverse_ssh", {})
         if isinstance(rev, dict):
@@ -628,7 +630,7 @@ def update_config_key(path: Path, key: str, value: Any) -> None:
         elif target == "tun.sing_box_path":
             tun["sing_box_path"] = str(raw or "").strip()
         elif target == "tun.mtu":
-            tun["mtu"] = max(1280, min(1500, _as_int(raw, 1400)))
+            tun["mtu"] = max(TUN_MTU_MIN, min(TUN_MTU_MAX, _as_int(raw, 1400)))
         elif target == "socks_scope":
             cfg["socks_scope"] = str(raw or "full").strip().lower()
         elif target == "corporate_proxy":
@@ -661,7 +663,7 @@ def update_config_key(path: Path, key: str, value: Any) -> None:
         if sub in ("enabled", "elevate"):
             tun[sub] = _as_bool(value, True)
         elif sub == "mtu":
-            tun["mtu"] = max(1280, min(1500, _as_int(value, 1400)))
+            tun["mtu"] = max(TUN_MTU_MIN, min(TUN_MTU_MAX, _as_int(value, 1400)))
         else:
             tun[sub] = value
     else:

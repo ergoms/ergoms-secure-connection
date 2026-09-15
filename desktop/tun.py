@@ -245,6 +245,30 @@ def foreign_split_default_cmds() -> list[str]:
     return cmds
 
 
+def apply_tun_iface_mtu(if_idx: int, mtu: int, *, log: LogFn = noop) -> None:
+    """Pin the Windows TUN NIC MTU so TCP MSS matches the inner tunnel."""
+    if sys.platform != "win32" or not if_idx:
+        return
+    try:
+        size = max(1280, min(1400, int(mtu)))
+    except (TypeError, ValueError):
+        size = 1280
+    procutil.run(
+        [
+            "netsh",
+            "interface",
+            "ipv4",
+            "set",
+            "subinterface",
+            str(int(if_idx)),
+            f"mtu={size}",
+            "store=active",
+        ],
+        timeout=8,
+    )
+    log(f"TUN if {if_idx} mtu={size}")
+
+
 def wait_tun_iface(*, timeout: float = 20.0) -> int | None:
     """Interface index of this app's TUN, or None if it never appeared."""
     if sys.platform != "win32":

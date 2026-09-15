@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 from desktop import procutil
 from desktop.branding import APP_EXE, APP_EXE_LEGACY
+from desktop.config.constants import TUN_DEFAULT_MTU, TUN_MTU_MAX, TUN_MTU_MIN
 from desktop.config_io import (
     AWG_DEFAULT_ADDRESS,
     AWG_DEFAULT_MTU,
@@ -396,13 +397,36 @@ def _route_process_names() -> list[str]:
     ]
 
 
+def effective_tun_mtu(
+    requested: int,
+    *,
+    awg_mtu: int | None = None,
+    via_office_proxy: bool = False,
+) -> int:
+    """Inner TUN MTU under VLESS/AWG. 1500 fragments and makes SSH hitch."""
+    try:
+        want = int(requested)
+    except (TypeError, ValueError):
+        want = TUN_DEFAULT_MTU
+    want = max(TUN_MTU_MIN, min(TUN_MTU_MAX, want))
+    if awg_mtu:
+        try:
+            outer = max(TUN_MTU_MIN, int(awg_mtu))
+        except (TypeError, ValueError):
+            outer = AWG_DEFAULT_MTU
+        return min(want, outer)
+    if via_office_proxy:
+        return min(want, TUN_MTU_MIN)
+    return want
+
+
 def _tun_inbound(mtu: int, *, kill_switch: bool, route_exclude: list[str]) -> dict[str, Any]:
     return {
         "type": "tun",
         "tag": "tun-in",
         "interface_name": TUN_IFACE_NAME,
         "address": ["172.19.0.1/30"],
-        "mtu": max(1280, min(1500, int(mtu))),
+        "mtu": effective_tun_mtu(mtu),
         "auto_route": sys.platform != "win32",
         "strict_route": bool(kill_switch) and sys.platform != "win32",
         "stack": "mixed" if sys.platform == "win32" else "system",
@@ -666,8 +690,17 @@ class SingboxModeManager:
         )
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         inbounds: list[dict[str, Any]] = local_inbounds(socks_port, http_port)
+        tun_mtu = effective_tun_mtu(
+            mtu,
+            awg_mtu=int(awg["mtu"]) if awg else None,
+            via_office_proxy=use_office_proxy and not awg,
+        )
+        if enable_tun and tun_mtu != mtu:
+            self.log(f"TUN MTU {tun_mtu} (в запросе {mtu} — иначе SSH/TCP режутся на фрагменты)")
         if enable_tun:
-            inbounds.append(_tun_inbound(mtu, kill_switch=kill_switch, route_exclude=route_exclude))
+            inbounds.append(
+                _tun_inbound(tun_mtu, kill_switch=kill_switch, route_exclude=route_exclude)
+            )
         bind = {"bind_interface": bind_iface} if bind_iface else {}
         outbounds: list[dict[str, Any]] = []
         if use_office_proxy:
@@ -690,9 +723,11 @@ class SingboxModeManager:
         )
         outbounds.append({"type": "direct", "tag": "direct", **bind})
         outbounds.append({"type": "block", "tag": "block"})
-        sniff = [{"inbound": ["socks-in", "http-in"], "action": "sniff", "timeout": "1s"}]
+        sniff = [
+            {"inbound": ["socks-in", "http-in"], "action": "sniff", "timeout": "100ms"}
+        ]
         if enable_tun:
-            sniff.append({"inbound": ["tun-in"], "action": "sniff", "timeout": "1s"})
+            sniff.append({"inbound": ["tun-in"], "action": "sniff", "timeout": "100ms"})
         box: dict[str, Any] = {
             **config_skeleton(
                 log_path=self.log_path,

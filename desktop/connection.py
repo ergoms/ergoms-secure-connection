@@ -44,11 +44,13 @@ from desktop.singbox_mode import (
     amneziawg_opts,
     choose_dial,
     dial_label,
+    effective_tun_mtu,
     require_transport,
     resolve_dial_bundle,
     underlay_keep_hosts,
 )
 from desktop.tun import (
+    apply_tun_iface_mtu,
     default_route_lines,
     foreign_vpn_live,
     foreign_vpn_processes,
@@ -390,6 +392,23 @@ class ConnectionOps:
             allow, var_dir=self.paths.var_dir, log=self.log, elevate=False
         )
         run_leftover_vpn_default_cmds()
+        try:
+            cfg = self.config()
+            office = bool(resolve_corporate_proxy(cfg))
+            tr = require_transport(cfg)
+            dial = choose_dial(tr, office=office)
+            awg = amneziawg_opts(tr) if dial == "amneziawg" else None
+            apply_tun_iface_mtu(
+                idx,
+                effective_tun_mtu(
+                    get_tun_mtu(cfg),
+                    awg_mtu=int(awg["mtu"]) if awg else None,
+                    via_office_proxy=office and not awg,
+                ),
+                log=self.log,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"TUN MTU: {exc}")
         ok, detail = ensure_tun_split_default(idx)
         self.log(detail)
         if not ok:
