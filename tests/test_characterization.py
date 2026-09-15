@@ -13,7 +13,11 @@ from desktop.config_io import (
     normalize_dial,
 )
 from desktop.kill_switch import _cmds_linux_install, _cmds_win_install
-from desktop.singbox_mode import SingboxModeManager, amneziawg_opts
+from desktop.singbox_mode import (
+    SingboxModeManager,
+    amneziawg_opts,
+    underlay_keep_hosts,
+)
 from desktop.ui.settings_map import apply_settings_to_cfg, cfg_to_settings, settings_defaults
 from lib.pac import build_pac, bypass_to_singbox
 
@@ -53,8 +57,14 @@ def _build(
         logs_dir=__import__("pathlib").Path("logs"),
         log=lambda _m: None,
     )
+    def _resolve(host: str) -> str:
+        name = (host or "").split(":")[0].strip()
+        if name == "192.0.2.10":
+            return "192.0.2.10"
+        return "203.0.113.10"
+
     with (
-        patch("desktop.singbox_mode.resolve_host", return_value="203.0.113.10"),
+        patch("desktop.singbox_mode.resolve_host", side_effect=_resolve),
         patch("desktop.singbox_mode.detect_bind_interface", return_value=""),
         patch("desktop.singbox_mode.iface_ipv4s", return_value=[]),
         patch("desktop.singbox_mode._direct_python_paths", return_value=[]),
@@ -132,8 +142,28 @@ def test_home_ssh_to_vps_is_direct() -> None:
 
 def test_office_ssh_to_vps_via_proxy() -> None:
     box = _build(dial="vless-reality", office=True, enable_tun=True)
-    ssh = _ssh_port_rules(box)
-    assert any(r.get("outbound") == "proxy" and not r.get("inbound") for r in ssh)
+    tun = next(ib for ib in box["inbounds"] if ib["type"] == "tun")
+    excluded = tun.get("route_exclude_address") or []
+    assert "203.0.113.10/32" not in excluded
+    assert "192.0.2.10/32" in excluded
+    hairpin = [
+        r
+        for r in box["route"]["rules"]
+        if "203.0.113.10/32" in (r.get("ip_cidr") or [])
+        and r.get("outbound") == "proxy"
+        and r.get("override_address") == "127.0.0.1"
+        and not r.get("port")
+        and not r.get("inbound")
+    ]
+    assert hairpin
+
+
+def test_underlay_keep_hosts_office_vless_pins_only_squid() -> None:
+    assert underlay_keep_hosts("vps.example", "192.0.2.10:3128") == ["192.0.2.10"]
+    assert underlay_keep_hosts("vps.example", "") == ["vps.example"]
+    assert underlay_keep_hosts(
+        "vps.example", "192.0.2.10:3128", udp_dial=True
+    ) == ["192.0.2.10", "vps.example"]
 
 
 def test_build_config_office_awg_with_tun() -> None:

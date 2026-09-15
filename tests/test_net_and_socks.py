@@ -405,6 +405,12 @@ def test_leak_shield_apply_restore_roundtrip(tmp_path: Path, monkeypatch: pytest
         set_registry_backend(None)
 
 
+def test_win_tun_routes_can_call_leftover_runner() -> None:
+    import desktop.connection as conn
+
+    assert callable(conn.run_leftover_vpn_default_cmds)
+
+
 def test_log_foreign_vpn_home_returns_leftover_when_not_admin(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

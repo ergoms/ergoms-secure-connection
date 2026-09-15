@@ -329,6 +329,29 @@ def resolve_dial_bundle(
     return dial, awg
 
 
+def underlay_keep_hosts(
+    server_host: str,
+    corporate_proxy: str = "",
+    *,
+    udp_dial: bool = False,
+) -> list[str]:
+    """Hosts whose /32 must stay on the physical NIC (not TUN).
+
+    Office VLESS goes out through Squid, so the VPS IP must *not* be pinned:
+    otherwise ssh/RustDesk to the VPN host never enter TUN and die on the
+    corporate firewall. AmneziaWG still needs the VPS /32 for its UDP handshake.
+    """
+    hosts: list[str] = []
+    squid_host, _port = parse_corporate_proxy(corporate_proxy)
+    if squid_host:
+        hosts.append(squid_host)
+    if udp_dial or not squid_host:
+        host = (server_host or "").strip()
+        if host and host not in hosts:
+            hosts.append(host)
+    return hosts
+
+
 _PRIVATE_ROUTE_EXCLUDE = [
     "10.0.0.0/8",
     "172.16.0.0/12",
@@ -424,6 +447,30 @@ def _ssh_port_match(ports: list[int]) -> int | list[int]:
     return ports if len(ports) > 1 else ports[0]
 
 
+def _vps_loopback_rule(
+    vps_ip: str,
+    *,
+    outbound: str = "proxy",
+    port: int | list[int] | None = None,
+    inbound: list[str] | None = None,
+) -> dict[str, Any]:
+    """Send traffic to the VPS public IP onto that host's loopback.
+
+    The VPN endpoint *is* the VPS: connecting back to its WAN address from
+    inside the tunnel is a hairpin (SSH timeout, RustDesk relay dead).
+    """
+    rule: dict[str, Any] = {
+        "ip_cidr": [f"{vps_ip}/32"],
+        "outbound": outbound,
+        "override_address": "127.0.0.1",
+    }
+    if port is not None:
+        rule["port"] = port
+    if inbound:
+        rule["inbound"] = inbound
+    return rule
+
+
 def _build_route_rules(
     *,
     server_host: str,
@@ -438,26 +485,22 @@ def _build_route_rules(
     ssh_ports = [int(p) for p in (vps_proxy_ports or [22]) if 1 <= int(p) <= 65535]
     if vps_ip:
         rules.append({"ip_cidr": [f"{vps_ip}/32"], "port": vpn_port, "outbound": "direct"})
-        rules.append(
-            {"ip_cidr": [f"{vps_ip}/32"], "port": RUSTDESK_PORTS, "outbound": "proxy"}
-        )
-        if ssh_ports:
-            # Reverse SSH = SOCKS ProxyCommand → VLESS (офисный Squid рвёт :22).
+        if via_proxy:
+            # Office: VPS /32 stays on TUN. Every service on that host
+            # (ssh, RustDesk, …) goes through VLESS to 127.0.0.1.
+            rules.append(_vps_loopback_rule(vps_ip))
+        else:
             rules.append(
-                {
-                    "inbound": ["socks-in", "http-in"],
-                    "ip_cidr": [f"{vps_ip}/32"],
-                    "port": _ssh_port_match(ssh_ports),
-                    "outbound": "proxy",
-                }
+                _vps_loopback_rule(vps_ip, port=RUSTDESK_PORTS)
             )
-            if via_proxy:
+            if ssh_ports:
+                # Reverse SSH = SOCKS ProxyCommand → VLESS.
                 rules.append(
-                    {
-                        "ip_cidr": [f"{vps_ip}/32"],
-                        "port": _ssh_port_match(ssh_ports),
-                        "outbound": "proxy",
-                    }
+                    _vps_loopback_rule(
+                        vps_ip,
+                        port=_ssh_port_match(ssh_ports),
+                        inbound=["socks-in", "http-in"],
+                    )
                 )
     if exclude_ips:
         rules.append({"ip_cidr": [f"{ip}/32" for ip in exclude_ips], "outbound": "direct"})
@@ -564,11 +607,12 @@ class SingboxModeManager:
     ) -> dict[str, Any]:
         squid_host, squid_port = parse_corporate_proxy(corporate_proxy)
         use_office_proxy = bool(squid_host)
+        office = bool(squid_host)
+        dial, awg = resolve_dial_bundle(transport, office=office)
         exclude_ips: list[str] = []
-        hosts = [server_host]
-        if use_office_proxy:
-            hosts.insert(0, squid_host)
-        for h in hosts:
+        for h in underlay_keep_hosts(
+            server_host, corporate_proxy, udp_dial=bool(awg)
+        ):
             ip = resolve_host(h)
             if ip:
                 exclude_ips.append(ip)
@@ -581,9 +625,6 @@ class SingboxModeManager:
             )
         elif enable_tun:
             self.log("underlay NIC: не определён — outbound может уйти в TUN")
-
-        office = bool(squid_host)
-        dial, awg = resolve_dial_bundle(transport, office=office)
         if awg and not enable_tun and not use_office_proxy:
             self.log(f"дом: AmneziaWG UDP :{awg['port']} (обфускация handshake)")
             return self._minimal_awg_config(
@@ -610,6 +651,11 @@ class SingboxModeManager:
             self.log(f"{place}: AmneziaWG UDP :{awg['port']}{extra}")
         elif office:
             self.log("офис: VLESS+Reality через Squid")
+            if enable_tun and not awg:
+                self.log(
+                    "офис: SSH/RustDesk на IP VPS идут через VLESS → 127.0.0.1 "
+                    "(иначе hairpin на публичный адрес)"
+                )
         rules, bypass_suffixes, bypass_domains = _build_route_rules(
             server_host=server_host,
             exclude_ips=exclude_ips,

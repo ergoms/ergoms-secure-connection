@@ -797,9 +797,9 @@ def get_reverse_ssh_enabled(cfg: dict[str, Any] | None = None) -> bool:
 def get_vps_proxy_ports(cfg: dict[str, Any] | None = None) -> list[int]:
     """SSH ports on the VPS IP.
 
-    Office TUN sends them via VLESS (Squid RST on :22). Home leaves them on the
-    underlay so ``ssh user@vps`` works while VPN is up. Reverse SSH always
-    dials the same ports through local SOCKS → VLESS.
+    Office TUN sends them via VLESS to 127.0.0.1 on the VPS (Squid RST on :22,
+    and a public-IP hairpin would loop). Home leaves native ssh on the underlay;
+    reverse SSH still dials these ports through local SOCKS → VLESS.
     """
     rev = _app(cfg).reverse_ssh
     ports = {22, rev.vps_port}

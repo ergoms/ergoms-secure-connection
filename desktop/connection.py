@@ -45,6 +45,8 @@ from desktop.singbox_mode import (
     choose_dial,
     dial_label,
     require_transport,
+    resolve_dial_bundle,
+    underlay_keep_hosts,
 )
 from desktop.tun import (
     default_route_lines,
@@ -56,6 +58,7 @@ from desktop.tun import (
     leftover_vpn_ifaces,
     our_tun_split_leftover,
     reclaim_tun_default,
+    run_leftover_vpn_default_cmds,
     run_route_cmds,
     stale_default_cmds,
     tun_owns_default,
@@ -473,11 +476,19 @@ class ConnectionOps:
         return leftover_cmds
 
     def _kill_switch_hosts(self, cfg: dict[str, Any]) -> list[str]:
-        hosts = [get_server_host(cfg)]
+        host = get_server_host(cfg)
         proxy = resolve_corporate_proxy(cfg)
-        if proxy:
-            hosts.append(proxy.split(":")[0])
-        return kill_switch_allow_ips(*hosts)
+        udp = False
+        try:
+            _dial, awg = resolve_dial_bundle(
+                require_transport(cfg), office=bool(proxy)
+            )
+            udp = bool(awg)
+        except Exception:  # noqa: BLE001
+            pass
+        return kill_switch_allow_ips(
+            *underlay_keep_hosts(host, proxy, udp_dial=udp)
+        )
 
 
     def _ensure_kill_switch(self, cfg: dict[str, Any]) -> list[str]:
