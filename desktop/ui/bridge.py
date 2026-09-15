@@ -32,9 +32,6 @@ from desktop.branding import ENV_RESUME, env
 from desktop.client import OpsClient
 from desktop.config_crypto import MAGIC, decrypt_config
 from desktop.config_io import (
-    CORPORATE_BYPASS_PRESET,
-    CORPORATE_PROXY_PRESET,
-    STANDARD_BYPASS_PRESET,
     apply_config,
     config_is_ready,
     default_config_template,
@@ -55,6 +52,7 @@ from desktop.services.elevation import ElevationService
 from desktop.services.settings import SettingsService
 from desktop.services.status import C_MUTED, present_status
 from desktop.ui.settings_map import (
+    apply_mode_to_settings,
     apply_settings_to_cfg,
     cfg_to_settings,
     settings_defaults,
@@ -381,15 +379,7 @@ class GuiBridge(QObject):
             self._sync_config_ready()
             return
         cfg = load_config(self.paths.config_path)
-        self._set_corporate(infer_corporate(cfg))
-        self._mode_label = "Корпоративный" if self._corporate else "VPN"
-        for key, value in cfg_to_settings(cfg).items():
-            self._settings.insert(key, value)
-        loaded = bool(self._settings.value("awgLoaded"))
-        source = read_awg_source_name(self.paths.config_path)
-        if loaded:
-            self._settings.insert("awgSummary", source or "amneziawg.conf")
-        self._sync_config_ready()
+        self._apply_cfg_to_settings(cfg)
 
     def _set_corporate(self, on: bool) -> None:
         self._settings.insert("corporate", on)
@@ -415,30 +405,45 @@ class GuiBridge(QObject):
         except Exception as exc:  # noqa: BLE001
             self.toast.emit(str(exc), "error")
 
+    def _apply_cfg_to_settings(self, cfg: dict[str, Any]) -> None:
+        self._set_corporate(infer_corporate(cfg))
+        self._mode_label = "Корпоративный" if self._corporate else "VPN"
+        for key, value in cfg_to_settings(cfg).items():
+            self._settings.insert(key, value)
+        loaded = bool(self._settings.value("awgLoaded"))
+        source = read_awg_source_name(self.paths.config_path)
+        if loaded:
+            self._settings.insert("awgSummary", source or "amneziawg.conf")
+        self._sync_config_ready()
+
+    def _write_settings_to_disk(self) -> None:
+        if self.paths.config_path.is_file():
+            cfg = load_config(self.paths.config_path)
+        else:
+            cfg = default_config_template()
+        apply_settings_to_cfg(
+            cfg, self._settings.value, corporate=bool(self._corporate)
+        )
+        save_config(self.paths.config_path, cfg)
+        apply_config(self.paths.config_path, force=True)
+        self._apply_cfg_to_settings(load_config(self.paths.config_path, force=True))
+
     @Slot(bool)
     def applyCorporateMode(self, on: bool) -> None:
         if self._busy or self._active:
             return
         self._set_corporate(on)
-        if on:
-            tun = bool(self._settings.value("tunAuto") or self._settings.value("killSwitch"))
-            self._settings.insert("socksScope", "full" if tun else "github")
-            self._settings.insert("useProxy", True)
-            if CORPORATE_PROXY_PRESET:
-                self._settings.insert("corporateProxy", CORPORATE_PROXY_PRESET)
-            self._settings.insert("proxyBypass", ", ".join(CORPORATE_BYPASS_PRESET))
-            self._settings.insert("proxyBypassVia", "direct")
-            self._settings.insert("trDial", "vless-reality")
-        else:
-            self._settings.insert("socksScope", "full")
-            self._settings.insert("useProxy", False)
-            self._settings.insert("corporateProxy", "")
-            self._settings.insert("proxyBypass", ", ".join(STANDARD_BYPASS_PRESET))
-            self._settings.insert("proxyBypassVia", "direct")
-            self._settings.insert("trDial", "amneziawg")
-        self._settings.insert("gitProxy", on)
-        self._settings.insert("dockerProxy", on)
+        apply_mode_to_settings(
+            self._settings.value, self._settings.insert, corporate=on
+        )
         self._mode_label = "Корпоративный" if on else "VPN"
+        try:
+            self._write_settings_to_disk()
+            self._enqueue_log(
+                "режим: корпоративный" if on else "режим: обычный VPN"
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.toast.emit(str(exc), "error")
 
     @Slot()
     def importConfigFile(self) -> None:
@@ -591,15 +596,7 @@ class GuiBridge(QObject):
             self.toast.emit("Дождитесь окончания операции или отключите VPN", "warn")
             return
         try:
-            if self.paths.config_path.is_file():
-                cfg = load_config(self.paths.config_path)
-            else:
-                cfg = default_config_template()
-            apply_settings_to_cfg(
-                cfg, self._settings.value, corporate=bool(self._corporate)
-            )
-            save_config(self.paths.config_path, cfg)
-            apply_config(self.paths.config_path, force=True)
+            self._write_settings_to_disk()
             self._enqueue_log("Настройки сохранены")
             self.toast.emit(
                 "Сохранено.\nЕсли туннель был включён — выключите и включите снова.",

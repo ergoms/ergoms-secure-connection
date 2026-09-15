@@ -10,7 +10,10 @@ from desktop.config_io import (
     AWG_DEFAULT_ADDRESS,
     AWG_DEFAULT_MTU,
     AWG_DEFAULT_PORT,
+    CORPORATE_BYPASS_PRESET,
+    CORPORATE_PROXY_PRESET,
     REALITY_DEFAULT_SNI,
+    STANDARD_BYPASS_PRESET,
     apply_corporate_profile,
     apply_standard_profile,
     assign_filled,
@@ -131,6 +134,32 @@ def cfg_to_settings(cfg: dict[str, Any]) -> dict[str, Any]:
     if out["awgLoaded"]:
         out["awgSummary"] = AWG_CONF_NAME
     return out
+
+
+def apply_mode_to_settings(
+    get: GetFn,
+    put: Callable[[str, Any], None],
+    *,
+    corporate: bool,
+) -> None:
+    """Flip office/home. User-entered proxy, bypass, dial, git, docker stay."""
+    put("corporate", corporate)
+    put("useProxy", bool(corporate))
+    if corporate:
+        tun = bool(get("tunAuto") or get("killSwitch"))
+        put("socksScope", "full" if tun else "github")
+        if not filled_str(get("corporateProxy")) and CORPORATE_PROXY_PRESET:
+            put("corporateProxy", CORPORATE_PROXY_PRESET)
+        if not filled_str(get("proxyBypass")):
+            put("proxyBypass", ", ".join(CORPORATE_BYPASS_PRESET))
+        if not filled_str(get("trDial")):
+            put("trDial", "vless-reality")
+        return
+    put("socksScope", "full")
+    if not filled_str(get("proxyBypass")):
+        put("proxyBypass", ", ".join(STANDARD_BYPASS_PRESET))
+    if not filled_str(get("trDial")):
+        put("trDial", "amneziawg")
 
 
 def _as_int(raw: Any, default: int) -> int:

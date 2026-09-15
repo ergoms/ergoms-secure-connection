@@ -277,6 +277,67 @@ def test_merge_empty_does_not_wipe_secrets() -> None:
     assert skipped["transport"]["amneziawg"]["private_key"] == "awg-priv"
 
 
+def test_mode_toggle_keeps_user_proxy_and_bypass() -> None:
+    from desktop.ui.settings_map import apply_mode_to_settings
+
+    data = {
+        "corporateProxy": "10.16.0.8:3128",
+        "proxyBypass": "*.local, *.lan, *.tu-bryansk.ru",
+        "trDial": "vless-reality",
+        "gitProxy": True,
+        "dockerProxy": True,
+        "tunAuto": True,
+        "killSwitch": True,
+    }
+
+    def get(key: str) -> object:
+        return data.get(key)
+
+    def put(key: str, value: object) -> None:
+        data[key] = value
+
+    apply_mode_to_settings(get, put, corporate=False)
+    assert data["corporate"] is False
+    assert data["useProxy"] is False
+    assert data["corporateProxy"] == "10.16.0.8:3128"
+    assert data["proxyBypass"] == "*.local, *.lan, *.tu-bryansk.ru"
+    assert data["trDial"] == "vless-reality"
+    assert data["gitProxy"] is True
+    assert data["dockerProxy"] is True
+
+    apply_mode_to_settings(get, put, corporate=True)
+    assert data["corporate"] is True
+    assert data["useProxy"] is True
+    assert data["corporateProxy"] == "10.16.0.8:3128"
+    assert data["proxyBypass"] == "*.local, *.lan, *.tu-bryansk.ru"
+    assert data["trDial"] == "vless-reality"
+
+
+def test_mode_switch_save_keeps_disk_exceptions() -> None:
+    cfg = default_config_template()
+    cfg["corporate"] = True
+    cfg["corporate_proxy"] = "10.16.0.8:3128"
+    cfg["proxy_bypass"] = ["*.local", "*.lan", "*.tu-bryansk.ru"]
+    cfg["transport"]["dial"] = "vless-reality"
+    cfg["git_proxy"] = True
+    cfg["docker_proxy"] = True
+    settings = cfg_to_settings(cfg)
+
+    def get(key: str) -> object:
+        return settings[key]
+
+    from desktop.ui.settings_map import apply_mode_to_settings
+
+    apply_mode_to_settings(get, settings.__setitem__, corporate=False)
+    out = apply_settings_to_cfg(cfg, get, corporate=False)
+    assert out["corporate"] is False
+    assert out["corporate_proxy"] == "10.16.0.8:3128"
+    assert "*.tu-bryansk.ru" in out["proxy_bypass"]
+    assert out["transport"]["dial"] == "vless-reality"
+    assert out["git_proxy"] is True
+    assert out["docker_proxy"] is True
+
+
 def test_apply_settings_empty_form_keeps_disk() -> None:
     cfg = default_config_template()
     cfg["server"]["host"] = "vps.example"

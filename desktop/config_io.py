@@ -495,7 +495,7 @@ def infer_corporate(cfg: dict[str, Any] | None) -> bool:
 
 
 def apply_corporate_profile(cfg: dict[str, Any]) -> dict[str, Any]:
-    """Office defaults: VLESS via Squid. Does not clear filled proxy / bypass."""
+    """Office flags only. Never clears filled proxy, bypass, dial, git, docker."""
     out = cfg
     out["corporate"] = True
     out["use_proxy"] = True
@@ -509,16 +509,11 @@ def apply_corporate_profile(cfg: dict[str, Any]) -> dict[str, Any]:
     if not out.get("proxy_bypass"):
         out["proxy_bypass"] = list(CORPORATE_BYPASS_PRESET)
     out.setdefault("proxy_bypass_via", "direct")
-    out["git_proxy"] = True
-    out["docker_proxy"] = True
-    tr = out.setdefault("transport", {})
-    if isinstance(tr, dict):
-        tr["dial"] = "vless-reality"
     return out
 
 
 def apply_standard_profile(cfg: dict[str, Any]) -> dict[str, Any]:
-    """Ordinary VPN: all traffic. Keeps filled proxy / bypass / keys."""
+    """Home flags only. Keeps filled proxy, bypass, dial, git, docker."""
     out = cfg
     out["corporate"] = False
     out["use_proxy"] = False
@@ -526,9 +521,6 @@ def apply_standard_profile(cfg: dict[str, Any]) -> dict[str, Any]:
     if not out.get("proxy_bypass"):
         out["proxy_bypass"] = list(STANDARD_BYPASS_PRESET)
     out.setdefault("proxy_bypass_via", "direct")
-    tr = out.setdefault("transport", {})
-    if isinstance(tr, dict):
-        tr["dial"] = "amneziawg"
     return out
 
 
