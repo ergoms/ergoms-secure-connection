@@ -122,3 +122,19 @@ def test_wait_ready_needs_tun_on_windows(
     )
     assert mgr._tun_inbound_ready() is True
     assert mgr._wait_ready(1080, 1088, enable_tun=True, pid=1, timeout=0.15) is True
+
+
+def test_tun_still_opening_from_wintun_warning(tmp_path: Path) -> None:
+    from desktop.singbox_mode import SingboxModeManager
+
+    mgr = SingboxModeManager(tmp_path, tmp_path, tmp_path, log=lambda _m: None)
+    mgr.tail_log = lambda n=40: [  # type: ignore[method-assign]
+        "WARN inbound/tun[tun-in]: open interface take too much time to finish!"
+    ]
+    assert mgr._tun_still_opening() is True
+    assert mgr._tun_adapter_busy() is True
+    mgr.tail_log = lambda n=40: [  # type: ignore[method-assign]
+        "INFO inbound/tun[tun-in]: started at ergoms-secure-connection-tun"
+    ]
+    assert mgr._tun_still_opening() is False
+    assert mgr._tun_inbound_ready() is True

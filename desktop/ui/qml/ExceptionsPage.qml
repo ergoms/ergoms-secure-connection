@@ -82,6 +82,7 @@ Item {
                         y: 14
                         title: "Напрямую"
                         subtitle: "Идут мимо VPN."
+                        examples: "*.local, 10.0.0.0/8, chrome.exe"
                         settingKey: "routeDirect"
                         onPickRequested: (kind) => {
                             root.pickerTarget = "routeDirect"
@@ -100,6 +101,7 @@ Item {
                         y: 14
                         title: "Только VPN"
                         subtitle: "Всегда через VPN."
+                        examples: "github.com, rustdesk.exe"
                         settingKey: "routeVpn"
                         onPickRequested: (kind) => {
                             root.pickerTarget = "routeVpn"

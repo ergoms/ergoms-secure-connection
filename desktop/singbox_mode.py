@@ -1096,7 +1096,7 @@ class SingboxModeManager:
                 http_port,
                 enable_tun=enable_tun,
                 pid=pid,
-                timeout=12.0,
+                timeout=22.0,
             ):
                 return
 
@@ -1136,7 +1136,17 @@ class SingboxModeManager:
 
     def _tun_adapter_busy(self) -> bool:
         text = "\n".join(self.tail_log(40)).lower()
-        return "configure tun interface" in text or "wintun" in text
+        return (
+            "configure tun interface" in text
+            or "wintun" in text
+            or "take too much time" in text
+        )
+
+    def _tun_still_opening(self) -> bool:
+        tail = "\n".join(self.tail_log(60)).lower()
+        if "inbound/tun" in tail and "started" in tail:
+            return False
+        return "take too much time" in tail or "configure tun interface" in tail
 
     def _tun_inbound_ready(self) -> bool:
         if sys.platform != "win32":
@@ -1153,11 +1163,12 @@ class SingboxModeManager:
         *,
         enable_tun: bool,
         pid: int | None,
-        timeout: float = 8.0,
+        timeout: float = 22.0,
     ) -> bool:
         deadline = time.monotonic() + timeout
         interval = 0.05
         socks_ok = False
+        extended = False
         while time.monotonic() < deadline:
             if port_open("127.0.0.1", socks_port, timeout=0.35):
                 socks_ok = True
@@ -1167,6 +1178,10 @@ class SingboxModeManager:
                         f"sing-box слушает SOCKS :{socks_port} и HTTP :{http_port} ({kind})"
                     )
                     return True
+                if enable_tun and not extended and self._tun_still_opening():
+                    deadline = max(deadline, time.monotonic() + 15.0)
+                    extended = True
+                    self.log("Wintun ещё создаёт адаптер — жду, процесс не убиваю")
             check = pid or self.pid()
             if check and not procutil.pid_alive(check) and not self.pid():
                 return False

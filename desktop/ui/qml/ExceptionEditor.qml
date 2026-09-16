@@ -6,6 +6,7 @@ Column {
     id: root
     property string title: ""
     property string subtitle: ""
+    property string examples: "github.com, 10.0.0.0/8, chrome.exe"
     property string settingKey: ""
     property var hint: ({})
     property bool analyzing: false
@@ -165,12 +166,13 @@ Column {
 
     Text {
         width: parent.width
-        text: "домен, IP или программа"
+        text: "домен, IP или программа — например " + root.examples
         color: T.muted
         font.pixelSize: 11
         font.weight: Font.Medium
         font.letterSpacing: 0.15
         font.family: T.fontUi
+        wrapMode: Text.WordWrap
     }
 
     TextField {
