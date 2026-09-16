@@ -92,7 +92,7 @@ def _rustdesk_rules(box: dict[str, Any]) -> list[dict[str, Any]]:
     for rule in box["route"]["rules"]:
         port = rule.get("port")
         ports = port if isinstance(port, list) else [port] if port is not None else []
-        if 21117 in ports and not rule.get("override_address"):
+        if 21117 in ports and rule.get("override_address") == "127.0.0.1":
             out.append(rule)
     return out
 
@@ -119,15 +119,15 @@ def test_rustdesk_hairpin_ip_and_hostname() -> None:
     with patch("desktop.singbox_mode.resolve_host", return_value="203.0.113.10"):
         rules = rustdesk_hairpin_rules("vps.example")
     assert any(
-        "203.0.113.10/32" in (r.get("ip_cidr") or []) and r.get("outbound") == "proxy"
+        "203.0.113.10/32" in (r.get("ip_cidr") or [])
+        and r.get("override_address") == "127.0.0.1"
         for r in rules
     )
     assert any(
-        "vps.example" in (r.get("domain") or []) and r.get("outbound") == "proxy"
+        "vps.example" in (r.get("domain") or [])
+        and r.get("override_address") == "127.0.0.1"
         for r in rules
     )
-    # hbbr treats a loopback peer on :21117 as its admin console and hangs up
-    assert not any(r.get("override_address") for r in rules)
 
 
 def test_build_config_home_awg_minimal_without_tun() -> None:
@@ -205,7 +205,7 @@ def test_build_config_home_vless_with_tun() -> None:
         if 21117 in (
             r.get("port") if isinstance(r.get("port"), list) else [r.get("port")]
         )
-        and not r.get("override_address")
+        and r.get("override_address") == "127.0.0.1"
     )
     assert rd_idx < sniff_idx
 
@@ -245,7 +245,7 @@ def test_rustdesk_tun_lan_rejected_before_sniff() -> None:
             for i, r in enumerate(rules)
             if 21117
             in (r.get("port") if isinstance(r.get("port"), list) else [r.get("port")])
-            and not r.get("override_address")
+            and r.get("override_address") == "127.0.0.1"
         )
         priv_idx = next(i for i, r in enumerate(rules) if r.get("ip_is_private"))
         assert rd_idx < reject_idx < sniff_idx

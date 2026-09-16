@@ -541,30 +541,19 @@ def _host_is_ip(host: str) -> bool:
 def rustdesk_hairpin_rules(
     server_host: str, *, outbound: str = "proxy"
 ) -> list[dict[str, Any]]:
-    """Reach a RustDesk relay on the same VPS as the VPN (IP and hostname).
-
-    Unlike ssh, the destination keeps the VPS WAN address: hbbr answers a peer
-    coming from 127.0.0.1 with its admin console and hangs up, so a relayed
-    session dies with "Failed to receive public key". The VPS holds its WAN
-    address on ens3, so the hairpin resolves locally anyway.
-    """
+    """Reach a RustDesk relay on the same VPS as the VPN (IP and hostname)."""
     host = (server_host or "").strip()
     vps_ip = resolve_host(host) if host else ""
     rules: list[dict[str, Any]] = []
     if vps_ip:
-        rules.append(
-            {
-                "ip_cidr": [f"{vps_ip}/32"],
-                "port": RUSTDESK_PORTS,
-                "outbound": outbound,
-            }
-        )
+        rules.append(_vps_loopback_rule(vps_ip, outbound=outbound, port=RUSTDESK_PORTS))
     if host and not _host_is_ip(host) and host != vps_ip:
         rules.append(
             {
                 "domain": [host],
                 "port": RUSTDESK_PORTS,
                 "outbound": outbound,
+                "override_address": "127.0.0.1",
             }
         )
     return rules
