@@ -37,7 +37,8 @@ Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "removeold"; Description: "Удалить предыдущую версию"; GroupDescription: "Обновление:"; Flags: checkedonce
+Name: "removeold"; Description: "Удалить предыдущую версию"; GroupDescription: "Обновление:"; Flags: checkedonce; Check: HasPreviousInstall
+Name: "wipeconfigs"; Description: "Удалить сохранённые конфиги"; GroupDescription: "Обновление:"; Flags: unchecked; Check: HasUserData
 Name: "desktopicon"; Description: "Ярлык на рабочем столе"; GroupDescription: "Дополнительно:"; Flags: checkedonce
 Name: "autostart"; Description: "Автозапуск при входе в Windows"; GroupDescription: "Дополнительно:"; Flags: unchecked
 
@@ -275,9 +276,34 @@ begin
     ForceDirectories(DestDir);
 end;
 
+function HasPreviousInstall(): Boolean;
+begin
+  Result := GetUninstallString() <> '';
+end;
+
+function HasUserData(): Boolean;
+begin
+  Result := HasPreviousInstall() or
+    DirExists(ExpandConstant('{localappdata}\{#AppName}')) or
+    DirExists(ExpandConstant('{localappdata}\ERGOMS VPN')) or
+    DirExists(ExpandConstant('{localappdata}\ops-content'));
+end;
+
 function WantRemoveOld(): Boolean;
 begin
-  Result := WizardIsTaskSelected('removeold') and (GetUninstallString() <> '');
+  Result := WizardIsTaskSelected('removeold') and HasPreviousInstall();
+end;
+
+function WantWipeConfigs(): Boolean;
+begin
+  Result := WizardIsTaskSelected('wipeconfigs');
+end;
+
+procedure WipeAllConfigs;
+begin
+  WipeConfigsDir(ExpandConstant('{localappdata}\{#AppName}'));
+  WipeConfigsDir(ExpandConstant('{localappdata}\ERGOMS VPN'));
+  WipeConfigsDir(ExpandConstant('{localappdata}\ops-content'));
 end;
 
 procedure ProgressStep(Page: TOutputProgressWizardPage; Step, MaxSteps: Integer;
@@ -299,26 +325,32 @@ begin
   Page := nil;
   (* Do not run old unins000.exe: same AppId mutex + it launches exe off
      (slow frozen boot / UAC) while this wizard waits on the UI thread. *)
-  if WantRemoveOld() then
+  if WantRemoveOld() or WantWipeConfigs() then
   begin
     Page := CreateOutputProgressPage(
-      'Удаление предыдущей версии',
-      'Сначала удаление, затем установка новых файлов.');
+      'Подготовка к установке',
+      'Сначала очистка, затем установка новых файлов.');
     if not WizardSilent then
       Page.Show;
   end;
   try
     ProgressStep(Page, 0, 3, 'Остановка запущенной программы…', '{#AppName}');
     KillAppProcesses;
-    if not WantRemoveOld() then
+    if not WantRemoveOld() and not WantWipeConfigs() then
       Exit;
-    ProgressStep(Page, 1, 3, 'Очистка данных предыдущей версии…',
+    ProgressStep(Page, 1, 3, 'Очистка данных…',
       'Профили, правила брандмауэра, задачи');
-    WipeLeftovers;
-    ProgressStep(Page, 2, 3, 'Удаление файлов предыдущей версии…',
-      GetPreviousInstallDir());
-    RemovePreviousFiles;
-    ProgressStep(Page, 3, 3, 'Предыдущая версия удалена', 'Переход к установке…');
+    if WantRemoveOld() then
+      WipeLeftovers;
+    if WantWipeConfigs() then
+      WipeAllConfigs;
+    if WantRemoveOld() then
+    begin
+      ProgressStep(Page, 2, 3, 'Удаление файлов предыдущей версии…',
+        GetPreviousInstallDir());
+      RemovePreviousFiles;
+    end;
+    ProgressStep(Page, 3, 3, 'Готово', 'Переход к установке…');
   finally
     if (Page <> nil) and not WizardSilent then
       Page.Hide;
@@ -334,6 +366,10 @@ begin
       Space + 'Сначала в этом окне пойдёт удаление, затем установка.' + NewLine + NewLine
   else if GetUninstallString() <> '' then
     Result := Result + 'Предыдущая версия не удаляется — файлы будут обновлены.' + NewLine + NewLine;
+  if WantWipeConfigs() then
+    Result := Result + 'Сохранённые конфиги будут удалены.' + NewLine + NewLine
+  else if HasUserData() then
+    Result := Result + 'Сохранённые конфиги остаются.' + NewLine + NewLine;
   if MemoDirInfo <> '' then
     Result := Result + MemoDirInfo + NewLine + NewLine;
   if MemoGroupInfo <> '' then
@@ -363,10 +399,6 @@ begin
   begin
     WipeLeftovers;
     if DeleteConfigs then
-    begin
-      WipeConfigsDir(ExpandConstant('{localappdata}\{#AppName}'));
-      WipeConfigsDir(ExpandConstant('{localappdata}\ERGOMS VPN'));
-      WipeConfigsDir(ExpandConstant('{localappdata}\ops-content'));
-    end;
+      WipeAllConfigs;
   end;
 end;
