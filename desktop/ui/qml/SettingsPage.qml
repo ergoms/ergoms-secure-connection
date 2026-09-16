@@ -114,20 +114,6 @@ Item {
                     }
                 }
 
-                SettingsSection {
-                    title: "ИНТЕГРАЦИИ"
-                    BoolSegmented {
-                        label: "Git через VPN"
-                        on: bridge.settings.gitProxy
-                        onToggled: (v) => { bridge.settings.gitProxy = v }
-                    }
-                    BoolSegmented {
-                        label: "Docker через VPN"
-                        on: bridge.settings.dockerProxy
-                        onToggled: (v) => { bridge.settings.dockerProxy = v }
-                    }
-                }
-
                 SectionLabel {
                     text: "СЕРВЕР"
                     topPadding: 8

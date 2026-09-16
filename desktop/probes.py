@@ -127,13 +127,28 @@ class ProbeOps:
         self._on_exit_probe_ok(probe_host)
 
     def _diagnose_failed_exit(self, socks_port: int, err: str) -> None:
-        from desktop.watchdog import socks_probe
+        from desktop.watchdog import exit_probe_target, https_probe_is_flake, socks_probe
 
         connect_err = socks_probe(socks_port, timeout=6.0)
-        self._exit_probe_error = connect_err or err
         if connect_err:
+            self._exit_probe_error = connect_err
             self.log(f"проверка выхода: НЕ ОК — {connect_err}")
+        elif https_probe_is_flake(err):
+            # CONNECT through VLESS works. Cloudflare TLS often stalls via Squid;
+            # tearing the tunnel down here is what "VPN disconnected itself".
+            office = False
+            try:
+                office = bool(resolve_corporate_proxy(self.config()))
+            except Exception:  # noqa: BLE001
+                office = False
+            host, _path = exit_probe_target(office=office)
+            self.log(
+                f"проверка выхода: CONNECT есть, HTTPS медленный ({err}) — туннель не рву"
+            )
+            self._on_exit_probe_ok(host)
+            return
         else:
+            self._exit_probe_error = err
             self.log(f"проверка выхода: НЕ ОК — CONNECT есть, HTTPS нет ({err})")
         tail = "\n".join(self.singbox.tail_log(40)).lower()
         if "no recent network activity" in tail:

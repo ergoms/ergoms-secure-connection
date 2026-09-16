@@ -163,21 +163,29 @@ Column {
         }
     }
 
+    Text {
+        width: parent.width
+        text: "домен, IP или программа"
+        color: T.muted
+        font.pixelSize: 11
+        font.weight: Font.Medium
+        font.letterSpacing: 0.15
+        font.family: T.fontUi
+    }
+
     TextField {
         id: input
         width: parent.width
-        height: 38
-        placeholderText: "домен, IP или программа"
-        placeholderTextColor: T.muted
+        height: 44
         color: T.text
         selectedTextColor: T.text
         selectionColor: T.select
         font.pixelSize: 13
         font.family: T.fontUi
-        leftPadding: 12
-        rightPadding: 12
-        topPadding: 0
-        bottomPadding: 0
+        leftPadding: 14
+        rightPadding: 14
+        topPadding: 12
+        bottomPadding: 12
         verticalAlignment: TextInput.AlignVCenter
         onTextEdited: analyzeTimer.restart()
         onAccepted: {

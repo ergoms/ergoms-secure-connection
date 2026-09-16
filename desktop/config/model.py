@@ -273,8 +273,8 @@ class AppConfig:
     watchdog_interval: int = WATCHDOG_INTERVAL
     watchdog_max_retries: int = WATCHDOG_MAX_RETRIES
     kill_switch: bool = True
-    git_proxy: bool = False
-    git_via: str = "http"
+    git_proxy: bool = True
+    git_via: str = "tun"
     docker_proxy: bool = False
     server: ServerConfig = field(default_factory=ServerConfig)
     blocked_hosts: list[str] = field(default_factory=lambda: list(BLOCKED_HOSTS))
@@ -304,8 +304,8 @@ class AppConfig:
         self.watchdog_interval = max(5, as_int(self.watchdog_interval, WATCHDOG_INTERVAL))
         self.watchdog_max_retries = max(0, as_int(self.watchdog_max_retries, WATCHDOG_MAX_RETRIES))
         self.kill_switch = as_bool(self.kill_switch, True)
-        self.git_proxy = as_bool(self.git_proxy, False)
-        self.git_via = normalize_git_via(self.git_via)
+        self.git_proxy = as_bool(self.git_proxy, True)
+        self.git_via = normalize_git_via(self.git_via) if self.git_via else "tun"
         self.docker_proxy = as_bool(self.docker_proxy, False)
         self.blocked_hosts = [str(x) for x in (self.blocked_hosts or [])]
         self.proxy_bypass = [str(x) for x in (self.proxy_bypass or list(STANDARD_BYPASS_PRESET))]
@@ -337,9 +337,9 @@ class AppConfig:
             watchdog_interval=as_int(data.get("watchdog_interval"), WATCHDOG_INTERVAL),
             watchdog_max_retries=as_int(data.get("watchdog_max_retries"), WATCHDOG_MAX_RETRIES),
             kill_switch=as_bool(data.get("kill_switch"), True),
-            git_proxy=as_bool(data.get("git_proxy"), corporate) if git_present else corporate,
-            git_via=normalize_git_via(data.get("git_via")) if git_via_present else ("tun" if corporate else "http"),
-            docker_proxy=as_bool(data.get("docker_proxy"), corporate) if docker_present else corporate,
+            git_proxy=as_bool(data.get("git_proxy"), True) if git_present else True,
+            git_via=normalize_git_via(data.get("git_via")) if git_via_present else "tun",
+            docker_proxy=as_bool(data.get("docker_proxy"), False) if docker_present else False,
             server=ServerConfig.from_dict(data.get("server"), legacy_ssh=_section(data.get("ssh"))),
             blocked_hosts=list(data.get("blocked_hosts") or BLOCKED_HOSTS),
             proxy_bypass=list(data.get("proxy_bypass") or STANDARD_BYPASS_PRESET),

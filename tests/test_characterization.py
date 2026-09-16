@@ -210,6 +210,48 @@ def test_build_config_home_vless_with_tun() -> None:
     assert rd_idx < sniff_idx
 
 
+def _rustdesk_tun_lan_reject(box: dict[str, Any]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for rule in box["route"]["rules"]:
+        if rule.get("action") != "reject":
+            continue
+        cidrs = rule.get("ip_cidr") or []
+        names = [str(n).lower() for n in (rule.get("process_name") or [])]
+        if "172.19.0.0/16" in cidrs and "rustdesk.exe" in names:
+            out.append(rule)
+    return out
+
+
+def test_rustdesk_tun_lan_rejected_before_sniff() -> None:
+    """Same 172.19.0.1 on every PC makes RustDesk punch itself; force real relay."""
+    for office in (False, True):
+        box = _build(dial="vless-reality", office=office, enable_tun=True)
+        reject = _rustdesk_tun_lan_reject(box)
+        assert reject
+        rules = box["route"]["rules"]
+        reject_idx = next(
+            i
+            for i, r in enumerate(rules)
+            if r.get("action") == "reject"
+            and "172.19.0.0/16" in (r.get("ip_cidr") or [])
+        )
+        sniff_idx = next(
+            i
+            for i, r in enumerate(rules)
+            if r.get("action") == "sniff" and r.get("inbound") == ["tun-in"]
+        )
+        rd_idx = next(
+            i
+            for i, r in enumerate(rules)
+            if 21117
+            in (r.get("port") if isinstance(r.get("port"), list) else [r.get("port")])
+            and r.get("override_address") == "127.0.0.1"
+        )
+        priv_idx = next(i for i, r in enumerate(rules) if r.get("ip_is_private"))
+        assert rd_idx < reject_idx < sniff_idx
+        assert reject_idx < priv_idx
+
+
 def _ssh_port_rules(box: dict[str, Any]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for rule in box["route"]["rules"]:

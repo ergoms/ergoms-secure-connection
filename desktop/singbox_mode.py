@@ -26,6 +26,7 @@ from desktop.net_host import resolve_host
 from desktop.proc_net import resolve_service_image
 from desktop.route_tokens import parse_routes, process_matchers
 from desktop.sys.constants import SINGBOX_PROCESS_NAMES
+from desktop.rustdesk_opt import rustdesk_tun_lan_reject_rules
 from desktop.tun import (
     RUSTDESK_PORTS,
     TUN_IFACE_NAME,
@@ -33,6 +34,8 @@ from desktop.tun import (
     _direct_python_paths,
     detect_bind_interface,
     iface_ipv4s,
+    remove_stale_tun_adapter,
+    wait_tun_iface,
 )
 from lib.pac import bypass_to_singbox
 from lib.netutil import port_open
@@ -864,7 +867,10 @@ class SingboxModeManager:
                     "timeout": "100ms",
                 }
             )
-        rustdesk = rustdesk_hairpin_rules(server_host)
+        rustdesk = [
+            *rustdesk_hairpin_rules(server_host),
+            *rustdesk_tun_lan_reject_rules(),
+        ]
         box: dict[str, Any] = {
             **config_skeleton(
                 log_path=self.log_path,
@@ -1051,6 +1057,8 @@ class SingboxModeManager:
         if stale:
             self.log(f"старый tun ещё жив pid={','.join(str(p) for p in stale)} — останавливаю")
             self.stop()
+        if enable_tun:
+            remove_stale_tun_adapter(log=self.log)
 
         self._rotate_log()
         fw = self._firewall_cmds(exe) if need_admin and not procutil.is_admin() else []
@@ -1065,27 +1073,38 @@ class SingboxModeManager:
         else:
             self.log("ожидаю появления процесса sing-box…")
 
-        if self._wait_socks(socks_port, http_port, enable_tun=enable_tun, pid=pid):
+        if self._wait_ready(
+            socks_port, http_port, enable_tun=enable_tun, pid=pid
+        ):
             return
-        if enable_tun and self._tun_adapter_busy():
-            self.log("TUN-адаптер ещё занят — жду и пробую ещё раз")
-            time.sleep(1.5)
+        if enable_tun:
+            reason = "занят" if self._tun_adapter_busy() else "не появился"
+            self.log(f"TUN {reason} — останавливаю и пробую ещё раз")
             leftover = self.pid() or pid
             if leftover and procutil.pid_alive(leftover):
                 procutil.kill_pids([leftover])
+            remove_stale_tun_adapter(log=self.log)
+            time.sleep(1.0)
             pid = self._launch(
                 exe, elevate=need_admin, prelude_cmds=prelude, postlude_cmds=postlude
             )
             if pid:
                 self.pid_path.write_text(str(pid), encoding="utf-8")
                 self.log(f"sing-box pid={pid} (повтор)")
-            if self._wait_socks(socks_port, http_port, enable_tun=enable_tun, pid=pid):
+            if self._wait_ready(
+                socks_port,
+                http_port,
+                enable_tun=enable_tun,
+                pid=pid,
+                timeout=12.0,
+            ):
                 return
 
-        self._log_tail("не поднялся SOCKS")
+        self._log_tail("не поднялся SOCKS" if not enable_tun else "не поднялся TUN")
         raise RuntimeError(
-            f"sing-box не открыл SOCKS :{socks_port}. "
-            f"См. {self.log_path}. Нужен download-sing-box и верные transport.*"
+            f"sing-box не открыл SOCKS :{socks_port}"
+            + (" или TUN" if enable_tun else "")
+            + f". См. {self.log_path}. Нужен download-sing-box и верные transport.*"
         )
 
     def tail_log(self, n: int = 20) -> list[str]:
@@ -1119,6 +1138,46 @@ class SingboxModeManager:
         text = "\n".join(self.tail_log(40)).lower()
         return "configure tun interface" in text or "wintun" in text
 
+    def _tun_inbound_ready(self) -> bool:
+        if sys.platform != "win32":
+            return True
+        tail = "\n".join(self.tail_log(40)).lower()
+        if "inbound/tun" in tail and "started" in tail:
+            return True
+        return bool(wait_tun_iface(timeout=0.05))
+
+    def _wait_ready(
+        self,
+        socks_port: int,
+        http_port: int,
+        *,
+        enable_tun: bool,
+        pid: int | None,
+        timeout: float = 8.0,
+    ) -> bool:
+        deadline = time.monotonic() + timeout
+        interval = 0.05
+        socks_ok = False
+        while time.monotonic() < deadline:
+            if port_open("127.0.0.1", socks_port, timeout=0.35):
+                socks_ok = True
+                if not enable_tun or self._tun_inbound_ready():
+                    kind = "mixed + TUN" if enable_tun else "mixed"
+                    self.log(
+                        f"sing-box слушает SOCKS :{socks_port} и HTTP :{http_port} ({kind})"
+                    )
+                    return True
+            check = pid or self.pid()
+            if check and not procutil.pid_alive(check) and not self.pid():
+                return False
+            time.sleep(interval)
+            interval = min(interval * 1.3, 0.2)
+        if socks_ok and enable_tun:
+            self.log(
+                f"sing-box слушает SOCKS :{socks_port}, но TUN ещё не поднялся"
+            )
+        return False
+
     def _wait_socks(
         self,
         socks_port: int,
@@ -1128,21 +1187,13 @@ class SingboxModeManager:
         pid: int | None,
         timeout: float = 6.0,
     ) -> bool:
-        deadline = time.monotonic() + timeout
-        interval = 0.05
-        while time.monotonic() < deadline:
-            if port_open("127.0.0.1", socks_port, timeout=0.35):
-                kind = "mixed + TUN" if enable_tun else "mixed"
-                self.log(
-                    f"sing-box слушает SOCKS :{socks_port} и HTTP :{http_port} ({kind})"
-                )
-                return True
-            check = pid or self.pid()
-            if check and not procutil.pid_alive(check) and not self.pid():
-                return False
-            time.sleep(interval)
-            interval = min(interval * 1.3, 0.2)
-        return False
+        return self._wait_ready(
+            socks_port,
+            http_port,
+            enable_tun=enable_tun,
+            pid=pid,
+            timeout=timeout,
+        )
 
     def _log_tail(self, reason: str, n: int = 20) -> None:
         lines = self.tail_log(n)
@@ -1167,6 +1218,7 @@ class SingboxModeManager:
         if not targets:
             self.log("sing-box уже не запущен")
             self.pid_path.unlink(missing_ok=True)
+            remove_stale_tun_adapter(log=self.log)
             return
 
         self.log(f"остановка sing-box pid={','.join(str(p) for p in targets)}")
@@ -1193,6 +1245,7 @@ class SingboxModeManager:
         self._pid_scan_at = 0.0
         self._pid_scan_result = None
         self.pid_path.unlink(missing_ok=True)
+        remove_stale_tun_adapter(log=self.log)
 
     def _launch(
         self,

@@ -38,6 +38,7 @@ class StatusView:
     color: str
     power_text: str
     tun_button_text: str
+    can_reconnect: bool = False
     toast: str | None = None
     signature: str = ""
 
@@ -62,36 +63,39 @@ def present_status(
     probe_hint = str(st.get("exit_probe_hint") or "")
     socks_port = int(st.get("socks_port") or 1080)
     toast: str | None = None
+    retry = False
     if singbox and socks_up and probe_err:
         if probe_hint == "need-awg":
             title, sub, color = (
                 "Нет выхода",
-                "Подключение без интернета. Отключите VPN или выберите AWG",
+                "Переподключите без снятия защиты или выберите AWG",
                 C_DANGER,
             )
         elif probe_hint == "udp-timeout":
             title, sub, color = (
                 "Нет выхода",
-                "Подключение без интернета. Отключите VPN и проверьте конфиг",
+                "Переподключите без снятия защиты и проверьте конфиг",
                 C_DANGER,
             )
         else:
             title, sub, color = (
                 "Нет выхода",
-                "Подключение без интернета. Отключите VPN, чтобы снять блок",
+                "Переподключите — защита при обрыве останется",
                 C_DANGER,
             )
         power = "Отключить"
+        retry = True
         toast = sub
     elif singbox and tun and socks_up:
         title, sub, color, power = "Защищено", "", C_ACCENT, "Отключить"
     elif singbox and not socks_up:
         title, sub, color, power = (
             "Сбой",
-            "Сбой подключения",
+            "Переподключите без снятия защиты",
             C_DANGER,
             "Отключить",
         )
+        retry = True
     elif singbox:
         title, sub, color, power = "Подключено", "", C_OK, "Отключить"
     elif tun:
@@ -99,10 +103,11 @@ def present_status(
     elif ks_on:
         title, sub, color, power = (
             "Нет сети",
-            "Интернет закрыт. Отключите VPN, чтобы снять блок",
+            "Интернет закрыт. Переподключите, не снимая защиту",
             C_WARN,
             "Отключить",
         )
+        retry = True
     elif not config_ready:
         title, sub, color, power = "Нет конфига", "Загрузите конфиг", C_MUTED, "Подключить"
     else:
@@ -133,6 +138,7 @@ def present_status(
         color=color,
         power_text=power,
         tun_button_text="TUN выкл" if tun else "TUN вкл",
+        can_reconnect=retry,
         toast=toast,
         signature=sig,
     )

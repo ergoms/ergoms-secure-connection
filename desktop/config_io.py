@@ -765,16 +765,16 @@ def get_git_via(cfg: dict[str, Any] | None = None) -> str:
 
 
 def resolve_git_integration(cfg: dict[str, Any] | None = None) -> str:
-    """off / http / tun. TUN needs a live tun.enabled flag; otherwise HTTP bridge."""
-    if not get_git_proxy_enabled(cfg):
-        return "off"
-    if get_git_via(cfg) == "tun" and get_tun_enabled(cfg):
+    """Git follows TUN. HTTP-bridge mode is no longer offered in the UI."""
+    if get_tun_enabled(cfg):
         return "tun"
-    return "http"
+    return "off"
 
 
 def get_docker_proxy_enabled(cfg: dict[str, Any] | None = None) -> bool:
-    return _app(cfg).docker_proxy
+    """Docker uses TUN routes; the old HTTP-proxy toggle is gone."""
+    del cfg
+    return False
 
 
 def get_watchdog_enabled(cfg: dict[str, Any] | None = None) -> bool:

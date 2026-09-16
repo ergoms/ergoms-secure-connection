@@ -53,7 +53,9 @@ def exit_probe_target(*, office: bool) -> tuple[str, str]:
     del office
     return "1.1.1.1", "/cdn-cgi/trace"
 # Port-open is cheap; real CONNECT can flap once — require 2 fails.
-_PROBE_FAILS_BEFORE_RECONNECT = 2
+_PROBE_FAILS_BEFORE_RECONNECT = 3
+_RECONNECT_SETTLE_S = 20.0
+_TUN_DEFAULT_MISSES_BEFORE_SEAL = 3
 
 
 def socks_port_from_client(client: WatchHost) -> int:
@@ -100,6 +102,30 @@ def socks_probe(
                 s.close()
             except OSError:
                 pass
+
+
+def https_probe_is_flake(err: str) -> bool:
+    """TLS/HTTP timed out after SOCKS CONNECT — tunnel is up, exit is just slow.
+
+    Office VLESS→Squid often stalls the 1.1.1.1 handshake while Chrome still
+    works. Reconnecting then blackholes the OS.
+    """
+    text = (err or "").lower()
+    if not text:
+        return False
+    if text.startswith("socks5") or "refused" in text:
+        return False
+    needles = (
+        "timed out",
+        "timeout",
+        "handshake",
+        "10054",
+        "forcibly closed",
+        "разорвал",
+        "eof",
+        "reset",
+    )
+    return any(n in text for n in needles)
 
 
 def socks_https_probe(
@@ -209,8 +235,11 @@ def health_problem(client: WatchHost, *, probe: bool = False) -> str | None:
         except Exception:  # noqa: BLE001
             office = False
         host, path = exit_probe_target(office=office)
+        connect_err = socks_probe(socks, host=host, timeout=8.0)
+        if connect_err:
+            return f"SOCKS :{socks} zombie ({connect_err})"
         err = socks_https_probe(socks, host=host, sni=host, path=path, timeout=10.0)
-        if err:
+        if err and not https_probe_is_flake(err):
             return f"SOCKS :{socks} zombie ({err})"
     # SOCKS alone is not enough for Docker Desktop: UDP/53 from the VM dies
     # unless sing-box hijacks it. Recover TUN when config says tun.enabled.
@@ -254,6 +283,7 @@ class TunnelWatchdog:
         self._lock = threading.Lock()
         self._fail_streak = 0
         self._probe_fails = 0
+        self._tun_default_misses = 0
         self._next_ok_at = 0.0
         self._reconnecting = False
 
@@ -270,10 +300,12 @@ class TunnelWatchdog:
         if on:
             self._fail_streak = 0
             self._probe_fails = 0
+            self._tun_default_misses = 0
             self._next_ok_at = 0.0
         else:
             self._fail_streak = 0
             self._probe_fails = 0
+            self._tun_default_misses = 0
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -328,18 +360,6 @@ class TunnelWatchdog:
                 f"watchdog: {problem} "
                 f"({self._probe_fails}/{_PROBE_FAILS_BEFORE_RECONNECT})"
             )
-            if get_kill_switch():
-                try:
-                    self.client._ensure_kill_switch(self.client.config())  # noqa: SLF001
-                except Exception as exc:  # noqa: BLE001
-                    self.log(f"watchdog: kill switch: {exc}")
-            else:
-                try:
-                    if self.client.singbox.running():
-                        self.client.singbox.stop()
-                        self.log("watchdog: singbox stopped (failsafe while SOCKS zombie)")
-                except Exception as exc:  # noqa: BLE001
-                    self.log(f"watchdog: singbox failsafe stop: {exc}")
             if self._probe_fails < _PROBE_FAILS_BEFORE_RECONNECT:
                 return
         elif problem is None:
@@ -368,6 +388,7 @@ class TunnelWatchdog:
     def _reconnect(self, *, tun_only: bool = False) -> None:
         self._reconnecting = True
         try:
+            self._lift_blackholes_for_reconnect()
             if tun_only:
                 try:
                     self.client.enable_tun(persist=False)
@@ -380,7 +401,7 @@ class TunnelWatchdog:
                 except Exception as exc:  # noqa: BLE001
                     self.log(f"watchdog: stop: {exc}")
                 self.client.enable(spawn_watchdog=False)
-            problem = health_problem(self.client, probe=True)
+            problem = self._health_after_enable()
             if problem is None:
                 self.log("watchdog: reconnected OK")
                 self._notify(
@@ -391,6 +412,7 @@ class TunnelWatchdog:
                 )
                 self._fail_streak = 0
                 self._probe_fails = 0
+                self._tun_default_misses = 0
                 self._next_ok_at = time.monotonic() + 5.0
             else:
                 delay = min(120, get_watchdog_interval() * (2 ** min(self._fail_streak, 4)))
@@ -406,6 +428,28 @@ class TunnelWatchdog:
                 self._notify("Ошибка переподключения", str(exc)[:120])
         finally:
             self._reconnecting = False
+
+    def _lift_blackholes_for_reconnect(self) -> None:
+        try:
+            from desktop.kill_switch import is_sealed, lift_ipv4_blackholes
+        except Exception:  # noqa: BLE001
+            return
+        try:
+            if is_sealed():
+                lift_ipv4_blackholes(log=self.log)
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"watchdog: не снял чёрные /1: {exc}")
+
+    def _health_after_enable(self) -> str | None:
+        """Wait for enable()'s exit probe before judging the new tunnel."""
+        deadline = time.monotonic() + _RECONNECT_SETTLE_S
+        while time.monotonic() < deadline:
+            if getattr(self.client, "_hold_watchdog", False):
+                if self._stop.wait(0.4):
+                    return "watchdog stopped"
+                continue
+            return health_problem(self.client, probe=True)
+        return health_problem(self.client, probe=True)
 
     def _ensure_reverse_ssh(self) -> None:
         if not get_reverse_ssh_enabled():
@@ -431,10 +475,18 @@ class TunnelWatchdog:
         from desktop.tun import reclaim_tun_default, tun_owns_default
 
         if tun_owns_default():
+            self._tun_default_misses = 0
             return
-        self.log("watchdog: TUN не владеет default — снимаю чужой /1")
+        self._tun_default_misses += 1
+        self.log(
+            "watchdog: TUN не владеет default — снимаю чужой /1 "
+            f"({self._tun_default_misses}/{_TUN_DEFAULT_MISSES_BEFORE_SEAL})"
+        )
         if reclaim_tun_default() and tun_owns_default():
             self.log("watchdog: TUN снова владеет default")
+            self._tun_default_misses = 0
+            return
+        if self._tun_default_misses < _TUN_DEFAULT_MISSES_BEFORE_SEAL:
             return
         self.log("watchdog: чужой VPN перекрыл TUN")
         self._notify(

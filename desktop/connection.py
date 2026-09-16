@@ -635,11 +635,29 @@ class ConnectionOps:
         self._exit_probe_error = None
         self._exit_probe_hint = None
         self._want_watchdog = spawn_watchdog
-        self.start_singbox_mode()
+        try:
+            self.start_singbox_mode()
+        except Exception:
+            self._hold_watchdog = False
+            raise
         if spawn_watchdog:
             if procutil.is_admin() and not self._inprocess_helpers:
                 self.stop_watchdog_daemon()
             self.ensure_watchdog_daemon()
+
+
+    def reconnect(self) -> None:
+        """Restart the tunnel without disable() — kill switch stays up."""
+        self.reload_env()
+        try:
+            from desktop.kill_switch import is_sealed, lift_ipv4_blackholes
+
+            if is_sealed():
+                lift_ipv4_blackholes(log=self.log)
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"переподключение: чёрные /1: {exc}")
+        self.log("переподключение — защиту при обрыве не снимаю")
+        self.enable()
 
 
     def shutdown(self) -> None:

@@ -365,6 +365,7 @@ class OpsClient(ConnectionOps, ProbeOps, IntegrationOps):
         )
         info["exit_probe_error"] = self._exit_probe_error or ""
         info["exit_probe_hint"] = self._exit_probe_hint or ""
+        info["fail_closed"] = bool(getattr(self, "_fail_closed", False))
         if info["exit_probe_error"]:
             lines.append(f"exit_probe       = FAIL {info['exit_probe_error']}")
         if include_git:

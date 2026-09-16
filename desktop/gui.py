@@ -174,6 +174,9 @@ def _setup_tray(app: QApplication, icon: QIcon, bridge: object, window: object) 
     toggle = QAction(str(getattr(bridge, "powerText", "Подключить")), menu)
     toggle.triggered.connect(bridge.toggleConnection)  # type: ignore[attr-defined]
     menu.addAction(toggle)
+    retry = QAction("Переподключить", menu)
+    retry.triggered.connect(bridge.reconnectConnection)  # type: ignore[attr-defined]
+    menu.addAction(retry)
     menu.addSeparator()
     add("Выход", bridge.quitApp)  # type: ignore[attr-defined]
 
@@ -181,8 +184,11 @@ def _setup_tray(app: QApplication, icon: QIcon, bridge: object, window: object) 
         busy = bool(getattr(bridge, "busy", False))
         busy_text = str(getattr(bridge, "busyText", "") or "")
         power = str(getattr(bridge, "powerText", "Подключить") or "Подключить")
+        can_retry = bool(getattr(bridge, "canReconnect", False))
         toggle.setEnabled(not busy)
         toggle.setText(busy_text if busy and busy_text else power)
+        retry.setVisible(can_retry and not busy)
+        retry.setEnabled(not busy)
 
     def _sync_tip() -> None:
         title = str(getattr(bridge, "statusTitle", "") or "")
@@ -193,6 +199,7 @@ def _setup_tray(app: QApplication, icon: QIcon, bridge: object, window: object) 
         "busyChanged",
         "busyTextChanged",
         "statusTitleChanged",
+        "canReconnectChanged",
     ):
         signal = getattr(bridge, sig, None)
         if signal is None:

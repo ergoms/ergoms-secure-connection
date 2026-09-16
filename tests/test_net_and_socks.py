@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import socket
 import struct
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -12,6 +14,7 @@ import pytest
 from desktop.config.model import AppConfig, normalize_git_via
 from desktop.config_io import (
     default_config_template,
+    get_docker_proxy_enabled,
     merge_imported_config,
     normalize_dial,
     resolve_git_integration,
@@ -162,6 +165,77 @@ def test_exit_probe_target_by_mode() -> None:
     assert exit_probe_target(office=False) == ("1.1.1.1", "/cdn-cgi/trace")
 
 
+def test_https_probe_timeout_is_flake_not_zombie() -> None:
+    from desktop.watchdog import https_probe_is_flake
+
+    assert https_probe_is_flake(
+        "HTTPS probe: _ssl.c:989: The handshake operation timed out"
+    )
+    assert https_probe_is_flake(
+        "HTTPS probe: [WinError 10054] Удаленный хост принудительно разорвал "
+        "существующее подключение"
+    )
+    assert not https_probe_is_flake("SOCKS5 CONNECT failed")
+    assert not https_probe_is_flake("HTTPS 502 Bad Gateway")
+
+
+def test_health_problem_ignores_tls_flake_when_connect_works(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from desktop.watchdog import health_problem
+
+    class Host:
+        paths = type("P", (), {"state_path": type("S", (), {"is_file": lambda self: True})()})()
+        singbox = type("S", (), {"running": staticmethod(lambda: True), "tun_active": staticmethod(lambda: True)})()
+        tun = type("T", (), {"running": staticmethod(lambda: True)})()
+
+        def reload_env(self) -> None:
+            return None
+
+        def config(self) -> dict:
+            return {}
+
+    monkeypatch.setattr("desktop.watchdog.port_open", lambda *_a, **_k: True)
+    monkeypatch.setattr("desktop.watchdog.socks_port_from_client", lambda *_a, **_k: 1080)
+    monkeypatch.setattr("desktop.watchdog.get_tun_enabled", lambda: True)
+    monkeypatch.setattr(
+        "desktop.watchdog.socks_probe", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(
+        "desktop.watchdog.socks_https_probe",
+        lambda *_a, **_k: "HTTPS probe: _ssl.c:989: The handshake operation timed out",
+    )
+    monkeypatch.setattr(
+        "desktop.config_io.resolve_corporate_proxy", lambda *_a, **_k: "10.16.0.8:3128"
+    )
+    assert health_problem(Host(), probe=True) is None  # type: ignore[arg-type]
+
+
+def test_health_problem_zombie_when_connect_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from desktop.watchdog import health_problem
+
+    class Host:
+        paths = type("P", (), {"state_path": type("S", (), {"is_file": lambda self: True})()})()
+        singbox = type("S", (), {"running": staticmethod(lambda: True), "tun_active": staticmethod(lambda: True)})()
+        tun = type("T", (), {"running": staticmethod(lambda: True)})()
+
+        def reload_env(self) -> None:
+            return None
+
+        def config(self) -> dict:
+            return {}
+
+    monkeypatch.setattr("desktop.watchdog.port_open", lambda *_a, **_k: True)
+    monkeypatch.setattr("desktop.watchdog.socks_port_from_client", lambda *_a, **_k: 1080)
+    monkeypatch.setattr("desktop.watchdog.get_tun_enabled", lambda: True)
+    monkeypatch.setattr(
+        "desktop.watchdog.socks_probe", lambda *_a, **_k: "SOCKS5 CONNECT failed"
+    )
+    assert "zombie" in (health_problem(Host(), probe=True) or "")  # type: ignore[arg-type]
+
+
 def test_port_open_closed_port() -> None:
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.bind(("127.0.0.1", 0))
@@ -274,6 +348,18 @@ def test_teardown_if_dirty_skips_live_vpn() -> None:
     Dead().teardown_overrides_if_dirty()
     assert n["teardown"] == 1
 
+    class Sealed(Dead):
+        _fail_closed = True
+
+    Sealed().teardown_overrides_if_dirty()
+    assert n["teardown"] == 1
+
+    class Held(Dead):
+        _hold_watchdog = True
+
+    Held().teardown_overrides_if_dirty()
+    assert n["teardown"] == 1
+
 
 def test_watchdog_reconnect_keeps_pac(monkeypatch: pytest.MonkeyPatch) -> None:
     from desktop.watchdog import TunnelWatchdog
@@ -316,6 +402,128 @@ def test_watchdog_reconnect_keeps_pac(monkeypatch: pytest.MonkeyPatch) -> None:
     wd = TunnelWatchdog(Host())  # type: ignore[arg-type]
     wd._reconnect(tun_only=False)  # noqa: SLF001
     assert stops == [False]
+
+
+def test_watchdog_zombie_does_not_stop_on_first_fail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from desktop.watchdog import TunnelWatchdog
+
+    events: list[str] = []
+
+    class Host:
+        log = staticmethod(lambda m: events.append(m))
+        paths = type("P", (), {"var_dir": None})()
+        singbox = type(
+            "S",
+            (),
+            {
+                "running": staticmethod(lambda: True),
+                "stop": staticmethod(lambda: events.append("stop")),
+            },
+        )()
+        tun = type("T", (), {"running": staticmethod(lambda: True)})()
+        reverse_ssh = type("R", (), {"running": staticmethod(lambda: False)})()
+        _hold_watchdog = False
+
+        def reload_env(self) -> None:
+            return None
+
+        def enable(self, *, spawn_watchdog: bool = True) -> None:
+            del spawn_watchdog
+            events.append("enable")
+
+        def enable_tun(self, *, persist: bool = True) -> None:
+            del persist
+
+        def stop_singbox_mode(self, *, teardown: bool = True) -> None:
+            events.append(f"stop_mode:{teardown}")
+
+        def config(self) -> dict:
+            return {}
+
+        def _ensure_kill_switch(self, cfg: dict) -> list[str]:
+            del cfg
+            events.append("kill_switch")
+            return []
+
+        def _maybe_start_reverse_ssh(self, cfg: dict | None = None) -> None:
+            del cfg
+
+    monkeypatch.setattr(
+        "desktop.watchdog.health_problem",
+        lambda *_a, **_k: "SOCKS :1080 zombie (timeout)",
+    )
+    monkeypatch.setattr("desktop.watchdog.get_watchdog_enabled", lambda: True)
+    monkeypatch.setattr("desktop.watchdog.get_kill_switch", lambda: True)
+    wd = TunnelWatchdog(Host())  # type: ignore[arg-type]
+    wd.set_desired(True)
+    wd.tick()
+    wd.tick()
+    assert "enable" not in events
+    assert "stop" not in events
+    assert "kill_switch" not in events
+    assert wd._probe_fails == 2  # noqa: SLF001
+
+
+def test_watchdog_waits_for_exit_probe_after_enable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from desktop.watchdog import TunnelWatchdog
+
+    host = type("H", (), {"_hold_watchdog": True})()
+    probes = {"n": 0}
+
+    def fake_health(_client, *, probe: bool = True) -> str | None:
+        del probe
+        probes["n"] += 1
+        return None
+
+    monkeypatch.setattr("desktop.watchdog.health_problem", fake_health)
+    monkeypatch.setattr("desktop.watchdog._RECONNECT_SETTLE_S", 1.0)
+    wd = TunnelWatchdog(host)  # type: ignore[arg-type]
+
+    def release() -> None:
+        time.sleep(0.15)
+        host._hold_watchdog = False
+
+    threading.Thread(target=release, daemon=True).start()
+    assert wd._health_after_enable() is None  # noqa: SLF001
+    assert probes["n"] == 1
+
+
+def test_watchdog_tun_default_does_not_seal_on_first_miss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from desktop.watchdog import TunnelWatchdog
+
+    sealed = {"n": 0}
+
+    class Host:
+        log = staticmethod(lambda _m: None)
+        paths = type("P", (), {"var_dir": None})()
+
+        def config(self) -> dict:
+            return {}
+
+    monkeypatch.setattr("desktop.watchdog.sys.platform", "win32")
+    monkeypatch.setattr("desktop.watchdog.get_tun_enabled", lambda: True)
+    monkeypatch.setattr("desktop.watchdog.get_kill_switch", lambda: True)
+    monkeypatch.setattr("desktop.tun.tun_owns_default", lambda: False)
+    monkeypatch.setattr("desktop.tun.reclaim_tun_default", lambda: False)
+    monkeypatch.setattr("desktop.config_io.get_server_host", lambda _cfg=None: "1.2.3.4")
+    monkeypatch.setattr("desktop.config_io.resolve_corporate_proxy", lambda _cfg=None: "")
+    monkeypatch.setattr("desktop.kill_switch.allow_ips", lambda *h: list(h))
+    monkeypatch.setattr(
+        "desktop.kill_switch.apply",
+        lambda *a, **k: sealed.__setitem__("n", sealed["n"] + 1),
+    )
+    wd = TunnelWatchdog(Host())  # type: ignore[arg-type]
+    wd._ensure_tun_default()  # noqa: SLF001
+    wd._ensure_tun_default()  # noqa: SLF001
+    assert sealed["n"] == 0
+    wd._ensure_tun_default()  # noqa: SLF001
+    assert sealed["n"] == 1
 
 
 def test_pac_server_replace_keeps_listener() -> None:
@@ -420,6 +628,43 @@ def test_watchdog_reconnects_forever(monkeypatch: pytest.MonkeyPatch) -> None:
         wd.tick()
     assert reconnects["n"] == 12
     assert wd._fail_streak == 12  # noqa: SLF001
+
+
+def test_present_status_error_offers_reconnect() -> None:
+    from desktop.services.status import present_status
+
+    dead_exit = present_status(
+        {
+            "singbox_running": True,
+            "tun_running": True,
+            "socks_up": True,
+            "exit_probe_error": "timeout",
+            "kill_switch": True,
+            "kill_switch_applied": True,
+        },
+        config_ready=True,
+    )
+    assert dead_exit.can_reconnect is True
+    assert dead_exit.power_text == "Отключить"
+    assert "Переподключ" in dead_exit.subtitle
+
+    sealed = present_status(
+        {"kill_switch_applied": True, "kill_switch": True},
+        config_ready=True,
+    )
+    assert sealed.can_reconnect is True
+    assert sealed.title == "Нет сети"
+
+    ok = present_status(
+        {
+            "singbox_running": True,
+            "tun_running": True,
+            "socks_up": True,
+        },
+        config_ready=True,
+    )
+    assert ok.can_reconnect is False
+    assert ok.power_text == "Отключить"
 
 
 def test_settings_map_roundtrip() -> None:
@@ -546,30 +791,32 @@ def test_mode_switch_save_keeps_disk_exceptions() -> None:
     assert out["transport"]["dial"] == "vless-reality"
     assert out["git_proxy"] is True
     assert out["git_via"] == "tun"
-    assert out["docker_proxy"] is True
+    assert out["docker_proxy"] is False
 
 
-def test_corporate_git_defaults_to_tun() -> None:
-    office = AppConfig.from_dict({"corporate": True, "git_proxy": True})
+def test_git_and_docker_default_to_tun() -> None:
+    blank = AppConfig.from_dict({})
+    assert blank.git_proxy is True
+    assert blank.git_via == "tun"
+    assert blank.docker_proxy is False
+    office = AppConfig.from_dict({"corporate": True})
     assert office.git_via == "tun"
     home = AppConfig.from_dict({"corporate": False, "git_proxy": True})
-    assert home.git_via == "http"
+    assert home.git_via == "tun"
     assert normalize_git_via("tunnel") == "tun"
     assert normalize_git_via("") == "http"
 
     tun_cfg = {
         "corporate": True,
-        "git_proxy": True,
-        "git_via": "tun",
+        "git_proxy": False,
+        "git_via": "http",
         "tun": {"enabled": True},
+        "docker_proxy": True,
     }
     assert resolve_git_integration(tun_cfg) == "tun"
+    assert get_docker_proxy_enabled(tun_cfg) is False
     tun_cfg["tun"] = {"enabled": False}
-    assert resolve_git_integration(tun_cfg) == "http"
-    tun_cfg["git_proxy"] = False
-    tun_cfg["tun"] = {"enabled": True}
     assert resolve_git_integration(tun_cfg) == "off"
-    assert resolve_git_integration({"git_proxy": True, "git_via": "http", "tun": {"enabled": True}}) == "http"
 
 
 def test_write_cli_env_tun_unsets_proxy(tmp_path, monkeypatch) -> None:

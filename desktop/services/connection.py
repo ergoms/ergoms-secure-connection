@@ -15,6 +15,9 @@ class ConnectionService:
     def disable(self) -> None:
         self.client.disable()
 
+    def reconnect(self) -> None:
+        self.client.reconnect()
+
     def enable_tun(self) -> None:
         self.client.enable_tun()
 

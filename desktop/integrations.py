@@ -252,6 +252,7 @@ class IntegrationOps:
                 self.paths.env_proxy_backup,
                 self.paths.git_proxy_backup,
                 self.paths.docker_proxy_backup,
+                self.paths.rustdesk_opt_backup,
                 self.paths.cli_env,
                 self.paths.cli_ps1,
                 self.paths.state_path,
@@ -262,6 +263,13 @@ class IntegrationOps:
     def teardown_overrides_if_dirty(self) -> None:
         """Skip git/PAC/Docker undo when there are no leftover markers."""
         if not self._override_markers():
+            return
+        if getattr(self, "_hold_watchdog", False) or getattr(self, "_fail_closed", False):
+            return
+        wd = getattr(self, "_watchdog", None)
+        if wd is not None and (
+            getattr(wd, "_reconnecting", False) or getattr(wd, "desired", False)
+        ):
             return
         try:
             if self._vpn_process_up():
@@ -334,6 +342,14 @@ class IntegrationOps:
         self.log("дом: системный прокси снял — трафик через TUN")
 
 
+    def _enable_rustdesk_guards(self) -> None:
+        try:
+            from desktop.rustdesk_opt import enable_rustdesk_vpn_guards
+
+            enable_rustdesk_vpn_guards(self.paths.rustdesk_opt_backup, log=self.log)
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"RustDesk guards: {exc}")
+
     def teardown_overrides(self) -> None:
         """Undo git / PAC / Docker / env changes. Safe if nothing was enabled."""
         if not self._teardown_lock.acquire(blocking=False):
@@ -370,6 +386,12 @@ class IntegrationOps:
                     )
                 except Exception as exc:  # noqa: BLE001
                     self.log(f"docker proxy off: {exc}")
+            try:
+                from desktop.rustdesk_opt import disable_rustdesk_vpn_guards
+
+                disable_rustdesk_vpn_guards(self.paths.rustdesk_opt_backup, log=self.log)
+            except Exception as exc:  # noqa: BLE001
+                self.log(f"RustDesk guards off: {exc}")
         finally:
             self._teardown_lock.release()
 
@@ -454,6 +476,7 @@ class IntegrationOps:
             except Exception as exc:  # noqa: BLE001
                 self.log(f"env proxy off (TUN): {exc}")
             self.log("системный прокси не ставится — трафик через TUN")
+            self._enable_rustdesk_guards()
             return
         if office:
             self.stop_pac_server()
@@ -471,6 +494,7 @@ class IntegrationOps:
                 self.paths.env_proxy_backup,
                 log=self.log,
             )
+            self._enable_rustdesk_guards()
             return
         pac_url = self.start_pac_server(cfg, proxy_port=http_port)
         self._enable_browser_pac(cfg, http_port, pac_url=pac_url)
@@ -479,6 +503,7 @@ class IntegrationOps:
             self.paths.env_proxy_backup,
             log=self.log,
         )
+        self._enable_rustdesk_guards()
 
 
     def write_docker_helpers(

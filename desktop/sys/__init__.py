@@ -9,7 +9,9 @@ from desktop.sys.constants import (
 from desktop.sys.win_net import (
     NetshIface,
     best_interface_index,
+    decode_win_console,
     netsh_ipv4_interfaces,
+    normalize_win_net_text,
     route_print_v4,
     run_route_lines,
 )
@@ -21,7 +23,9 @@ __all__ = [
     "SINGBOX_PROCESS_NAMES",
     "NetshIface",
     "best_interface_index",
+    "decode_win_console",
     "netsh_ipv4_interfaces",
+    "normalize_win_net_text",
     "route_print_v4",
     "run_route_lines",
 ]

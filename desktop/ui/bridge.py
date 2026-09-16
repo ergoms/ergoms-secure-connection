@@ -141,6 +141,7 @@ class GuiBridge(QObject):
     logTextChanged = Signal()
     pageChanged = Signal()
     powerTextChanged = Signal()
+    canReconnectChanged = Signal()
     corporateChanged = Signal()
     autostartChanged = Signal()
     analyzeReady = Signal(str, str)
@@ -195,6 +196,7 @@ class GuiBridge(QObject):
         self._reverse_ssh_port = 2222
         self._singbox_up = False
         self._power_text = "Подключить"
+        self._can_reconnect = False
         self._tun_button_text = "TUN вкл"
         self._config_ready = False
         self._corporate = False
@@ -287,6 +289,10 @@ class GuiBridge(QObject):
     @Property(str, notify=powerTextChanged)
     def powerText(self) -> str:
         return self._power_text
+
+    @Property(bool, notify=canReconnectChanged)
+    def canReconnect(self) -> bool:
+        return self._can_reconnect
 
     @Property(bool, notify=corporateChanged)
     def corporate(self) -> bool:
@@ -459,6 +465,17 @@ class GuiBridge(QObject):
         if self._handoff_if_needed("off"):
             return
         self._run_bg(self.connection.disable, waiting="Отключение…")
+
+    @Slot()
+    def reconnectConnection(self) -> None:
+        if self._busy:
+            return
+        if not self._config_ready and not self._active and not self._kill_switch_on:
+            self.toast.emit("Загрузите конфиг", "warn")
+            return
+        if self._handoff_if_needed("on"):
+            return
+        self._run_bg(self.connection.reconnect, waiting="Переподключение…")
 
     @Slot()
     def toggleTun(self) -> None:
@@ -698,9 +715,11 @@ class GuiBridge(QObject):
             self._status_title = "Нет конфига"
             self._status_sub = "Загрузите конфиг"
             self._power_text = "Подключить"
+            self._can_reconnect = False
             self.statusTitleChanged.emit()
             self.statusSubChanged.emit()
             self.powerTextChanged.emit()
+            self.canReconnectChanged.emit()
 
     @Slot()
     def saveSettings(self) -> None:
@@ -960,9 +979,11 @@ class GuiBridge(QObject):
         self._status_title = "Ошибка"
         self._status_sub = err[:80]
         self._status_color = _C_DANGER
+        self._can_reconnect = bool(self._active or self._kill_switch_on)
         self.statusTitleChanged.emit()
         self.statusSubChanged.emit()
         self.statusColorChanged.emit()
+        self.canReconnectChanged.emit()
         self._finish_await_status()
 
     def _apply_status(self, st: dict[str, Any], *, force: bool = False) -> None:
@@ -1025,12 +1046,14 @@ class GuiBridge(QObject):
         self._status_sub = view.subtitle
         self._status_color = view.color
         self._power_text = view.power_text
+        self._can_reconnect = bool(view.can_reconnect)
 
         self.activeChanged.emit()
         self.statusTitleChanged.emit()
         self.statusSubChanged.emit()
         self.statusColorChanged.emit()
         self.powerTextChanged.emit()
+        self.canReconnectChanged.emit()
         if self._await_status:
             if self._busy_intent == "on" and (singbox or tun):
                 self._finish_await_status()

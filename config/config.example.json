@@ -9,8 +9,8 @@
   "watchdog_interval": 15,
   "watchdog_max_retries": 0,
   "kill_switch": true,
-  "git_proxy": false,
-  "git_via": "http",
+  "git_proxy": true,
+  "git_via": "tun",
   "docker_proxy": false,
   "server": {
     "host": "YOUR_VPS_IP_OR_HOSTNAME",

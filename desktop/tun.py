@@ -123,6 +123,7 @@ def _is_tun_iface(name: str) -> bool:
 
 TUN_IFACE_NAME = "ergoms-secure-connection-tun"
 TUN_ADDR_PREFIX = "172.19."
+TUN_LAN_CIDR = "172.19.0.0/16"
 
 _FOREIGN_VPN = (
     "amnezia",
@@ -275,11 +276,35 @@ def wait_tun_iface(*, timeout: float = 20.0) -> int | None:
         return None
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        idx = _win_if_index_by_alias(TUN_IFACE_NAME)
+        idx = _win_if_index_by_alias(TUN_IFACE_NAME, require_up=True)
         if idx:
             return idx
         time.sleep(0.25)
     return None
+
+
+def remove_stale_tun_adapter(*, log: LogFn = noop) -> bool:
+    """Drop a leftover Wintun NIC so the next start can create TUN."""
+    if sys.platform != "win32":
+        return False
+    idx = _win_if_index_by_alias(TUN_IFACE_NAME, require_up=False)
+    if not idx:
+        return False
+    log(f"убираю зависший TUN «{TUN_IFACE_NAME}» if={idx}")
+    for args in (
+        ["netsh", "interface", "set", "interface", f"name={TUN_IFACE_NAME}", "admin=disabled"],
+        ["netsh", "interface", "delete", "interface", f"name={TUN_IFACE_NAME}"],
+    ):
+        try:
+            procutil.run(args, timeout=8)
+        except OSError:
+            continue
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline:
+        if not _win_if_index_by_alias(TUN_IFACE_NAME, require_up=False):
+            return True
+        time.sleep(0.2)
+    return _win_if_index_by_alias(TUN_IFACE_NAME, require_up=False) is None
 
 
 def underlay_ifaces() -> list[tuple[int, int, str]]:
@@ -299,14 +324,22 @@ def underlay_ifaces() -> list[tuple[int, int, str]]:
     return out
 
 
-def _win_if_index_by_alias(alias: str) -> int | None:
+def _win_if_index_by_alias(alias: str, *, require_up: bool = False) -> int | None:
+    """Index of a named NIC. First-time Wintun is often not 'connected' yet."""
     want = (alias or "").strip().lower()
     if not want:
         return None
+    fallback: int | None = None
     for iface in netsh_ipv4_interfaces():
-        if iface.up and iface.name.lower() == want:
+        if iface.name.lower() != want:
+            continue
+        if iface.up:
             return iface.idx
-    return None
+        if fallback is None:
+            fallback = iface.idx
+    if require_up:
+        return None
+    return fallback
 
 
 TUN_SPLIT_HOPS = ("172.19.0.1", "172.19.0.2")
@@ -709,6 +742,7 @@ def _direct_python_paths() -> list[str]:
 
 
 RUSTDESK_PORTS = [21114, 21115, 21116, 21117, 21118, 21119]
+RUSTDESK_PROCS = ["rustdesk.exe", "rustdesk_service.exe"]
 
 
 class TunManager:

@@ -62,11 +62,21 @@ Item {
         }
 
         PrimaryButton {
+            visible: bridge.canReconnect
+            Layout.fillWidth: true
+            Layout.preferredHeight: visible ? 50 : 0
+            text: "Переподключить"
+            primary: true
+            enabled: !bridge.busy
+            onClicked: bridge.reconnectConnection()
+        }
+
+        PrimaryButton {
             Layout.fillWidth: true
             Layout.preferredHeight: 50
             text: bridge.powerText
-            primary: !bridge.active
-            danger: bridge.active
+            primary: !bridge.active && !bridge.canReconnect
+            danger: bridge.active || bridge.canReconnect
             enabled: !bridge.busy
             onClicked: bridge.toggleConnection()
         }
