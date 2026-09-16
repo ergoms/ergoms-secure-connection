@@ -40,6 +40,11 @@
     "rules": [
       {
         "inbound": ["vless-in"],
+        "port": [21114, 21115, 21116, 21117, 21118, 21119],
+        "outbound": "direct"
+      },
+      {
+        "inbound": ["vless-in"],
         "action": "sniff",
         "timeout": "1s"
       }

@@ -467,14 +467,15 @@ def _vless_outbound(
     *,
     bind_iface: str,
     use_office_proxy: bool,
+    tag: str = "proxy",
+    vision: bool = True,
 ) -> dict[str, Any]:
     outbound: dict[str, Any] = {
         "type": "vless",
-        "tag": "proxy",
+        "tag": tag,
         "server": server_host,
         "server_port": int(transport["port"]),
         "uuid": transport["uuid"],
-        "flow": "xtls-rprx-vision",
         "packet_encoding": "xudp",
         "tls": {
             "enabled": True,
@@ -487,6 +488,8 @@ def _vless_outbound(
             },
         },
     }
+    if vision:
+        outbound["flow"] = "xtls-rprx-vision"
     if use_office_proxy:
         outbound["detour"] = "squid"
     elif bind_iface:
@@ -535,20 +538,33 @@ def _host_is_ip(host: str) -> bool:
         return False
 
 
-def rustdesk_hairpin_rules(server_host: str) -> list[dict[str, Any]]:
-    """Reach a RustDesk relay on the same VPS as the VPN (IP and hostname)."""
+def rustdesk_hairpin_rules(
+    server_host: str, *, outbound: str = "proxy"
+) -> list[dict[str, Any]]:
+    """Reach a RustDesk relay on the same VPS as the VPN (IP and hostname).
+
+    Unlike ssh, the destination keeps the VPS WAN address: hbbr answers a peer
+    coming from 127.0.0.1 with its admin console and hangs up, so a relayed
+    session dies with "Failed to receive public key". The VPS holds its WAN
+    address on ens3, so the hairpin resolves locally anyway.
+    """
     host = (server_host or "").strip()
     vps_ip = resolve_host(host) if host else ""
     rules: list[dict[str, Any]] = []
     if vps_ip:
-        rules.append(_vps_loopback_rule(vps_ip, port=RUSTDESK_PORTS))
+        rules.append(
+            {
+                "ip_cidr": [f"{vps_ip}/32"],
+                "port": RUSTDESK_PORTS,
+                "outbound": outbound,
+            }
+        )
     if host and not _host_is_ip(host) and host != vps_ip:
         rules.append(
             {
                 "domain": [host],
                 "port": RUSTDESK_PORTS,
-                "outbound": "proxy",
-                "override_address": "127.0.0.1",
+                "outbound": outbound,
             }
         )
     return rules
