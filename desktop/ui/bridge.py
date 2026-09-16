@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from PySide6.QtCore import (
+    Q_ARG,
     Property,
     QMetaObject,
     QObject,
@@ -19,44 +21,31 @@ from PySide6.QtCore import (
     QTimer,
     Signal,
     Slot,
-    Q_ARG,
 )
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlPropertyMap
 from PySide6.QtWidgets import QFileDialog, QInputDialog, QLineEdit
 
-from desktop import __version__
-from desktop import autostart
-from desktop import procutil
+from desktop import __version__, autostart
 from desktop.branding import ENV_RESUME, env
 from desktop.client import OpsClient
-from desktop.config_crypto import MAGIC, decrypt_config
 from desktop.config_io import (
     apply_config,
     config_is_ready,
-    default_config_template,
-    ensure_config_defaults,
-    get_tun_enabled,
     infer_corporate,
-    install_amnezia_conf,
     load_config,
-    looks_like_wg_conf,
-    merge_imported_config,
-    migrate_legacy_awg_json,
-    read_awg_source_name,
-    save_config,
 )
+from desktop.lifecycle.actions import Action, action_from_resume
 from desktop.paths import Paths, gui_command
+from desktop.proc_net import list_processes, list_services
+from desktop.route_analyzer import analyze_process, analyze_service, analyze_token
+from desktop.route_tokens import token_payload
 from desktop.services.connection import ConnectionService
 from desktop.services.elevation import ElevationService
 from desktop.services.settings import SettingsService
 from desktop.services.status import C_MUTED, present_status
-from desktop.proc_net import list_processes, list_services
-from desktop.route_analyzer import analyze_process, analyze_service, analyze_token
-from desktop.route_tokens import token_payload
 from desktop.ui.settings_map import (
     apply_mode_to_settings,
-    apply_settings_to_cfg,
     cfg_to_settings,
     settings_defaults,
 )
@@ -68,21 +57,6 @@ _C_ACCENT = "#2dd4a8"
 _C_OK = "#2dd4a8"
 _C_WARN = "#e6c07b"
 _C_DANGER = "#f07178"
-
-
-def _scope_label(scope: str) -> str:
-    return {"full": "Всё", "github": "GitHub"}.get(scope, scope or "—")
-
-
-def _json_has_awg(data: Any) -> bool:
-    if not isinstance(data, dict):
-        return False
-    if isinstance(data.get("amneziawg"), dict) and data["amneziawg"]:
-        return True
-    tr = data.get("transport")
-    return isinstance(tr, dict) and isinstance(tr.get("amneziawg"), dict) and bool(
-        tr.get("amneziawg")
-    )
 
 
 def _analyze_spec(spec: str) -> dict[str, Any]:
@@ -102,14 +76,6 @@ def _analyze_spec(spec: str) -> dict[str, Any]:
     if "\\" in name or "/" in name:
         path = name
     return analyze_process(name=name, path=path)
-
-
-def _awg_import_note(migrated: bool, incoming: Any, conf_path: Path) -> str:
-    if migrated:
-        return " AmneziaWG сохранён в amneziawg.conf."
-    if _json_has_awg(incoming) and not conf_path.is_file():
-        return " AWG из JSON пропущен — загрузите .conf."
-    return ""
 
 
 class _BgTask(QRunnable):
@@ -208,8 +174,9 @@ class GuiBridge(QObject):
         self._overrides_cleared = False
         self._await_status = False
         self._busy_intent = ""
-        self._status_pending = False
-        self._status_pending_force = False
+        self._busy_action: Action | None = None
+        self._status_queued = False
+        self._status_force = False
 
         self._settings = QQmlPropertyMap(self)
         for key, value in settings_defaults().items():
@@ -237,20 +204,29 @@ class GuiBridge(QObject):
         self._status_timer.setSingleShot(True)
         self._status_timer.timeout.connect(self._on_poll_tick)
         self._schedulePoll.connect(self._status_timer.start)
+        self._busy_timer = QTimer(self)
+        self._busy_timer.setSingleShot(True)
+        self._busy_timer.timeout.connect(self._busy_timed_out)
         QTimer.singleShot(300, self._on_poll_tick)
-        resume = env(ENV_RESUME).lower()
         if autostart.launched_from_autostart():
             self._start_hidden = True
-        if resume == "on":
+        resume_action = action_from_resume(env(ENV_RESUME).lower())
+        if resume_action is Action.CONNECT:
             QTimer.singleShot(400, self.enableConnection)
-        elif resume == "off":
+        elif resume_action is Action.DISCONNECT:
             QTimer.singleShot(400, self.disableConnection)
-        elif resume == "tun-on":
+        elif resume_action is Action.TUN_ON:
             QTimer.singleShot(400, self.enableTun)
-        elif resume == "tun-off":
+        elif resume_action is Action.TUN_OFF:
             QTimer.singleShot(400, self.disableTun)
         elif autostart.launched_from_autostart() and self._config_ready:
             QTimer.singleShot(600, self.enableConnection)
+        try:
+            if not self.client._vpn_process_up():
+                self.client.teardown_overrides_if_dirty()
+                self._overrides_cleared = True
+        except Exception:  # noqa: BLE001
+            pass
 
     # ── properties ──────────────────────────────────────────────────────
 
@@ -408,15 +384,17 @@ class GuiBridge(QObject):
         except Exception as exc:  # noqa: BLE001
             self.toast.emit(str(exc), "error")
 
-    def _handoff_if_needed(self, action: str) -> bool:
+    def _handoff_if_needed(self, action: Action | str) -> bool:
         """Relaunch elevated once. True = caller must stop (handoff or cancel)."""
-        if not self.elevation.needed(action):
+        key = action.elevation_key if isinstance(action, Action) else action
+        if not self.elevation.needed(key):
             return False
-        flags = [f"--{action}"]
-        if action == "on":
-            flags = ["--connect"]
-        elif action == "off":
-            flags = ["--disconnect"]
+        flags = [action.cli_flag] if isinstance(action, Action) else [f"--{action}"]
+        if not isinstance(action, Action):
+            if action == "on":
+                flags = ["--connect"]
+            elif action == "off":
+                flags = ["--disconnect"]
         if self._start_hidden:
             flags.append("--autostart")
         ok = self.elevation.relaunch(
@@ -439,13 +417,13 @@ class GuiBridge(QObject):
             self.toast.emit("Загрузите конфиг", "warn")
             return
         if self._active or self._kill_switch_on:
-            if self._handoff_if_needed("off"):
+            if self._handoff_if_needed(Action.DISCONNECT):
                 return
-            self._run_bg(self.connection.disable, waiting="Отключение…")
+            self._run_bg(self.connection.disable, Action.DISCONNECT)
         else:
-            if self._handoff_if_needed("on"):
+            if self._handoff_if_needed(Action.CONNECT):
                 return
-            self._run_bg(self.connection.enable, waiting="Подключение…")
+            self._run_bg(self.connection.enable, Action.CONNECT)
 
     @Slot()
     def enableConnection(self) -> None:
@@ -454,17 +432,17 @@ class GuiBridge(QObject):
         if not self._config_ready:
             self.toast.emit("Загрузите конфиг", "warn")
             return
-        if self._handoff_if_needed("on"):
+        if self._handoff_if_needed(Action.CONNECT):
             return
-        self._run_bg(self.connection.enable, waiting="Подключение…")
+        self._run_bg(self.connection.enable, Action.CONNECT)
 
     @Slot()
     def disableConnection(self) -> None:
         if self._busy:
             return
-        if self._handoff_if_needed("off"):
+        if self._handoff_if_needed(Action.DISCONNECT):
             return
-        self._run_bg(self.connection.disable, waiting="Отключение…")
+        self._run_bg(self.connection.disable, Action.DISCONNECT)
 
     @Slot()
     def reconnectConnection(self) -> None:
@@ -473,9 +451,9 @@ class GuiBridge(QObject):
         if not self._config_ready and not self._active and not self._kill_switch_on:
             self.toast.emit("Загрузите конфиг", "warn")
             return
-        if self._handoff_if_needed("on"):
+        if self._handoff_if_needed(Action.RECONNECT):
             return
-        self._run_bg(self.connection.reconnect, waiting="Переподключение…")
+        self._run_bg(self.connection.reconnect, Action.RECONNECT)
 
     @Slot()
     def toggleTun(self) -> None:
@@ -490,17 +468,17 @@ class GuiBridge(QObject):
     def enableTun(self) -> None:
         if self._busy:
             return
-        if self._handoff_if_needed("tun-on"):
+        if self._handoff_if_needed(Action.TUN_ON):
             return
-        self._run_bg(self.connection.enable_tun, waiting="Включаю TUN…")
+        self._run_bg(self.connection.enable_tun, Action.TUN_ON)
 
     @Slot()
     def disableTun(self) -> None:
         if self._busy:
             return
-        if self._handoff_if_needed("tun-off"):
+        if self._handoff_if_needed(Action.TUN_OFF):
             return
-        self._run_bg(self.connection.disable_tun, waiting="Выключаю TUN…")
+        self._run_bg(self.connection.disable_tun, Action.TUN_OFF)
 
     @Slot()
     def loadSettings(self) -> None:
@@ -540,22 +518,16 @@ class GuiBridge(QObject):
         for key, value in cfg_to_settings(cfg).items():
             self._settings.insert(key, value)
         loaded = bool(self._settings.value("awgLoaded"))
-        source = read_awg_source_name(self.paths.config_path)
+        source = self.settings_svc.awg_source_name()
         if loaded:
             self._settings.insert("awgSummary", source or "amneziawg.conf")
         self._sync_config_ready()
 
     def _write_settings_to_disk(self) -> None:
-        if self.paths.config_path.is_file():
-            cfg = load_config(self.paths.config_path)
-        else:
-            cfg = default_config_template()
-        apply_settings_to_cfg(
-            cfg, self._settings.value, corporate=bool(self._corporate)
+        cfg = self.settings_svc.write_from_map(
+            self._settings.value, corporate=bool(self._corporate)
         )
-        save_config(self.paths.config_path, cfg)
-        apply_config(self.paths.config_path, force=True)
-        self._apply_cfg_to_settings(load_config(self.paths.config_path, force=True))
+        self._apply_cfg_to_settings(cfg)
 
     @Slot(bool)
     def applyCorporateMode(self, on: bool) -> None:
@@ -593,13 +565,11 @@ class GuiBridge(QObject):
             self.toast.emit(str(exc), "error")
 
     def _import_config_path(self, src: Path) -> None:
+        from desktop.config_crypto import MAGIC
+
         raw = src.read_bytes()
+        password = None
         encrypted = raw.startswith(MAGIC) or src.suffix.lower() == ".enc"
-        existing = (
-            load_config(self.paths.config_path)
-            if self.paths.config_path.is_file()
-            else default_config_template()
-        )
         if encrypted:
             password, ok = QInputDialog.getText(
                 None,
@@ -609,34 +579,17 @@ class GuiBridge(QObject):
             )
             if not ok or not password:
                 return
-            incoming = decrypt_config(raw, password)
-            migrated = migrate_legacy_awg_json(incoming, self.paths.awg_conf_path)
-            cfg = merge_imported_config(existing, incoming)
-            extra = _awg_import_note(migrated, incoming, self.paths.awg_conf_path)
-            self._commit_imported_cfg(cfg, extra=extra)
-            return
-        text = raw.decode("utf-8-sig")
-        if looks_like_wg_conf(text) or src.suffix.lower() == ".conf":
-            self._import_awg_conf_text(text, source_name=src.name)
-            return
-        try:
-            same_live = src.resolve() == self.paths.config_path.resolve()
-        except OSError:
-            same_live = False
-        if same_live:
-            apply_config(self.paths.config_path, force=True)
+        result = self.settings_svc.import_path(src, password=password)
+        if result.kind == "awg":
             self.loadSettings()
-            self._enqueue_log("Конфиг загружен")
-            self.toast.emit("Конфиг загружен", "info")
+            self._enqueue_log("AmneziaWG .conf загружен")
+            self.toast.emit("AmneziaWG .conf загружен", "info")
             self._refresh_status(force=True)
             return
-        data = json.loads(text)
-        if not isinstance(data, dict):
-            raise ValueError("Файл не JSON-объект")
-        migrated = migrate_legacy_awg_json(data, self.paths.awg_conf_path)
-        cfg = merge_imported_config(existing, data)
-        extra = _awg_import_note(migrated, data, self.paths.awg_conf_path)
-        self._commit_imported_cfg(cfg, extra=extra)
+        self.loadSettings()
+        self._enqueue_log("Конфиг загружен")
+        self.toast.emit("Конфиг загружен" + result.extra, "info")
+        self._refresh_status(force=True)
 
     @Slot()
     def importAwgConfFile(self) -> None:
@@ -658,29 +611,14 @@ class GuiBridge(QObject):
             self.toast.emit(str(exc), "error")
 
     def _import_awg_conf_text(self, text: str, *, source_name: str = "") -> None:
-        install_amnezia_conf(self.paths.config_path, text, source_name=source_name)
-        apply_config(self.paths.config_path, force=True)
+        self.settings_svc.import_awg_text(text, source_name=source_name)
         self.loadSettings()
         self._enqueue_log("AmneziaWG .conf загружен")
         self.toast.emit("AmneziaWG .conf загружен", "info")
         self._refresh_status(force=True)
 
-    def _commit_imported_cfg(self, cfg: dict[str, Any], *, extra: str = "") -> None:
-        cfg = ensure_config_defaults(cfg)
-        self.paths.ensure_dirs()
-        save_config(self.paths.config_path, cfg)
-        apply_config(self.paths.config_path, force=True)
-        self.loadSettings()
-        self._enqueue_log("Конфиг загружен")
-        self.toast.emit("Конфиг загружен" + extra, "info")
-        self._refresh_status(force=True)
-
     @Slot()
     def exportConfigFile(self) -> None:
-        if self.paths.config_path.is_file():
-            cfg = ensure_config_defaults(load_config(self.paths.config_path))
-        else:
-            cfg = default_config_template()
         path, _ = QFileDialog.getSaveFileName(
             None,
             "Сохранить config.json",
@@ -690,10 +628,8 @@ class GuiBridge(QObject):
         if not path:
             return
         dest = Path(path)
-        if dest.suffix.lower() != ".json":
-            dest = dest.with_suffix(".json")
         try:
-            save_config(dest, cfg)
+            self.settings_svc.export_to(dest)
             self._enqueue_log(f"Копия конфига → {dest}")
             self.toast.emit("JSON сохранён. AmneziaWG — отдельный .conf", "info")
         except Exception as exc:  # noqa: BLE001
@@ -813,19 +749,26 @@ class GuiBridge(QObject):
         self._busy_text = waiting if busy else ""
         self.busyChanged.emit()
         self.busyTextChanged.emit()
+        if busy:
+            self._busy_timer.start(180_000)
+        else:
+            self._busy_timer.stop()
 
-    def _run_bg(self, fn: Callable[[], None], waiting: str = "Подождите…") -> None:
+    @Slot()
+    def _busy_timed_out(self) -> None:
+        if not self._busy:
+            return
+        self._enqueue_log("операция слишком долгая — снимаю блокировку кнопок")
+        self._finish_await_status()
+        self._refresh_status(force=True)
+
+    def _run_bg(self, fn: Callable[[], None], action: Action) -> None:
         if self._busy:
             return
-        wait = (waiting or "").lower()
-        if "отключ" in wait:
-            self._busy_intent = "off"
-        elif "подключ" in wait:
-            self._busy_intent = "on"
-        else:
-            self._busy_intent = ""
+        self._busy_action = action
+        self._busy_intent = action.busy_intent
         self._await_status = True
-        self._set_busy(True, waiting)
+        self._set_busy(True, action.waiting_text)
 
         def work() -> None:
             err = ""
@@ -840,19 +783,17 @@ class GuiBridge(QObject):
 
     @Slot(str)
     def _on_bg_finished(self, err: str) -> None:
-        waiting = self._busy_text
+        action = self._busy_action
         if err:
             self._await_status = False
             self._busy_intent = ""
+            self._busy_action = None
             self._set_busy(False)
             self.toast.emit(err, "error")
             self._refresh_status(force=True)
             return
-        wait = (waiting or "").lower()
-        if "подключ" not in wait:
-            self._apply_optimistic(waiting)
         self._refresh_status(force=True)
-        if "подключ" in wait or "включаю tun" in wait:
+        if action in (Action.CONNECT, Action.RECONNECT, Action.TUN_ON):
             from desktop.leak_shield import consume_browser_toast
 
             try:
@@ -864,56 +805,12 @@ class GuiBridge(QObject):
             except Exception:  # noqa: BLE001
                 pass
 
-    def _apply_optimistic(self, waiting: str) -> None:
-        wait = (waiting or "").lower()
-        if "отключ" in wait:
-            self._apply_status(
-                {
-                    "singbox_running": False,
-                    "tun_running": False,
-                    "socks_up": False,
-                    "http_up": False,
-                    "pac_up": False,
-                    "kill_switch": False,
-                    "kill_switch_applied": False,
-                    "socks_scope": "full" if self._scope == "Всё" else "github",
-                    "server_target": self._server_target,
-                    "watchdog_running": False,
-                    "reverse_ssh_running": self._reverse_ssh_up,
-                    "reverse_ssh_listen": self._reverse_ssh_port,
-                    "socks_port": self._socks_port,
-                    "http_port": self._http_port,
-                    "pac_port": self._pac_port,
-                },
-                force=True,
-            )
-        elif "подключ" in wait:
-            self._apply_status(
-                {
-                    "singbox_running": True,
-                    "tun_running": True if get_tun_enabled() else self._tun,
-                    "socks_up": True,
-                    "http_up": True,
-                    "pac_up": True,
-                    "kill_switch": self._kill_switch_on,
-                    "kill_switch_applied": self._kill_switch_on,
-                    "socks_scope": "full" if self._scope == "Всё" else "github",
-                    "server_target": self._server_target,
-                    "watchdog_running": True,
-                    "reverse_ssh_running": self._reverse_ssh_up,
-                    "reverse_ssh_listen": self._reverse_ssh_port,
-                    "socks_port": self._socks_port,
-                    "http_port": self._http_port,
-                    "pac_port": self._pac_port,
-                },
-                force=True,
-            )
-
     def _finish_await_status(self) -> None:
-        if not self._await_status:
+        if not self._await_status and not self._busy:
             return
         self._await_status = False
         self._busy_intent = ""
+        self._busy_action = None
         self._set_busy(False)
 
     @Slot()
@@ -924,48 +821,44 @@ class GuiBridge(QObject):
         if self._closing:
             return
         if self._status_busy:
-            self._status_pending = True
-            if force:
-                self._status_pending_force = True
+            self._status_queued = True
+            self._status_force = self._status_force or force
             return
+        self._status_busy = True
+        want_force = force or self._status_force
+        self._status_force = False
 
         def work() -> None:
-            self._status_busy = True
             try:
-                want_force = force
-                while True:
-                    force_now = want_force or self._status_pending_force
-                    self._status_pending = False
-                    self._status_pending_force = False
-                    try:
-                        st = self.client.status(include_git=False)
-                        err = ""
-                        if (
-                            isinstance(st, dict)
-                            and not self._overrides_cleared
-                            and not (st.get("singbox_running") or st.get("tun_running"))
-                        ):
-                            self.client.teardown_overrides_if_dirty()
-                            self._overrides_cleared = True
-                    except Exception as exc:  # noqa: BLE001
-                        st = None
-                        err = str(exc)
-                    if self._closing:
-                        return
-                    if err:
-                        self._statusFailed.emit(err)
-                    elif st is not None:
-                        self._statusReady.emit(st, force_now)
-                    if not self._status_pending:
-                        break
-                    want_force = True
-            finally:
-                self._status_busy = False
-            delay = 5000 if self._page == "home" and not self._busy else 10000
-            if not self._closing:
-                self._schedulePoll.emit(delay)
+                st = self.client.status(include_git=False)
+                err = ""
+            except Exception as exc:  # noqa: BLE001
+                st = None
+                err = str(exc)
+            if self._closing:
+                return
+            if err:
+                self._statusFailed.emit(err)
+            elif st is not None:
+                self._statusReady.emit(st, want_force)
+            QMetaObject.invokeMethod(self, "_status_work_done", Qt.QueuedConnection)
 
         self._spawn(work)
+
+    @Slot()
+    def _status_work_done(self) -> None:
+        queued = self._status_queued
+        force = self._status_force
+        self._status_busy = False
+        self._status_queued = False
+        self._status_force = False
+        if self._closing:
+            return
+        if queued:
+            self._refresh_status(force=force)
+            return
+        delay = 5000 if self._page == "home" and not self._busy else 10000
+        self._schedulePoll.emit(delay)
 
     @Slot(object, bool)
     def _on_status_ready(self, st: object, force: bool) -> None:
@@ -987,27 +880,17 @@ class GuiBridge(QObject):
         self._finish_await_status()
 
     def _apply_status(self, st: dict[str, Any], *, force: bool = False) -> None:
-        singbox = bool(st.get("singbox_running"))
-        tun = bool(st.get("tun_running"))
+        view = present_status(st, config_ready=self._config_ready, corporate=self._corporate)
+        singbox = view.singbox_up
+        tun = view.tun
+        connecting = bool(st.get("connecting")) or view.title == "Подключение…"
         tun_wanted = bool(st.get("tun_wanted", tun))
         tun_ready = bool(st.get("tun_ready")) if "tun_ready" in st else (not tun_wanted or tun)
-        connecting = bool(st.get("connecting"))
-        socks_up = bool(st.get("socks_up")) if "socks_up" in st else singbox
-        http_up = bool(st.get("http_up")) if "http_up" in st else singbox
-        pac_up = bool(st.get("pac_up")) if "pac_up" in st else singbox
-        active = bool(singbox or tun)
-        scope = _scope_label(str(st.get("socks_scope") or ""))
-        target = str(st.get("server_target") or st.get("ssh_target") or "—")
-        ks_on = bool(st.get("kill_switch_applied") or (active and st.get("kill_switch")))
         probe_err = str(st.get("exit_probe_error") or "")
-        probe_hint = str(st.get("exit_probe_hint") or "")
-        sig = (
-            f"{singbox}|{tun}|{active}|{socks_up}|{http_up}|{pac_up}|{scope}|{target}"
-            f"|{st.get('watchdog_running')}|{st.get('reverse_ssh_running')}"
-            f"|{st.get('reverse_ssh_listen')}|{ks_on}|{probe_err}|{probe_hint}"
-            f"|{connecting}|{tun_ready}|{tun_wanted}"
-        )
-        if not force and (sig == self._last_status_sig or (self._busy and not self._await_status)):
+        if not force and (
+            view.signature == self._last_status_sig
+            or (self._busy and not self._await_status)
+        ):
             return
         if self._await_status and self._busy_intent == "on" and not (singbox or tun):
             return
@@ -1020,8 +903,7 @@ class GuiBridge(QObject):
             return
         if self._await_status and self._busy_intent == "off" and (singbox or tun):
             return
-        self._last_status_sig = sig
-        view = present_status(st, config_ready=self._config_ready, corporate=self._corporate)
+        self._last_status_sig = view.signature
         self._active = view.active
         self._tun = view.tun
         self._kill_switch_on = view.kill_switch_on

@@ -218,18 +218,17 @@ def _run_cli(cmd: str, rest: list[str]) -> int:
     def log(msg: str) -> None:
         print(f"[ERGOMS SECURE CONNECTION] {msg}", flush=True)
 
+    from desktop.lifecycle.actions import action_from_cli
+
     client = OpsClient(log=log)
     try:
-        if cmd == "init":
+        action = action_from_cli(cmd)
+        if action is not None:
+            if _elevate_cli_if_needed(client, action.elevation_key, rest):
+                return 0
+            getattr(client, action.client_method)()
+        elif cmd == "init":
             client.init()
-        elif cmd in ("on", "start"):
-            if _elevate_cli_if_needed(client, "on", rest):
-                return 0
-            client.enable()
-        elif cmd in ("off", "stop"):
-            if _elevate_cli_if_needed(client, "off", rest):
-                return 0
-            client.disable()
         elif cmd == "status":
             st = client.status()
             for line in st["lines"]:
@@ -247,14 +246,6 @@ def _run_cli(cmd: str, rest: list[str]) -> int:
             from desktop.sandbox import run_sandbox
 
             return run_sandbox(client, log=log)
-        elif cmd == "tun-on":
-            if _elevate_cli_if_needed(client, "tun-on", rest):
-                return 0
-            client.enable_tun()
-        elif cmd == "tun-off":
-            if _elevate_cli_if_needed(client, "tun-off", rest):
-                return 0
-            client.disable_tun()
         elif cmd == "reverse-on":
             client.enable_reverse_ssh()
         elif cmd == "reverse-off":
@@ -279,9 +270,8 @@ def _run_cli(cmd: str, rest: list[str]) -> int:
         elif cmd == "docker-test":
             return client.docker_test()
         elif cmd == "watch":
-            from desktop.watchdog import run_watch_forever
-
             from desktop.branding import ENV_WATCHDOG_CHILD, env
+            from desktop.watchdog import run_watch_forever
 
             daemon = "--daemon" in rest or env(ENV_WATCHDOG_CHILD).lower() in (
                 "1",
@@ -298,14 +288,6 @@ def _run_cli(cmd: str, rest: list[str]) -> int:
         print(f"[ERGOMS SECURE CONNECTION] ERROR: {exc}", file=sys.stderr)
         return 1
     return 0
-
-
-_RESUME_FLAGS = {
-    "--connect": "on",
-    "--disconnect": "off",
-    "--tun-on": "tun-on",
-    "--tun-off": "tun-off",
-}
 
 
 def _elevate_cli_if_needed(client: object, action: str, rest: list[str]) -> bool:
@@ -336,21 +318,16 @@ def _run_gui() -> int:
         return _show_help() or 1
     from desktop.branding import ENV_RESUME, env
     from desktop.elevate import ensure_elevated_gui
+    from desktop.lifecycle.actions import action_from_resume
 
     flags: list[str] = []
     from desktop import autostart
 
     if autostart.launched_from_autostart():
         flags.append("--autostart")
-    resume = env(ENV_RESUME).lower()
-    flags.extend(
-        {
-            "on": ["--connect"],
-            "off": ["--disconnect"],
-            "tun-on": ["--tun-on"],
-            "tun-off": ["--tun-off"],
-        }.get(resume, [])
-    )
+    resume_action = action_from_resume(env(ENV_RESUME))
+    if resume_action is not None:
+        flags.append(resume_action.cli_flag)
     from desktop.instance import activate_existing
 
     if activate_existing():
@@ -378,13 +355,15 @@ def main(argv: list[str] | None = None) -> int:
     autostart = False
     resume = ""
     kept: list[str] = []
+    from desktop.lifecycle.actions import action_from_flag
+
     for arg in argv:
         if arg == "--autostart":
             autostart = True
             continue
-        mapped = _RESUME_FLAGS.get(arg)
+        mapped = action_from_flag(arg)
         if mapped:
-            resume = mapped
+            resume = mapped.resume
             continue
         kept.append(arg)
     argv = kept

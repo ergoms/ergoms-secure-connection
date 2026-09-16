@@ -1,0 +1,93 @@
+"""TUN / SOCKS readiness from sing-box log tails. Pure functions, no process state."""
+
+from __future__ import annotations
+
+import sys
+import time
+from collections.abc import Callable
+from typing import Any
+
+from desktop import procutil
+from desktop.tun import wait_tun_iface
+from lib.netutil import port_open
+
+LogFn = Callable[[str], None]
+
+
+def tun_adapter_busy(lines: list[str]) -> bool:
+    text = "\n".join(lines).lower()
+    return (
+        "configure tun interface" in text
+        or "wintun" in text
+        or "take too much time" in text
+    )
+
+
+def tun_log_started(lines: list[str]) -> bool:
+    for raw in lines:
+        low = raw.lower()
+        if "inbound/tun" in low and "started at" in low:
+            return True
+    return False
+
+
+def tun_still_opening(lines: list[str]) -> bool:
+    if tun_log_started(lines):
+        return False
+    tail = "\n".join(lines).lower()
+    return "take too much time" in tail or "configure tun interface" in tail
+
+
+def tun_inbound_ready(
+    lines: list[str],
+    *,
+    platform: str | None = None,
+    iface_up: Callable[[], Any] | None = None,
+) -> bool:
+    plat = sys.platform if platform is None else platform
+    if plat != "win32":
+        return True
+    if tun_still_opening(lines):
+        return False
+    if tun_log_started(lines):
+        return True
+    probe = iface_up or (lambda: wait_tun_iface(timeout=0.05))
+    return bool(probe())
+
+
+def wait_ready(
+    *,
+    socks_port: int,
+    http_port: int,
+    enable_tun: bool,
+    pid: int | None,
+    log: LogFn,
+    tail: Callable[[int], list[str]],
+    live_pid: Callable[[], int | None],
+    timeout: float = 22.0,
+    platform: str | None = None,
+) -> bool:
+    deadline = time.monotonic() + timeout
+    interval = 0.05
+    socks_ok = False
+    extended = False
+    while time.monotonic() < deadline:
+        if port_open("127.0.0.1", socks_port, timeout=0.35):
+            socks_ok = True
+            lines = tail(60)
+            if not enable_tun or tun_inbound_ready(lines, platform=platform):
+                kind = "mixed + TUN" if enable_tun else "mixed"
+                log(f"sing-box слушает SOCKS :{socks_port} и HTTP :{http_port} ({kind})")
+                return True
+            if enable_tun and not extended and tun_still_opening(lines):
+                deadline = max(deadline, time.monotonic() + 15.0)
+                extended = True
+                log("Wintun ещё создаёт адаптер — жду, процесс не убиваю")
+        check = pid or live_pid()
+        if check and not procutil.pid_alive(check) and not live_pid():
+            return False
+        time.sleep(interval)
+        interval = min(interval * 1.3, 0.2)
+    if socks_ok and enable_tun:
+        log(f"sing-box слушает SOCKS :{socks_port}, но TUN ещё не поднялся")
+    return False

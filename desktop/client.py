@@ -8,9 +8,10 @@ import os
 import sys
 import threading
 import time
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from desktop import procutil
 from desktop.client_util import find_pythonw, pid_from_file, which
@@ -39,6 +40,8 @@ from desktop.git_proxy import git_get
 from desktop.integrations import IntegrationOps
 from desktop.kill_switch import is_applied as kill_switch_is_applied
 from desktop.kill_switch import state_path as kill_switch_state_path
+from desktop.lifecycle.pipeline import ConnectionPipeline
+from desktop.lifecycle.session import ConnectionSession
 from desktop.logutil import noop
 from desktop.paths import Paths, is_frozen, self_command
 from desktop.probes import ProbeOps
@@ -85,18 +88,11 @@ class OpsClient(ConnectionOps, ProbeOps, IntegrationOps):
             log=self.log,
         )
         self.reverse_ssh = ReverseSshManager(self.paths, log=self.log)
+        self.session = ConnectionSession(log=self.log)
+        self.pipeline = ConnectionPipeline(self)
         self._atexit_done = False
         self._teardown_lock = threading.Lock()
-        self._exit_probe_error: str | None = None
-        self._exit_probe_hint: str | None = None
-        self._pending_win_tun = False
-        self._pending_awg_tun = False
         self._awg_tun_kwargs: dict[str, Any] | None = None
-        self._defer_win_ks = False
-        self._fail_closed = False
-        self._hold_watchdog = False
-        self._want_watchdog = False
-        self._pending_allow: list[str] = []
         atexit.register(self._atexit_teardown)
         if startup_cleanup:
             try:
@@ -208,7 +204,10 @@ class OpsClient(ConnectionOps, ProbeOps, IntegrationOps):
             self._watchdog = TunnelWatchdog(
                 self,
                 log=self.log,
-                should_skip=lambda: bool(getattr(self, "_hold_watchdog", False)),
+                should_skip=lambda: bool(
+                    self.session.in_operation
+                    or self.session.snapshot.phase.holds_watchdog
+                ),
             )
         self._watchdog.set_desired(True)
         self._watchdog.start()
@@ -320,9 +319,7 @@ class OpsClient(ConnectionOps, ProbeOps, IntegrationOps):
             return bool((tun and elevate) or get_kill_switch())
         if kill_switch_is_applied():
             return True
-        if (tun and elevate) and (
-            self.singbox.running() or self.tun.running()
-        ):
+        if (tun and elevate) and self.singbox.running():
             return True
         return False
 
@@ -363,9 +360,11 @@ class OpsClient(ConnectionOps, ProbeOps, IntegrationOps):
             f"kill_switch       = {1 if info['kill_switch'] else 0}"
             + (" applied" if info["kill_switch_applied"] else "")
         )
-        info["exit_probe_error"] = self._exit_probe_error or ""
-        info["exit_probe_hint"] = self._exit_probe_hint or ""
-        info["fail_closed"] = bool(getattr(self, "_fail_closed", False))
+        snap = self.session.snapshot
+        info["exit_probe_error"] = snap.exit_probe_error
+        info["exit_probe_hint"] = snap.exit_probe_hint
+        info["fail_closed"] = bool(snap.fail_closed)
+        info["phase"] = snap.phase.value
         if info["exit_probe_error"]:
             lines.append(f"exit_probe       = FAIL {info['exit_probe_error']}")
         if include_git:
@@ -375,11 +374,6 @@ class OpsClient(ConnectionOps, ProbeOps, IntegrationOps):
             lines.append(f"git https.proxy = {info['git_https_proxy']}")
 
         self._status_fill_ports(info, lines)
-        if info.get("singbox_running"):
-            try:
-                self.ensure_browser_proxy()
-            except Exception:  # noqa: BLE001
-                pass
 
         # TUN inbound inside sing-box. tun_running is "we want TUN and process lives";
         # tun_ready is the adapter actually UP — otherwise UI says «Защищено» too early.
@@ -393,11 +387,8 @@ class OpsClient(ConnectionOps, ProbeOps, IntegrationOps):
                 info["tun_ready"] = bool(wait_tun_iface(timeout=0.05))
             else:
                 info["tun_ready"] = True
-        info["connecting"] = bool(
-            getattr(self, "_hold_watchdog", False)
-            or getattr(self, "_pending_win_tun", False)
-        )
-        info["tun_pid"] = self.tun.pid() or (
+        info["connecting"] = bool(self.session.snapshot.connecting)
+        info["tun_pid"] = (
             info["singbox_pid"] if info["tun_running"] and info["singbox_running"] else None
         )
         if info["tun_running"]:

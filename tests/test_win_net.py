@@ -106,11 +106,11 @@ def test_wait_ready_needs_tun_on_windows(
 
     logs: list[str] = []
     mgr = SingboxModeManager(tmp_path, tmp_path, tmp_path, log=logs.append)
-    monkeypatch.setattr("desktop.singbox_mode.sys.platform", "win32")
-    monkeypatch.setattr("desktop.singbox_mode.port_open", lambda *_a, **_k: True)
-    monkeypatch.setattr("desktop.singbox_mode.procutil.pid_alive", lambda _pid: True)
+    monkeypatch.setattr("desktop.singbox.readiness.sys.platform", "win32")
+    monkeypatch.setattr("desktop.singbox.readiness.port_open", lambda *_a, **_k: True)
+    monkeypatch.setattr("desktop.singbox.readiness.procutil.pid_alive", lambda _pid: True)
     monkeypatch.setattr(
-        "desktop.singbox_mode.wait_tun_iface", lambda timeout=0.05: None
+        "desktop.singbox.readiness.wait_tun_iface", lambda timeout=0.05: None
     )
     monkeypatch.setattr(mgr, "tail_log", lambda n=40: [])
     assert mgr._tun_inbound_ready() is False
@@ -118,7 +118,7 @@ def test_wait_ready_needs_tun_on_windows(
     assert any("TUN ещё не поднялся" in msg for msg in logs)
 
     monkeypatch.setattr(
-        "desktop.singbox_mode.wait_tun_iface", lambda timeout=0.05: 28
+        "desktop.singbox.readiness.wait_tun_iface", lambda timeout=0.05: 28
     )
     assert mgr._tun_inbound_ready() is True
     assert mgr._wait_ready(1080, 1088, enable_tun=True, pid=1, timeout=0.15) is True
@@ -152,7 +152,7 @@ def test_tun_inbound_ready_ignores_singbox_started_while_wintun_opens(
         "INFO sing-box started (0.00s)",
     ]
     monkeypatch.setattr(
-        "desktop.singbox_mode.wait_tun_iface", lambda timeout=0.05: 28
+        "desktop.singbox.readiness.wait_tun_iface", lambda timeout=0.05: 28
     )
     assert mgr._tun_log_started() is False
     assert mgr._tun_still_opening() is True

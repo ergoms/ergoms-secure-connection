@@ -68,10 +68,10 @@ def _build(
         return "203.0.113.10"
 
     with (
-        patch("desktop.singbox_mode.resolve_host", side_effect=_resolve),
-        patch("desktop.singbox_mode.detect_bind_interface", return_value=""),
-        patch("desktop.singbox_mode.iface_ipv4s", return_value=[]),
-        patch("desktop.singbox_mode._direct_python_paths", return_value=[]),
+        patch("desktop.singbox.manager.resolve_host", side_effect=_resolve),
+        patch("desktop.singbox.manager.detect_bind_interface", return_value=""),
+        patch("desktop.singbox.manager.iface_ipv4s", return_value=[]),
+        patch("desktop.singbox.manager._direct_python_paths", return_value=[]),
     ):
         return mgr.build_config(
             server_host="vps.example",
@@ -116,7 +116,7 @@ def test_require_transport_awg_without_reality_uuid() -> None:
 
 
 def test_rustdesk_hairpin_ip_and_hostname() -> None:
-    with patch("desktop.singbox_mode.resolve_host", return_value="203.0.113.10"):
+    with patch("desktop.singbox.manager.resolve_host", return_value="203.0.113.10"):
         rules = rustdesk_hairpin_rules("vps.example")
     assert any(
         "203.0.113.10/32" in (r.get("ip_cidr") or [])
@@ -505,3 +505,218 @@ def test_bypass_to_singbox_splits_suffix_and_domain() -> None:
     assert ".local" in suffixes
     assert ".lan" in suffixes
     assert "intranet.corp" in domains
+
+
+def _present(**st: Any):
+    from desktop.services.status import present_status
+
+    return present_status(st, config_ready=bool(st.pop("_ready", True)))
+
+
+def test_present_status_all_branches() -> None:
+    from desktop.services.status import C_ACCENT, C_DANGER, C_MUTED, C_OK, C_WARN
+
+    connecting = _present(
+        connecting=True, singbox_running=True, tun_wanted=True, tun_ready=False
+    )
+    assert (connecting.title, connecting.power_text, connecting.color) == (
+        "Подключение…",
+        "Отключить",
+        C_ACCENT,
+    )
+    assert connecting.can_reconnect is False
+
+    tun_not_ready = _present(
+        singbox_running=True, tun_wanted=True, tun_ready=False, tun_running=True
+    )
+    assert tun_not_ready.title == "Подключение…"
+
+    need_awg = _present(
+        singbox_running=True,
+        socks_up=True,
+        exit_probe_error="timeout",
+        exit_probe_hint="need-awg",
+    )
+    assert need_awg.title == "Нет выхода"
+    assert "AWG" in need_awg.subtitle
+    assert need_awg.can_reconnect is True
+    assert need_awg.toast == need_awg.subtitle
+    assert need_awg.color == C_DANGER
+
+    udp = _present(
+        singbox_running=True,
+        socks_up=True,
+        exit_probe_error="timeout",
+        exit_probe_hint="udp-timeout",
+    )
+    assert "конфиг" in udp.subtitle
+    assert udp.can_reconnect is True
+
+    generic = _present(
+        singbox_running=True, socks_up=True, exit_probe_error="https fail"
+    )
+    assert generic.subtitle == "Переподключите — защита при обрыве останется"
+
+    protected = _present(
+        singbox_running=True, tun_running=True, socks_up=True, tun_ready=True
+    )
+    assert (protected.title, protected.color, protected.can_reconnect) == (
+        "Защищено",
+        C_ACCENT,
+        False,
+    )
+    assert protected.tun_button_text == "TUN выкл"
+
+    crash = _present(singbox_running=True, socks_up=False)
+    assert crash.title == "Сбой"
+    assert crash.can_reconnect is True
+    assert crash.color == C_DANGER
+
+    socks_only = _present(singbox_running=True, socks_up=True, tun_running=False)
+    assert (socks_only.title, socks_only.color) == ("Подключено", C_OK)
+
+    tun_only = _present(tun_running=True, singbox_running=False)
+    assert (tun_only.title, tun_only.color) == ("Подключено", C_WARN)
+
+    sealed = _present(kill_switch_applied=True)
+    assert sealed.title == "Нет сети"
+    assert sealed.can_reconnect is True
+    assert sealed.color == C_WARN
+
+    no_cfg = _present(_ready=False)
+    assert (no_cfg.title, no_cfg.power_text, no_cfg.color) == (
+        "Нет конфига",
+        "Подключить",
+        C_MUTED,
+    )
+
+    idle = _present()
+    assert (idle.title, idle.power_text, idle.tun_button_text) == (
+        "Отключено",
+        "Подключить",
+        "TUN вкл",
+    )
+    assert idle.signature
+
+
+def implicit_connect_plan(
+    *,
+    office: bool,
+    dial: str,
+    tun_enabled: bool,
+    kill_switch: bool,
+    platform: str = "win32",
+) -> dict[str, Any]:
+    """Pin start_singbox_mode heuristics before they become ConnectPlan fields."""
+    awg = dial == "amneziawg"
+    enable_tun = tun_enabled or kill_switch
+    udp_dial = awg
+    defer_win = platform == "win32" and (not office or udp_dial)
+    defer_win_ks = bool(defer_win and kill_switch and udp_dial)
+    awg_defer_tun = bool(awg and enable_tun)
+    return {
+        "dial": dial,
+        "awg": awg,
+        "tun_wanted": enable_tun,
+        "tun_deferred": awg_defer_tun,
+        "start_tun": enable_tun and not awg_defer_tun,
+        "ks_wanted": kill_switch,
+        "ks_deferred": defer_win_ks,
+        "start_ks": kill_switch and not defer_win_ks and not awg_defer_tun,
+    }
+
+
+def test_implicit_connect_plan_six_combos() -> None:
+    office_vless_tun = implicit_connect_plan(
+        office=True, dial="vless-reality", tun_enabled=True, kill_switch=True
+    )
+    assert office_vless_tun["start_tun"] is True
+    assert office_vless_tun["start_ks"] is True
+    assert office_vless_tun["tun_deferred"] is False
+    assert office_vless_tun["ks_deferred"] is False
+
+    office_vless_off = implicit_connect_plan(
+        office=True, dial="vless-reality", tun_enabled=False, kill_switch=False
+    )
+    assert office_vless_off["start_tun"] is False
+    assert office_vless_off["start_ks"] is False
+    assert office_vless_off["tun_wanted"] is False
+
+    home_awg_tun = implicit_connect_plan(
+        office=False, dial="amneziawg", tun_enabled=True, kill_switch=True
+    )
+    assert home_awg_tun["tun_deferred"] is True
+    assert home_awg_tun["ks_deferred"] is True
+    assert home_awg_tun["start_tun"] is False
+    assert home_awg_tun["start_ks"] is False
+    assert home_awg_tun["tun_wanted"] is True
+
+    home_awg_off = implicit_connect_plan(
+        office=False, dial="amneziawg", tun_enabled=False, kill_switch=False
+    )
+    assert home_awg_off["tun_deferred"] is False
+    assert home_awg_off["start_tun"] is False
+
+    office_awg_tun = implicit_connect_plan(
+        office=True, dial="amneziawg", tun_enabled=True, kill_switch=True
+    )
+    assert office_awg_tun["tun_deferred"] is True
+    assert office_awg_tun["ks_deferred"] is True
+    assert office_awg_tun["start_tun"] is False
+    assert office_awg_tun["start_ks"] is False
+
+    home_vless_tun = implicit_connect_plan(
+        office=False, dial="vless-reality", tun_enabled=True, kill_switch=True
+    )
+    assert home_vless_tun["start_tun"] is True
+    assert home_vless_tun["start_ks"] is True
+    assert home_vless_tun["ks_deferred"] is False
+    assert home_vless_tun["tun_deferred"] is False
+
+
+def test_linux_kill_switch_install_and_remove_are_stable() -> None:
+    from desktop.kill_switch import _cmds_linux_remove
+
+    install = _cmds_linux_install(["203.0.113.10"], "10.193.0.1", blackhole=False)
+    assert "ip route del 0.0.0.0/1 dev lo" in install
+    assert "ip route replace 203.0.113.10/32 via 10.193.0.1" in install
+    remove = _cmds_linux_remove(["203.0.113.10"], "10.193.0.1")
+    assert "ip route del 203.0.113.10/32" in remove
+    assert "ip -6 route del ::/1 dev lo" in remove
+
+
+def test_win_kill_switch_remove_clears_split_and_pins() -> None:
+    from desktop.kill_switch import _cmds_win_remove
+
+    cmds = _cmds_win_remove(["203.0.113.10"], "10.193.0.1")
+    joined = "\n".join(cmds)
+    assert "route delete 0.0.0.0 mask 128.0.0.0 127.0.0.1" in joined
+    assert "route delete 203.0.113.10 mask 255.255.255.255" in joined
+    assert "netsh interface ipv6 delete route ::/1" in joined
+
+
+def test_tun_readiness_linux_skips_adapter_wait(
+    tmp_path: Any, monkeypatch: Any
+) -> None:
+    from pathlib import Path
+
+    from desktop.singbox_mode import SingboxModeManager
+
+    mgr = SingboxModeManager(Path(tmp_path), Path(tmp_path), Path(tmp_path), log=lambda _m: None)
+    monkeypatch.setattr("desktop.singbox.readiness.sys.platform", "linux")
+    monkeypatch.setattr(mgr, "tail_log", lambda n=40: [])
+    assert mgr._tun_inbound_ready() is True
+    monkeypatch.setattr("desktop.singbox.readiness.port_open", lambda *_a, **_k: True)
+    monkeypatch.setattr("desktop.singbox.readiness.procutil.pid_alive", lambda _pid: True)
+    assert mgr._wait_ready(1080, 1088, enable_tun=True, pid=1, timeout=0.2) is True
+
+
+def test_tun_readiness_socks_without_tun(tmp_path: Any, monkeypatch: Any) -> None:
+    from pathlib import Path
+
+    from desktop.singbox_mode import SingboxModeManager
+
+    mgr = SingboxModeManager(Path(tmp_path), Path(tmp_path), Path(tmp_path), log=lambda _m: None)
+    monkeypatch.setattr("desktop.singbox.readiness.port_open", lambda *_a, **_k: True)
+    monkeypatch.setattr("desktop.singbox.readiness.procutil.pid_alive", lambda _pid: True)
+    assert mgr._wait_ready(1080, 1088, enable_tun=False, pid=1, timeout=0.2) is True

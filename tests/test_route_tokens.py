@@ -149,8 +149,8 @@ def test_analyze_classify_without_dns() -> None:
 def test_route_rules_vpn_before_direct() -> None:
     from desktop.singbox_mode import _build_route_rules
 
-    with patch("desktop.singbox_mode.resolve_host", return_value="203.0.113.10"):
-        with patch("desktop.singbox_mode._direct_python_paths", return_value=[]):
+    with patch("desktop.singbox.manager.resolve_host", return_value="203.0.113.10"):
+        with patch("desktop.singbox.manager._direct_python_paths", return_value=[]):
             rules, suffixes, domains = _build_route_rules(
                 server_host="vps.example",
                 exclude_ips=["203.0.113.10"],

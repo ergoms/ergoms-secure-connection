@@ -7,13 +7,14 @@ import ssl
 import sys
 import threading
 import time
+from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
 
 from desktop.config_io import (
+    get_kill_switch,
     get_local_socks_port,
     get_reverse_ssh_enabled,
-    get_kill_switch,
     get_tun_enabled,
     get_watchdog_enabled,
     get_watchdog_interval,
@@ -32,6 +33,7 @@ class WatchHost(Protocol):
     def config(self) -> dict[str, Any]: ...
     def enable(self, *, spawn_watchdog: bool = True) -> None: ...
     def enable_tun(self, *, persist: bool = True) -> None: ...
+    def reconnect(self, *, spawn_watchdog: bool = True) -> None: ...
     def stop_singbox_mode(self, *, teardown: bool = True) -> None: ...
     def _ensure_kill_switch(self, cfg: dict[str, Any]) -> list[str]: ...
     def _maybe_start_reverse_ssh(self, cfg: dict[str, Any] | None = None) -> None: ...
@@ -211,9 +213,7 @@ def health_problem(client: WatchHost, *, probe: bool = False) -> str | None:
     except Exception:  # noqa: BLE001
         singbox_alive = False
 
-    tun_up = client.tun.running() or (
-        singbox_alive and getattr(client.singbox, "tun_active", lambda: False)()
-    )
+    tun_up = singbox_alive and getattr(client.singbox, "tun_active", lambda: False)()
     tun_wanted = get_tun_enabled()
 
     if tun_up and not socks_up:
@@ -257,8 +257,6 @@ def infer_desired_on(client: WatchHost) -> bool:
             return True
     except Exception:  # noqa: BLE001
         pass
-    if client.tun.running():
-        return True
     return False
 
 
@@ -396,11 +394,18 @@ class TunnelWatchdog:
                     self.log(f"watchdog: TUN restart: {exc}")
                     raise
             else:
-                try:
-                    self.client.stop_singbox_mode(teardown=False)
-                except Exception as exc:  # noqa: BLE001
-                    self.log(f"watchdog: stop: {exc}")
-                self.client.enable(spawn_watchdog=False)
+                reconnect = getattr(self.client, "reconnect", None)
+                if callable(reconnect):
+                    try:
+                        reconnect(spawn_watchdog=False)
+                    except TypeError:
+                        reconnect()
+                else:
+                    try:
+                        self.client.stop_singbox_mode(teardown=False)
+                    except Exception as exc:  # noqa: BLE001
+                        self.log(f"watchdog: stop: {exc}")
+                    self.client.enable(spawn_watchdog=False)
             problem = self._health_after_enable()
             if problem is None:
                 self.log("watchdog: reconnected OK")
@@ -444,7 +449,10 @@ class TunnelWatchdog:
         """Wait for enable()'s exit probe before judging the new tunnel."""
         deadline = time.monotonic() + _RECONNECT_SETTLE_S
         while time.monotonic() < deadline:
-            if getattr(self.client, "_hold_watchdog", False):
+            snap = getattr(self.client, "session", None)
+            if snap is not None and (
+                snap.snapshot.hold_watchdog or snap.snapshot.phase.holds_watchdog
+            ):
                 if self._stop.wait(0.4):
                     return "watchdog stopped"
                 continue
@@ -471,7 +479,8 @@ class TunnelWatchdog:
         if not (get_tun_enabled() or get_kill_switch()):
             return
         from desktop.config_io import get_server_host, resolve_corporate_proxy
-        from desktop.kill_switch import allow_ips, apply as apply_kill_switch
+        from desktop.kill_switch import allow_ips
+        from desktop.kill_switch import apply as apply_kill_switch
         from desktop.tun import reclaim_tun_default, tun_owns_default
 
         if tun_owns_default():

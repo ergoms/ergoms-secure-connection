@@ -264,6 +264,13 @@ class IntegrationOps:
         """Skip git/PAC/Docker undo when there are no leftover markers."""
         if not self._override_markers():
             return
+        session = getattr(self, "session", None)
+        if session is not None and (
+            session.snapshot.hold_watchdog
+            or session.snapshot.fail_closed
+            or session.snapshot.phase.holds_watchdog
+        ):
+            return
         if getattr(self, "_hold_watchdog", False) or getattr(self, "_fail_closed", False):
             return
         wd = getattr(self, "_watchdog", None)

@@ -1,24 +1,15 @@
-"""Shim: sing-box API lives in desktop.singbox."""
-
-from __future__ import annotations
+"""sing-box config, process, spawn, and readiness."""
 
 from desktop.singbox.manager import (  # noqa: F401
     SingboxModeManager,
-    _build_route_rules,
-    _dns_v12,
-    _tun_inbound,
-    _udp_bind,
-    _vless_outbound,
     amneziawg_opts,
     awg_endpoint,
-    awg_peer_address,
     choose_dial,
     config_skeleton,
     dial_label,
     dns_block,
     effective_tun_mtu,
     local_inbounds,
-    log_block,
     parse_corporate_proxy,
     require_transport,
     resolve_dial_bundle,
@@ -31,14 +22,12 @@ __all__ = [
     "SingboxModeManager",
     "amneziawg_opts",
     "awg_endpoint",
-    "awg_peer_address",
     "choose_dial",
     "config_skeleton",
     "dial_label",
     "dns_block",
     "effective_tun_mtu",
     "local_inbounds",
-    "log_block",
     "parse_corporate_proxy",
     "require_transport",
     "resolve_dial_bundle",

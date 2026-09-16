@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from desktop.lifecycle.snapshot import Snapshot
+
 C_MUTED = "#8b95a8"
 C_ACCENT = "#2dd4a8"
 C_OK = "#2dd4a8"
@@ -44,12 +46,14 @@ class StatusView:
 
 
 def present_status(
-    st: dict[str, Any],
+    st: Snapshot | dict[str, Any],
     *,
     config_ready: bool,
     corporate: bool = False,
 ) -> StatusView:
     del corporate
+    if isinstance(st, Snapshot):
+        st = st.to_status_dict()
     singbox = bool(st.get("singbox_running"))
     tun = bool(st.get("tun_running"))
     tun_wanted = bool(st.get("tun_wanted", tun))

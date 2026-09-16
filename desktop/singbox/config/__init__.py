@@ -1,14 +1,15 @@
-"""Shim: sing-box API lives in desktop.singbox."""
+"""sing-box JSON builders. Symbols live in manager until callers migrate."""
 
-from __future__ import annotations
-
-from desktop.singbox.manager import (  # noqa: F401
-    SingboxModeManager,
-    _build_route_rules,
-    _dns_v12,
-    _tun_inbound,
-    _udp_bind,
-    _vless_outbound,
+from desktop.singbox.manager import (
+    _build_route_rules as build_route_rules,
+)
+from desktop.singbox.manager import (
+    _tun_inbound as tun_inbound,
+)
+from desktop.singbox.manager import (
+    _vless_outbound as vless_outbound,
+)
+from desktop.singbox.manager import (
     amneziawg_opts,
     awg_endpoint,
     awg_peer_address,
@@ -28,10 +29,10 @@ from desktop.singbox.manager import (  # noqa: F401
 )
 
 __all__ = [
-    "SingboxModeManager",
     "amneziawg_opts",
     "awg_endpoint",
     "awg_peer_address",
+    "build_route_rules",
     "choose_dial",
     "config_skeleton",
     "dial_label",
@@ -43,6 +44,8 @@ __all__ = [
     "require_transport",
     "resolve_dial_bundle",
     "rustdesk_hairpin_rules",
+    "tun_inbound",
     "underlay_bind_target",
     "underlay_keep_hosts",
+    "vless_outbound",
 ]

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import time
-from typing import Any
 
 from desktop import procutil
 from desktop.config_io import (
@@ -49,19 +48,20 @@ class ProbeOps:
         try:
             self._probe_exit_body(socks_port, delay)
         finally:
-            tun_pending = bool(getattr(self, "_pending_win_tun", False))
-            probe_ok = not getattr(self, "_exit_probe_error", None)
+            snap = self.session.snapshot
+            tun_pending = bool(snap.pending_win_tun)
+            probe_ok = not snap.exit_probe_error
             if tun_pending and not probe_ok:
                 self.log("TUN ещё открывается — kill switch не закрываю, watchdog ждёт")
             else:
-                self._hold_watchdog = False
+                self.session.update(hold_watchdog=False)
             if (
                 not probe_ok
                 and get_kill_switch()
                 and not tun_pending
             ):
                 self._seal_on_dead_exit()
-            if getattr(self, "_want_watchdog", False) and not tun_pending:
+            if snap.want_watchdog and not tun_pending:
                 try:
                     self.ensure_watchdog_daemon()
                 except Exception as exc:  # noqa: BLE001
@@ -73,7 +73,6 @@ class ProbeOps:
             from desktop.watchdog import (
                 exit_probe_target,
                 socks_https_probe,
-                socks_probe,
             )
         except Exception as exc:  # noqa: BLE001
             self.log(f"проверка выхода: не удалось импортировать probe ({exc})")
@@ -81,7 +80,8 @@ class ProbeOps:
         if delay > 0:
             time.sleep(delay)
         if not self.singbox.running():
-            self._exit_probe_error = self._exit_probe_error or "sing-box stopped"
+            err = self.session.snapshot.exit_probe_error or "sing-box stopped"
+            self.session.update(exit_probe_error=err)
             return
         office = False
         home_udp = False
@@ -103,7 +103,8 @@ class ProbeOps:
         err: str | None = None
         for attempt in range(attempts):
             if not self.singbox.running():
-                self._exit_probe_error = self._exit_probe_error or "sing-box stopped"
+                err = self.session.snapshot.exit_probe_error or "sing-box stopped"
+                self.session.update(exit_probe_error=err)
                 return
             if attempt:
                 self.log(f"проверка выхода: повтор {attempt + 1}/{attempts}")
@@ -118,14 +119,15 @@ class ProbeOps:
             if not err:
                 break
         if not self.singbox.running():
-            self._exit_probe_error = self._exit_probe_error or "sing-box stopped"
+            err = self.session.snapshot.exit_probe_error or "sing-box stopped"
+            self.session.update(exit_probe_error=err)
             return
         if err:
             self._diagnose_failed_exit(socks_port, err)
             return
         tail = "\n".join(self.singbox.tail_log(40)).lower()
         if "i/o timeout" in tail or "deadline exceeded" in tail:
-            self._exit_probe_error = "dns-timeout"
+            self.session.update(exit_probe_error="dns-timeout")
             self.log(
                 "проверка выхода: HTTPS прошёл, но DNS/VLESS сыплет timeout — "
                 "сайты могут не открываться (см. журнал sing-box)"
@@ -139,7 +141,7 @@ class ProbeOps:
 
         connect_err = socks_probe(socks_port, timeout=6.0)
         if connect_err:
-            self._exit_probe_error = connect_err
+            self.session.update(exit_probe_error=connect_err)
             self.log(f"проверка выхода: НЕ ОК — {connect_err}")
         elif https_probe_is_flake(err):
             # CONNECT through VLESS works. Cloudflare TLS often stalls via Squid;
@@ -156,7 +158,7 @@ class ProbeOps:
             self._on_exit_probe_ok(host)
             return
         else:
-            self._exit_probe_error = err
+            self.session.update(exit_probe_error=err)
             self.log(f"проверка выхода: НЕ ОК — CONNECT есть, HTTPS нет ({err})")
         tail = "\n".join(self.singbox.tail_log(40)).lower()
         if "no recent network activity" in tail:
@@ -166,7 +168,7 @@ class ProbeOps:
         self._log_singbox_tail("после неудачной проверки")
 
     def _log_udp_timeout_hint(self) -> None:
-        self._exit_probe_hint = "udp-timeout"
+        self.session.update(exit_probe_hint="udp-timeout")
         office_now = False
         try:
             tr_now = require_transport(self.config())
@@ -213,7 +215,7 @@ class ProbeOps:
         except Exception:  # noqa: BLE001
             office, awg, dial_now = False, None, "vless-reality"
         if not office and not awg and dial_now == "vless-reality":
-            self._exit_probe_hint = "need-awg"
+            self.session.update(exit_probe_hint="need-awg")
             self.log(
                 "домашний DPI съел Reality: TCP до VPS живой, "
                 "внутри туннеля — тишина. Без AmneziaWG дома интернет "
@@ -222,9 +224,9 @@ class ProbeOps:
 
     def _claim_default_route(self) -> None:
         """Steal default now so apps do not leak while the HTTPS probe runs."""
-        if not getattr(self, "_pending_win_tun", False):
+        if not self.session.snapshot.pending_win_tun:
             return
-        allow = list(getattr(self, "_pending_allow", []) or [])
+        allow = list(self.session.snapshot.pending_allow)
         self.log("ставлю TUN split default сразу — трафик не ждёт проверку выхода")
         try:
             installed = self._install_win_tun_routes(allow, strict=False)
@@ -233,8 +235,8 @@ class ProbeOps:
             return
         if not installed:
             return
-        self._pending_win_tun = False
-        if getattr(self, "_defer_win_ks", False) and get_kill_switch():
+        self.session.update(pending_win_tun=False)
+        if self.session.snapshot.defer_win_ks and get_kill_switch():
             try:
                 apply_kill_switch(
                     allow,
@@ -244,33 +246,35 @@ class ProbeOps:
                 )
             except Exception as exc:  # noqa: BLE001
                 self.log(f"kill switch: {exc}")
-            self._defer_win_ks = False
+            self.session.update(defer_win_ks=False)
 
     def _on_exit_probe_ok(self, probe_host: str) -> None:
-        self._exit_probe_error = None
-        self._exit_probe_hint = None
-        self._fail_closed = False
+        self.session.update(
+            exit_probe_error="",
+            exit_probe_hint="",
+            fail_closed=False,
+        )
         self.log(f"проверка выхода: OK (HTTPS {probe_host} через SOCKS)")
-        if getattr(self, "_pending_awg_tun", False):
+        if self.session.snapshot.pending_awg_tun:
             try:
                 self._upgrade_awg_to_tun()
             except Exception as exc:  # noqa: BLE001
                 self.log(f"AmneziaWG TUN после handshake: {exc}")
-                self._pending_awg_tun = False
+                self.session.update(pending_awg_tun=False)
                 self._awg_tun_kwargs = None
-        if getattr(self, "_pending_win_tun", False):
-            allow = list(getattr(self, "_pending_allow", []) or [])
+        if self.session.snapshot.pending_win_tun:
+            allow = list(self.session.snapshot.pending_allow)
             self.log("выход живой — ставлю TUN split default")
             if self._install_win_tun_routes(allow):
-                self._pending_win_tun = False
-            if getattr(self, "_defer_win_ks", False):
+                self.session.update(pending_win_tun=False, tun_ready=True)
+            if self.session.snapshot.defer_win_ks:
                 apply_kill_switch(
                     allow,
                     var_dir=self.paths.var_dir,
                     log=self.log,
                     blackhole=False,
                 )
-                self._defer_win_ks = False
+                self.session.update(defer_win_ks=False)
         self._check_tun_owns_default()
         try:
             cfg = self.config()
@@ -304,7 +308,7 @@ class ProbeOps:
 
     def _seal_on_dead_exit(self) -> None:
         """Fail-closed: no working exit → block underlay except the VPS."""
-        if getattr(self, "_exit_probe_error", None) == "dns-timeout":
+        if self.session.snapshot.exit_probe_error == "dns-timeout":
             return
         try:
             from desktop.watchdog import socks_port_from_client, socks_probe
@@ -314,7 +318,7 @@ class ProbeOps:
                     "kill switch: SOCKS CONNECT жив — чёрные /1 не ставлю "
                     "(TUN ещё открывается или HTTPS тупил)"
                 )
-                self._exit_probe_error = None
+                self.session.update(exit_probe_error="")
                 return
         except Exception:  # noqa: BLE001
             pass
@@ -323,18 +327,17 @@ class ProbeOps:
         except Exception as exc:  # noqa: BLE001
             self.log(f"kill switch: нет конфига ({exc})")
             return
-        allow = list(getattr(self, "_pending_allow", None) or [])
+        allow = list(self.session.snapshot.pending_allow)
         if not allow:
             allow = self._kill_switch_hosts(cfg)
-        self._fail_closed = True
-        self._defer_win_ks = False
-        if getattr(self, "_pending_win_tun", False) and procutil.is_admin() and allow:
+        self.session.update(fail_closed=True, defer_win_ks=False)
+        if self.session.snapshot.pending_win_tun and procutil.is_admin() and allow:
             try:
                 self.log("выхода нет — трафик в TUN, чтобы не шёл мимо")
                 self._install_win_tun_routes(allow, strict=False)
             except Exception as exc:  # noqa: BLE001
                 self.log(f"TUN split при обрыве: {exc}")
-            self._pending_win_tun = False
+            self.session.update(pending_win_tun=False)
         if kill_switch_is_sealed():
             self.log("kill switch: уже стоит — интернет закрыт, пока нет выхода")
             return
