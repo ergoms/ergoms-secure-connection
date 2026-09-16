@@ -343,6 +343,39 @@ def _win_if_index_by_alias(alias: str, *, require_up: bool = False) -> int | Non
 
 
 TUN_SPLIT_HOPS = ("172.19.0.1", "172.19.0.2")
+
+
+def _shared_tun_lan() -> bool:
+    return bool(os.environ.get("PYTEST_CURRENT_TEST")) or "pytest" in sys.modules
+
+
+def _machine_tun_seed() -> str:
+    if sys.platform == "win32":
+        try:
+            import winreg
+
+            with winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Cryptography"
+            ) as key:
+                guid, _ = winreg.QueryValueEx(key, "MachineGuid")
+            text = str(guid or "").strip()
+            if text:
+                return text
+        except OSError:
+            pass
+    return socket.gethostname()
+
+
+def tun_split_hops() -> tuple[str, str]:
+    """Per-machine TUN /30. Shared 172.19.0.1 makes RustDesk punch itself."""
+    if _shared_tun_lan():
+        return TUN_SPLIT_HOPS
+    octet = (int(hashlib.sha256(_machine_tun_seed().encode()).hexdigest(), 16) % 254) + 1
+    return f"172.19.{octet}.1", f"172.19.{octet}.2"
+
+
+def tun_iface_cidr() -> str:
+    return f"{tun_split_hops()[0]}/30"
 LAN_UNDERLAY_NETS = (
     ("10.0.0.0", "255.0.0.0"),
     ("192.168.0.0", "255.255.0.0"),
@@ -433,11 +466,13 @@ def remove_tun_split_default(*, windows: bool | None = None) -> list[str]:
     cmds: list[str] = []
     if win:
         cmds.extend(remove_lan_underlay_commands())
-        for hop in TUN_SPLIT_HOPS:
+        hops = list(dict.fromkeys([*tun_split_hops(), *TUN_SPLIT_HOPS]))
+        for hop in hops:
             cmds.append(f"route delete 0.0.0.0 mask 128.0.0.0 {hop}")
             cmds.append(f"route delete 128.0.0.0 mask 128.0.0.0 {hop}")
         return cmds
-    for hop in TUN_SPLIT_HOPS:
+    hops = list(dict.fromkeys([*tun_split_hops(), *TUN_SPLIT_HOPS]))
+    for hop in hops:
         cmds.append(f"ip route del 0.0.0.0/1 via {hop}")
         cmds.append(f"ip route del 128.0.0.0/1 via {hop}")
     return cmds
@@ -559,7 +594,7 @@ def ensure_tun_split_default(if_idx: int, *, metric: int = 5) -> tuple[bool, str
     from desktop.kill_switch import lift_ipv4_blackhole_commands
 
     run_route_lines(lift_ipv4_blackhole_commands())
-    hops = TUN_SPLIT_HOPS
+    hops = tun_split_hops()
     last = ""
     for hop in hops:
         run_route_lines(install_tun_split_default(if_idx, metric=metric, hop=hop))

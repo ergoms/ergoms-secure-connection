@@ -665,6 +665,21 @@ def test_present_status_error_offers_reconnect() -> None:
     )
     assert ok.can_reconnect is False
     assert ok.power_text == "Отключить"
+    assert ok.title == "Защищено"
+
+    starting = present_status(
+        {
+            "singbox_running": True,
+            "tun_running": True,
+            "tun_wanted": True,
+            "tun_ready": False,
+            "connecting": True,
+            "socks_up": True,
+        },
+        config_ready=True,
+    )
+    assert starting.title == "Подключение…"
+    assert starting.can_reconnect is False
 
 
 def test_settings_map_roundtrip() -> None:

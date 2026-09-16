@@ -133,8 +133,27 @@ def test_tun_still_opening_from_wintun_warning(tmp_path: Path) -> None:
     ]
     assert mgr._tun_still_opening() is True
     assert mgr._tun_adapter_busy() is True
+    assert mgr._tun_inbound_ready() is False
     mgr.tail_log = lambda n=40: [  # type: ignore[method-assign]
         "INFO inbound/tun[tun-in]: started at ergoms-secure-connection-tun"
     ]
     assert mgr._tun_still_opening() is False
     assert mgr._tun_inbound_ready() is True
+
+
+def test_tun_inbound_ready_ignores_singbox_started_while_wintun_opens(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from desktop.singbox_mode import SingboxModeManager
+
+    mgr = SingboxModeManager(tmp_path, tmp_path, tmp_path, log=lambda _m: None)
+    mgr.tail_log = lambda n=40: [  # type: ignore[method-assign]
+        "WARN inbound/tun[tun-in]: open interface take too much time to finish!",
+        "INFO sing-box started (0.00s)",
+    ]
+    monkeypatch.setattr(
+        "desktop.singbox_mode.wait_tun_iface", lambda timeout=0.05: 28
+    )
+    assert mgr._tun_log_started() is False
+    assert mgr._tun_still_opening() is True
+    assert mgr._tun_inbound_ready() is False

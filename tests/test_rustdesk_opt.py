@@ -43,6 +43,13 @@ def test_set_and_restore_toml_options(tmp_path: Path) -> None:
     assert "relay-server = '193.23.202.147'" in restored
 
 
+def test_tun_iface_cidr_is_shared_under_pytest() -> None:
+    from desktop.tun import TUN_SPLIT_HOPS, tun_iface_cidr, tun_split_hops
+
+    assert tun_split_hops() == TUN_SPLIT_HOPS
+    assert tun_iface_cidr() == "172.19.0.1/30"
+
+
 def test_restore_keeps_previous_value(tmp_path: Path) -> None:
     path = tmp_path / "RustDesk2.toml"
     path.write_text("[options]\nallow-always-relay = 'N'\n", encoding="utf-8")

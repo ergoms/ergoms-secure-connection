@@ -52,6 +52,9 @@ def present_status(
     del corporate
     singbox = bool(st.get("singbox_running"))
     tun = bool(st.get("tun_running"))
+    tun_wanted = bool(st.get("tun_wanted", tun))
+    tun_ready = bool(st.get("tun_ready")) if "tun_ready" in st else (not tun_wanted or tun)
+    connecting = bool(st.get("connecting"))
     socks_up = bool(st.get("socks_up")) if "socks_up" in st else singbox
     http_up = bool(st.get("http_up")) if "http_up" in st else singbox
     pac_up = bool(st.get("pac_up")) if "pac_up" in st else singbox
@@ -64,7 +67,9 @@ def present_status(
     socks_port = int(st.get("socks_port") or 1080)
     toast: str | None = None
     retry = False
-    if singbox and socks_up and probe_err:
+    if connecting or (singbox and tun_wanted and not tun_ready and not probe_err):
+        title, sub, color, power = "Подключение…", "", C_ACCENT, "Отключить"
+    elif singbox and socks_up and probe_err:
         if probe_hint == "need-awg":
             title, sub, color = (
                 "Нет выхода",
@@ -86,7 +91,7 @@ def present_status(
         power = "Отключить"
         retry = True
         toast = sub
-    elif singbox and tun and socks_up:
+    elif singbox and tun and socks_up and tun_ready:
         title, sub, color, power = "Защищено", "", C_ACCENT, "Отключить"
     elif singbox and not socks_up:
         title, sub, color, power = (
@@ -116,6 +121,7 @@ def present_status(
         f"{singbox}|{tun}|{active}|{socks_up}|{http_up}|{pac_up}|{scope}|{target}"
         f"|{st.get('watchdog_running')}|{st.get('reverse_ssh_running')}"
         f"|{st.get('reverse_ssh_listen')}|{ks_on}|{probe_err}|{probe_hint}"
+        f"|{connecting}|{tun_ready}|{tun_wanted}"
     )
     return StatusView(
         active=active,

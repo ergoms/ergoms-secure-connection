@@ -35,6 +35,7 @@ from desktop.tun import (
     detect_bind_interface,
     iface_ipv4s,
     remove_stale_tun_adapter,
+    tun_iface_cidr,
     wait_tun_iface,
 )
 from lib.pac import bypass_to_singbox
@@ -451,7 +452,7 @@ def _tun_inbound(mtu: int, *, kill_switch: bool, route_exclude: list[str]) -> di
         "type": "tun",
         "tag": "tun-in",
         "interface_name": TUN_IFACE_NAME,
-        "address": ["172.19.0.1/30"],
+        "address": [tun_iface_cidr()],
         "mtu": effective_tun_mtu(mtu),
         "auto_route": sys.platform != "win32",
         "strict_route": bool(kill_switch) and sys.platform != "win32",
@@ -1142,17 +1143,26 @@ class SingboxModeManager:
             or "take too much time" in text
         )
 
+    def _tun_log_started(self) -> bool:
+        """True only when tun inbound actually started — not 'sing-box started'."""
+        for raw in self.tail_log(60):
+            low = raw.lower()
+            if "inbound/tun" in low and "started at" in low:
+                return True
+        return False
+
     def _tun_still_opening(self) -> bool:
-        tail = "\n".join(self.tail_log(60)).lower()
-        if "inbound/tun" in tail and "started" in tail:
+        if self._tun_log_started():
             return False
+        tail = "\n".join(self.tail_log(60)).lower()
         return "take too much time" in tail or "configure tun interface" in tail
 
     def _tun_inbound_ready(self) -> bool:
         if sys.platform != "win32":
             return True
-        tail = "\n".join(self.tail_log(40)).lower()
-        if "inbound/tun" in tail and "started" in tail:
+        if self._tun_still_opening():
+            return False
+        if self._tun_log_started():
             return True
         return bool(wait_tun_iface(timeout=0.05))
 

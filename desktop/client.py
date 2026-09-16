@@ -381,8 +381,22 @@ class OpsClient(ConnectionOps, ProbeOps, IntegrationOps):
             except Exception:  # noqa: BLE001
                 pass
 
-        # TUN inbound inside sing-box
-        info["tun_running"] = bool(info["singbox_running"] and get_tun_enabled())
+        # TUN inbound inside sing-box. tun_running is "we want TUN and process lives";
+        # tun_ready is the adapter actually UP — otherwise UI says «Защищено» too early.
+        info["tun_wanted"] = bool(get_tun_enabled() or get_kill_switch())
+        info["tun_running"] = bool(info["singbox_running"] and info["tun_wanted"])
+        info["tun_ready"] = False
+        if info["tun_running"]:
+            if sys.platform == "win32":
+                from desktop.tun import wait_tun_iface
+
+                info["tun_ready"] = bool(wait_tun_iface(timeout=0.05))
+            else:
+                info["tun_ready"] = True
+        info["connecting"] = bool(
+            getattr(self, "_hold_watchdog", False)
+            or getattr(self, "_pending_win_tun", False)
+        )
         info["tun_pid"] = self.tun.pid() or (
             info["singbox_pid"] if info["tun_running"] and info["singbox_running"] else None
         )

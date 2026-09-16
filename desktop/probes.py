@@ -49,11 +49,19 @@ class ProbeOps:
         try:
             self._probe_exit_body(socks_port, delay)
         finally:
-            self._hold_watchdog = False
+            tun_pending = bool(getattr(self, "_pending_win_tun", False))
             probe_ok = not getattr(self, "_exit_probe_error", None)
-            if not probe_ok and get_kill_switch():
+            if tun_pending and not probe_ok:
+                self.log("TUN ещё открывается — kill switch не закрываю, watchdog ждёт")
+            else:
+                self._hold_watchdog = False
+            if (
+                not probe_ok
+                and get_kill_switch()
+                and not tun_pending
+            ):
                 self._seal_on_dead_exit()
-            if getattr(self, "_want_watchdog", False):
+            if getattr(self, "_want_watchdog", False) and not tun_pending:
                 try:
                     self.ensure_watchdog_daemon()
                 except Exception as exc:  # noqa: BLE001
@@ -219,9 +227,11 @@ class ProbeOps:
         allow = list(getattr(self, "_pending_allow", []) or [])
         self.log("ставлю TUN split default сразу — трафик не ждёт проверку выхода")
         try:
-            self._install_win_tun_routes(allow, strict=False)
+            installed = self._install_win_tun_routes(allow, strict=False)
         except Exception as exc:  # noqa: BLE001
             self.log(f"TUN split: {exc}")
+            return
+        if not installed:
             return
         self._pending_win_tun = False
         if getattr(self, "_defer_win_ks", False) and get_kill_switch():
@@ -249,10 +259,10 @@ class ProbeOps:
                 self._pending_awg_tun = False
                 self._awg_tun_kwargs = None
         if getattr(self, "_pending_win_tun", False):
-            self._pending_win_tun = False
             allow = list(getattr(self, "_pending_allow", []) or [])
             self.log("выход живой — ставлю TUN split default")
-            self._install_win_tun_routes(allow)
+            if self._install_win_tun_routes(allow):
+                self._pending_win_tun = False
             if getattr(self, "_defer_win_ks", False):
                 apply_kill_switch(
                     allow,
@@ -296,6 +306,18 @@ class ProbeOps:
         """Fail-closed: no working exit → block underlay except the VPS."""
         if getattr(self, "_exit_probe_error", None) == "dns-timeout":
             return
+        try:
+            from desktop.watchdog import socks_port_from_client, socks_probe
+
+            if socks_probe(socks_port_from_client(self), timeout=4.0) is None:
+                self.log(
+                    "kill switch: SOCKS CONNECT жив — чёрные /1 не ставлю "
+                    "(TUN ещё открывается или HTTPS тупил)"
+                )
+                self._exit_probe_error = None
+                return
+        except Exception:  # noqa: BLE001
+            pass
         try:
             cfg = self.config()
         except Exception as exc:  # noqa: BLE001

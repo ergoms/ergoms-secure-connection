@@ -989,6 +989,9 @@ class GuiBridge(QObject):
     def _apply_status(self, st: dict[str, Any], *, force: bool = False) -> None:
         singbox = bool(st.get("singbox_running"))
         tun = bool(st.get("tun_running"))
+        tun_wanted = bool(st.get("tun_wanted", tun))
+        tun_ready = bool(st.get("tun_ready")) if "tun_ready" in st else (not tun_wanted or tun)
+        connecting = bool(st.get("connecting"))
         socks_up = bool(st.get("socks_up")) if "socks_up" in st else singbox
         http_up = bool(st.get("http_up")) if "http_up" in st else singbox
         pac_up = bool(st.get("pac_up")) if "pac_up" in st else singbox
@@ -1002,10 +1005,18 @@ class GuiBridge(QObject):
             f"{singbox}|{tun}|{active}|{socks_up}|{http_up}|{pac_up}|{scope}|{target}"
             f"|{st.get('watchdog_running')}|{st.get('reverse_ssh_running')}"
             f"|{st.get('reverse_ssh_listen')}|{ks_on}|{probe_err}|{probe_hint}"
+            f"|{connecting}|{tun_ready}|{tun_wanted}"
         )
         if not force and (sig == self._last_status_sig or (self._busy and not self._await_status)):
             return
         if self._await_status and self._busy_intent == "on" and not (singbox or tun):
+            return
+        if (
+            self._await_status
+            and self._busy_intent == "on"
+            and (connecting or (tun_wanted and not tun_ready))
+            and not probe_err
+        ):
             return
         if self._await_status and self._busy_intent == "off" and (singbox or tun):
             return
@@ -1056,6 +1067,8 @@ class GuiBridge(QObject):
         self.canReconnectChanged.emit()
         if self._await_status:
             if self._busy_intent == "on" and (singbox or tun):
+                if connecting or (tun_wanted and not tun_ready and not probe_err):
+                    return
                 self._finish_await_status()
             elif self._busy_intent == "off" and not singbox and not tun:
                 self._finish_await_status()

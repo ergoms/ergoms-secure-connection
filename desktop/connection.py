@@ -309,10 +309,10 @@ class ConnectionOps:
         )
         if self._pending_win_tun and allow:
             try:
-                self._install_win_tun_routes(allow)
+                if self._install_win_tun_routes(allow):
+                    self._pending_win_tun = False
             except Exception as exc:  # noqa: BLE001
                 self.log(f"TUN после AWG: {exc}")
-            self._pending_win_tun = False
         if getattr(self, "_defer_win_ks", False) and kill_switch:
             try:
                 apply_kill_switch(
@@ -472,12 +472,12 @@ class ConnectionOps:
             self.start_singbox_mode()
 
 
-    def _install_win_tun_routes(self, allow: list[str], *, strict: bool = True) -> None:
+    def _install_win_tun_routes(self, allow: list[str], *, strict: bool = True) -> bool:
         """After TUN adapter exists: steal traffic without auto_route."""
         idx = wait_tun_iface(timeout=20.0)
         if not idx:
             self.log("TUN-адаптер так и не появился — split default не ставлю")
-            return
+            return False
         pin_kill_switch_underlay(
             allow, var_dir=self.paths.var_dir, log=self.log, elevate=False
         )
@@ -521,17 +521,17 @@ class ConnectionOps:
         except Exception as exc:  # noqa: BLE001
             self.log(f"leak shield: {exc}")
         if tun_owns_default():
-            return
+            return True
         self.log("TUN не владеет default — снимаю чужой /1 и ставлю split снова")
         reclaim_tun_default(idx)
         if tun_owns_default():
-            return
+            return True
         self.log("чужой VPN перекрыл TUN — закрываю underlay")
         apply_kill_switch(
             allow, var_dir=self.paths.var_dir, log=self.log, blackhole=True
         )
         if not strict:
-            return
+            return False
         raise RuntimeError(
             "Чужой VPN перекрыл маршруты TUN. Отключите второй VPN и подключитесь снова."
         )

@@ -25,6 +25,22 @@ def rustdesk_config_path() -> Path:
     return Path(appdata) / "RustDesk" / "config" / "RustDesk2.toml"
 
 
+def rustdesk_peers_dir() -> Path:
+    return rustdesk_config_path().parent / "peers"
+
+
+def _underlay_ipv4() -> str:
+    try:
+        from desktop.tun import iface_ipv4s, underlay_ifaces
+    except Exception:  # noqa: BLE001
+        return ""
+    for _idx, _metric, name in underlay_ifaces():
+        ips = [ip for ip in iface_ipv4s(name) if not ip.startswith("172.19.")]
+        if ips:
+            return ips[0]
+    return ""
+
+
 def rustdesk_exe_paths() -> list[Path]:
     found: list[Path] = []
     seen: set[str] = set()
@@ -140,13 +156,25 @@ def enable_rustdesk_always_relay(backup_path: Path, log: LogFn = noop) -> None:
     cfg = rustdesk_config_path()
     if not cfg.is_file():
         return
-    prev = set_toml_options(cfg, _ALWAYS_RELAY)
+    updates = dict(_ALWAYS_RELAY)
+    lan = _underlay_ipv4()
+    if lan:
+        updates["local-ip-addr"] = lan
+    prev = set_toml_options(cfg, updates)
     backup_path.parent.mkdir(parents=True, exist_ok=True)
     if not backup_path.is_file():
         backup_path.write_text(
             json.dumps(prev, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-    log("RustDesk: always-relay — punch в 172.19.* (TUN) отключён, идём на ретранслятор")
+    peers = rustdesk_peers_dir()
+    if peers.is_dir():
+        for peer in peers.glob("*.toml"):
+            set_toml_options(peer, {"force-always-relay": "Y"})
+    extra = f", local-ip={lan}" if lan else ""
+    log(
+        "RustDesk: always-relay — punch в 172.19.* (TUN) отключён, "
+        f"идём на ретранслятор{extra}"
+    )
 
 
 def restore_rustdesk_always_relay(backup_path: Path, log: LogFn = noop) -> None:
