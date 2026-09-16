@@ -518,6 +518,38 @@ def _vps_loopback_rule(
     return rule
 
 
+def _host_is_ip(host: str) -> bool:
+    text = (host or "").strip()
+    if not text:
+        return False
+    try:
+        from ipaddress import ip_address
+
+        ip_address(text.split("%")[0])
+        return True
+    except ValueError:
+        return False
+
+
+def rustdesk_hairpin_rules(server_host: str) -> list[dict[str, Any]]:
+    """Reach a RustDesk relay on the same VPS as the VPN (IP and hostname)."""
+    host = (server_host or "").strip()
+    vps_ip = resolve_host(host) if host else ""
+    rules: list[dict[str, Any]] = []
+    if vps_ip:
+        rules.append(_vps_loopback_rule(vps_ip, port=RUSTDESK_PORTS))
+    if host and not _host_is_ip(host) and host != vps_ip:
+        rules.append(
+            {
+                "domain": [host],
+                "port": RUSTDESK_PORTS,
+                "outbound": "proxy",
+                "override_address": "127.0.0.1",
+            }
+        )
+    return rules
+
+
 def _token_host_rules(parsed, outbound: str) -> list[dict[str, Any]]:
     rules: list[dict[str, Any]] = []
     if parsed.suffixes:
@@ -589,13 +621,10 @@ def _build_route_rules(
     if vps_ip:
         rules.append({"ip_cidr": [f"{vps_ip}/32"], "port": vpn_port, "outbound": "direct"})
         if via_proxy:
-            # Office: VPS /32 stays on TUN. Every service on that host
-            # (ssh, RustDesk, …) goes through VLESS to 127.0.0.1.
+            # Office: VPS /32 stays on TUN. Services on that host go through
+            # VLESS to 127.0.0.1. RustDesk ports are added before sniff.
             rules.append(_vps_loopback_rule(vps_ip))
         else:
-            rules.append(
-                _vps_loopback_rule(vps_ip, port=RUSTDESK_PORTS)
-            )
             if ssh_ports:
                 # Reverse SSH = SOCKS ProxyCommand → VLESS.
                 rules.append(
@@ -634,23 +663,17 @@ def _build_route_rules(
 def require_transport(cfg: dict[str, Any]) -> dict[str, Any]:
     tr = cfg.get("transport")
     if not isinstance(tr, dict):
-        raise RuntimeError(
-            "MODE=singbox requires config.json transport{} "
-            "(uuid, public_key, short_id, server_name) — run VPS bootstrap_singbox_443.sh"
-        )
+        raise RuntimeError("Нет настроек подключения. Загрузите конфиг.")
     uuid = str(tr.get("uuid") or "").strip()
     pub = str(tr.get("public_key") or "").strip()
     short_id = str(tr.get("short_id") or "").strip()
     sni = str(tr.get("server_name") or REALITY_DEFAULT_SNI).strip() or REALITY_DEFAULT_SNI
     typ = str(tr.get("type") or "vless-reality").strip().lower()
     if typ not in ("vless-reality", "vless", "reality"):
-        raise RuntimeError(f"Unsupported transport.type={typ} (use vless-reality)")
-    if not uuid or "REPLACE" in uuid.upper() or len(uuid) < 8:
-        raise RuntimeError("transport.uuid missing — paste from VPS bootstrap output")
-    if not pub or "REPLACE" in pub.upper():
-        raise RuntimeError("transport.public_key missing — paste from VPS bootstrap")
+        raise RuntimeError("Неизвестный тип подключения. Загрузите конфиг.")
     port = int(tr.get("port") or 443)
     dial = normalize_dial(tr.get("dial"))
+    awg = amneziawg_opts(tr)
     out = {
         "uuid": uuid,
         "public_key": pub,
@@ -660,9 +683,16 @@ def require_transport(cfg: dict[str, Any]) -> dict[str, Any]:
         "type": "vless-reality",
         "dial": dial,
     }
-    awg = amneziawg_opts(tr)
     if awg:
         out["amneziawg"] = awg
+    if dial == "amneziawg":
+        if not awg:
+            raise RuntimeError("AmneziaWG: загрузите .conf в Настройках")
+        return out
+    if not uuid or "REPLACE" in uuid.upper() or len(uuid) < 8:
+        raise RuntimeError("Загрузите конфиг Reality")
+    if not pub or "REPLACE" in pub.upper():
+        raise RuntimeError("Загрузите конфиг Reality")
     return out
 
 
@@ -834,6 +864,7 @@ class SingboxModeManager:
                     "timeout": "100ms",
                 }
             )
+        rustdesk = rustdesk_hairpin_rules(server_host)
         box: dict[str, Any] = {
             **config_skeleton(
                 log_path=self.log_path,
@@ -852,7 +883,7 @@ class SingboxModeManager:
                 "auto_detect_interface": not bool(bind_iface),
                 **({"default_interface": bind_iface} if bind_iface else {}),
                 "final": "proxy",
-                "rules": [*sniff, *rules],
+                "rules": [*rustdesk, *sniff, *rules],
             },
         }
         if awg:

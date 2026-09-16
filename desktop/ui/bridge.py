@@ -51,10 +51,9 @@ from desktop.services.connection import ConnectionService
 from desktop.services.elevation import ElevationService
 from desktop.services.settings import SettingsService
 from desktop.services.status import C_MUTED, present_status
-from desktop.config.constants import BLOCKED_HOSTS
 from desktop.proc_net import list_processes, list_services
 from desktop.route_analyzer import analyze_process, analyze_service, analyze_token
-from desktop.route_tokens import token_payload, tokens_json
+from desktop.route_tokens import token_payload
 from desktop.ui.settings_map import (
     apply_mode_to_settings,
     apply_settings_to_cfg,
@@ -304,10 +303,6 @@ class GuiBridge(QObject):
     @Property(str, constant=True)
     def dataRoot(self) -> str:
         return str(self.paths.root)
-
-    @Property(str, constant=True)
-    def vpnPresetJson(self) -> str:
-        return tokens_json(BLOCKED_HOSTS)
 
     @Property(QObject, constant=True)
     def settings(self) -> QQmlPropertyMap:
@@ -834,16 +829,17 @@ class GuiBridge(QObject):
             self.toast.emit(err, "error")
             self._refresh_status(force=True)
             return
-        self._apply_optimistic(waiting)
-        self._refresh_status(force=True)
         wait = (waiting or "").lower()
+        if "подключ" not in wait:
+            self._apply_optimistic(waiting)
+        self._refresh_status(force=True)
         if "подключ" in wait or "включаю tun" in wait:
             from desktop.leak_shield import consume_browser_toast
 
             try:
                 if consume_browser_toast(self.paths.var_dir):
                     self.toast.emit(
-                        "Перезапустите Chrome или Edge — иначе Secure DNS и WebRTC могут обойти туннель",
+                        "Перезапустите браузер, чтобы трафик шёл через VPN",
                         "info",
                     )
             except Exception:  # noqa: BLE001

@@ -55,9 +55,13 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 Filename: "{app}\{#AppExeName}"; Description: "Запустить {#AppName}"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
-Type: filesandordirs; Name: "{localappdata}\{#AppName}"
-Type: filesandordirs; Name: "{localappdata}\ERGOMS VPN"
-Type: filesandordirs; Name: "{localappdata}\ops-content"
+Type: filesandordirs; Name: "{localappdata}\{#AppName}\var"
+Type: filesandordirs; Name: "{localappdata}\{#AppName}\logs"
+Type: filesandordirs; Name: "{localappdata}\{#AppName}\tools"
+Type: filesandordirs; Name: "{localappdata}\ERGOMS VPN\var"
+Type: filesandordirs; Name: "{localappdata}\ERGOMS VPN\logs"
+Type: filesandordirs; Name: "{localappdata}\ops-content\var"
+Type: filesandordirs; Name: "{localappdata}\ops-content\logs"
 
 [Code]
 #ifdef UNICODE
@@ -88,6 +92,7 @@ const
 
 var
   ExecSeq: Integer;
+  DeleteConfigs: Boolean;
 
 function UninstallKey(): String;
 begin
@@ -208,17 +213,38 @@ begin
   RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', Name);
 end;
 
+procedure WipeRuntimeDir(const Root: String);
+begin
+  if Root = '' then
+    Exit;
+  DelTree(Root + '\var', True, True, True);
+  ProcessMessages;
+  DelTree(Root + '\logs', True, True, True);
+  ProcessMessages;
+  DelTree(Root + '\tools', True, True, True);
+end;
+
+procedure WipeConfigsDir(const Root: String);
+begin
+  if Root = '' then
+    Exit;
+  DeleteFile(Root + '\config.json');
+  DeleteFile(Root + '\amneziawg.conf');
+  DeleteFile(Root + '\amneziawg.conf.name');
+  DeleteFile(Root + '\.env');
+  DelTree(Root + '\creds', True, True, True);
+  ProcessMessages;
+end;
+
 procedure WipeLeftovers;
 var
-  InstallDir: String;
+  InstallDir, DataDir: String;
 begin
-  { Data dir only. Do not delete Local\Programs\app when it is DestDir. }
-  DelTree(ExpandConstant('{localappdata}\{#AppName}'), True, True, True);
-  ProcessMessages;
-  DelTree(ExpandConstant('{localappdata}\ERGOMS VPN'), True, True, True);
-  ProcessMessages;
-  DelTree(ExpandConstant('{localappdata}\ops-content'), True, True, True);
-  ProcessMessages;
+  { Runtime only. Keep loaded config.json / AmneziaWG / creds. }
+  DataDir := ExpandConstant('{localappdata}\{#AppName}');
+  WipeRuntimeDir(DataDir);
+  WipeRuntimeDir(ExpandConstant('{localappdata}\ERGOMS VPN'));
+  WipeRuntimeDir(ExpandConstant('{localappdata}\ops-content'));
   InstallDir := ExpandConstant('{localappdata}\Programs\{#AppName}');
   if CompareText(InstallDir, ExpandConstant('{app}')) <> 0 then
     DelTree(InstallDir, True, True, True);
@@ -316,10 +342,31 @@ begin
     Result := Result + MemoTasksInfo;
 end;
 
+function InitializeUninstall(): Boolean;
+begin
+  DeleteConfigs := False;
+  if not UninstallSilent then
+  begin
+    if MsgBox('Удалить сохранённые конфиги?'#13#10#13#10
+         + 'По умолчанию config.json, AmneziaWG и ключи остаются.',
+         mbConfirmation, MB_YESNO or MB_DEFBUTTON2) = IDYES then
+      DeleteConfigs := True;
+  end;
+  Result := True;
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usUninstall then
     KillAppProcesses;
   if CurUninstallStep = usPostUninstall then
+  begin
     WipeLeftovers;
+    if DeleteConfigs then
+    begin
+      WipeConfigsDir(ExpandConstant('{localappdata}\{#AppName}'));
+      WipeConfigsDir(ExpandConstant('{localappdata}\ERGOMS VPN'));
+      WipeConfigsDir(ExpandConstant('{localappdata}\ops-content'));
+    end;
+  end;
 end;

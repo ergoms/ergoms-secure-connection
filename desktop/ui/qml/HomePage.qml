@@ -73,39 +73,19 @@ Item {
 
         Item { Layout.fillHeight: true }
 
-        Text {
+        MissingBanner {
             visible: root.missingAppConfig
             Layout.fillWidth: true
             Layout.preferredHeight: visible ? implicitHeight : 0
-            horizontalAlignment: Text.AlignHCenter
-            text: "Нет общего конфига"
-            color: T.warn
-            font.pixelSize: 12
-            font.family: T.fontUi
-            wrapMode: Text.WordWrap
-            MouseArea {
-                anchors.fill: parent
-                enabled: !bridge.active && !bridge.busy
-                cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-                onClicked: bridge.importConfigFile()
-            }
+            message: "Нет общего конфига"
+            onActivated: bridge.importConfigFile()
         }
-        Text {
+        MissingBanner {
             visible: root.missingAwgConfig
             Layout.fillWidth: true
             Layout.preferredHeight: visible ? implicitHeight : 0
-            horizontalAlignment: Text.AlignHCenter
-            text: "Нет конфига Amnezia"
-            color: T.warn
-            font.pixelSize: 12
-            font.family: T.fontUi
-            wrapMode: Text.WordWrap
-            MouseArea {
-                anchors.fill: parent
-                enabled: !bridge.active && !bridge.busy
-                cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-                onClicked: bridge.importAwgConfFile()
-            }
+            message: "Нет конфига Amnezia"
+            onActivated: bridge.importAwgConfFile()
         }
     }
 }

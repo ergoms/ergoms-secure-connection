@@ -6,13 +6,9 @@ Rectangle {
     property string raw: ""
     property string kind: "domain"
     property string label: root.raw
-    property bool group: false
     signal removeRequested()
-    signal clicked()
 
     readonly property string kindTitle: {
-        if (root.group)
-            return "Набор"
         if (root.kind === "process")
             return "Программа"
         if (root.kind === "service")
@@ -81,13 +77,5 @@ Rectangle {
             cursorShape: Qt.PointingHandCursor
             onClicked: root.removeRequested()
         }
-    }
-
-    MouseArea {
-        anchors.fill: parent
-        anchors.rightMargin: delBtn.width + 10
-        enabled: root.group
-        cursorShape: root.group ? Qt.PointingHandCursor : Qt.ArrowCursor
-        onClicked: root.clicked()
     }
 }

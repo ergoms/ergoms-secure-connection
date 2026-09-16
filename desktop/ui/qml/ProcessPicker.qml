@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import "Theme.js" as T
 
 Item {
@@ -117,6 +117,10 @@ Item {
                 font.pixelSize: 13
                 font.family: T.fontUi
                 leftPadding: 10
+                rightPadding: 10
+                topPadding: 0
+                bottomPadding: 0
+                verticalAlignment: TextInput.AlignVCenter
                 background: Rectangle {
                     color: T.surface2
                     radius: 10

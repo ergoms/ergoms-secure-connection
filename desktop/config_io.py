@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import os
 import shutil
@@ -27,6 +29,7 @@ from desktop.config.model import (
     default_config_template,
     ensure_config_defaults,
     normalize_dial,
+    normalize_git_via,
     normalize_scope,
     truthy as _truthy,
 )
@@ -149,12 +152,38 @@ def looks_like_wg_conf(text: str) -> bool:
     return "[interface]" in low and "privatekey" in low
 
 
+def looks_like_wg_key(raw: str) -> bool:
+    """WireGuard/Amnezia keys are 32-byte values in standard base64."""
+    text = str(raw or "").strip()
+    if not text or "REPLACE" in text.upper() or any(ch.isspace() for ch in text):
+        return False
+    try:
+        data = base64.b64decode(text, validate=True)
+    except (binascii.Error, ValueError):
+        return False
+    return len(data) == 32
+
+
+def validate_amnezia_conf(parsed: dict[str, Any] | None) -> None:
+    """Raise ValueError if the parsed .conf cannot be used as a client."""
+    if not isinstance(parsed, dict):
+        raise ValueError("Это не конфиг AmneziaWG")
+    priv = str(parsed.get("private_key") or "").strip()
+    pub = str(parsed.get("peer_public_key") or "").strip()
+    if not priv or not pub:
+        raise ValueError("В .conf нет PrivateKey или PublicKey пира")
+    if not looks_like_wg_key(priv) or not looks_like_wg_key(pub):
+        raise ValueError("В .conf неверные ключи AmneziaWG")
+
+
 def amnezia_keys_ready(parsed: dict[str, Any] | None) -> bool:
     if not isinstance(parsed, dict):
         return False
-    priv = str(parsed.get("private_key") or "").strip()
-    pub = str(parsed.get("peer_public_key") or "").strip()
-    return bool(priv and pub and "REPLACE" not in priv.upper())
+    try:
+        validate_amnezia_conf(parsed)
+    except ValueError:
+        return False
+    return True
 
 
 def render_amnezia_conf(parsed: dict[str, Any], *, host: str = "") -> str:
@@ -299,8 +328,7 @@ def install_amnezia_conf(
 ) -> dict[str, Any]:
     """Save a client .conf and switch dial to AmneziaWG. JSON keys stay empty."""
     parsed = parse_amnezia_conf(text)
-    if not amnezia_keys_ready(parsed):
-        raise ValueError("В .conf нет PrivateKey или PublicKey пира")
+    validate_amnezia_conf(parsed)
     path = Path(config_path)
     _write_awg_conf(awg_conf_path(path), text)
     write_awg_source_name(path, source_name)
@@ -730,6 +758,19 @@ def get_tun_elevate(cfg: dict[str, Any] | None = None) -> bool:
 
 def get_git_proxy_enabled(cfg: dict[str, Any] | None = None) -> bool:
     return _app(cfg).git_proxy
+
+
+def get_git_via(cfg: dict[str, Any] | None = None) -> str:
+    return normalize_git_via(_app(cfg).git_via)
+
+
+def resolve_git_integration(cfg: dict[str, Any] | None = None) -> str:
+    """off / http / tun. TUN needs a live tun.enabled flag; otherwise HTTP bridge."""
+    if not get_git_proxy_enabled(cfg):
+        return "off"
+    if get_git_via(cfg) == "tun" and get_tun_enabled(cfg):
+        return "tun"
+    return "http"
 
 
 def get_docker_proxy_enabled(cfg: dict[str, Any] | None = None) -> bool:

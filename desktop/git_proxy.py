@@ -15,6 +15,7 @@ from desktop.logutil import noop
 LogFn = Callable[[str], None]
 
 _BRIDGE_PORTS = (1088, 1080, 8877)
+_PROXY_ENV = ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY")
 
 
 def _git_exe() -> str:
@@ -109,13 +110,52 @@ def clear_instead_of(log: LogFn = noop) -> None:
 def clear_cli_env_proxy(cli_env: Path, cli_ps1: Path) -> None:
     cli_env.unlink(missing_ok=True)
     cli_ps1.unlink(missing_ok=True)
-    for name in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY"):
+    for name in _PROXY_ENV:
         cur = os.environ.get(name, "")
         if cur and _is_local_bridge_proxy(cur):
             os.environ.pop(name, None)
 
 
-def write_cli_env(http_port: int, cli_env: Path, cli_ps1: Path) -> None:
+def _write_cli_env_direct(cli_env: Path, cli_ps1: Path) -> None:
+    """Drop HTTP_PROXY so git/curl do not inherit Squid or the local bridge."""
+    from desktop.sys.constants import DEFAULT_NO_PROXY
+
+    noproxy = DEFAULT_NO_PROXY
+    cli_env.parent.mkdir(parents=True, exist_ok=True)
+    cli_env.write_text(
+        "\n".join(
+            [
+                "# ERGOMS SECURE CONNECTION CLI (TUN): source ./var/cli.env",
+                "unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy ALL_PROXY",
+                f"export NO_PROXY={noproxy}",
+                f"export no_proxy={noproxy}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    cli_ps1.write_text(
+        "\r\n".join(
+            [
+                "# ERGOMS SECURE CONNECTION CLI (TUN): . .\\var\\cli.ps1",
+                "Remove-Item Env:HTTP_PROXY,Env:HTTPS_PROXY,Env:http_proxy,Env:https_proxy,Env:ALL_PROXY -ErrorAction SilentlyContinue",
+                f"$env:NO_PROXY = '{noproxy}'",
+                f"$env:no_proxy = '{noproxy}'",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    for name in _PROXY_ENV:
+        os.environ.pop(name, None)
+    os.environ["NO_PROXY"] = noproxy
+    os.environ["no_proxy"] = noproxy
+
+
+def write_cli_env(http_port: int, cli_env: Path, cli_ps1: Path, *, via: str = "http") -> None:
+    if via == "tun":
+        _write_cli_env_direct(cli_env, cli_ps1)
+        return
     proxy = f"http://127.0.0.1:{http_port}"
     from desktop.sys.constants import DEFAULT_NO_PROXY
 
@@ -153,7 +193,7 @@ def write_cli_env(http_port: int, cli_env: Path, cli_ps1: Path) -> None:
         ),
         encoding="utf-8",
     )
-    for name in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY"):
+    for name in _PROXY_ENV:
         os.environ[name] = proxy
     os.environ["NO_PROXY"] = noproxy
     os.environ["no_proxy"] = noproxy
@@ -179,9 +219,8 @@ def _backup_git_proxy(backup_path: Path) -> None:
         return
     values = {"http.proxy": "", "https.proxy": ""}
     for key, val in _git_config_list():
-        low = key.lower()
-        if low in values:
-            values[low] = val.strip()
+        if "proxy" in key.lower():
+            values[key] = val.strip()
     backup_path.parent.mkdir(parents=True, exist_ok=True)
     backup_path.write_text(json.dumps(values, indent=2), encoding="utf-8")
 
@@ -197,7 +236,10 @@ def _restore_git_proxy(backup_path: Path) -> bool:
     if not isinstance(data, dict):
         backup_path.unlink(missing_ok=True)
         return False
-    for key in ("http.proxy", "https.proxy"):
+    keys = [str(k) for k in data if "proxy" in str(k).lower()]
+    if not keys:
+        keys = ["http.proxy", "https.proxy"]
+    for key in keys:
         prev = str(data.get(key) or "").strip()
         if prev and not _is_local_bridge_proxy(prev):
             _git("config", "--global", key, prev)
@@ -250,6 +292,24 @@ def set_git_http_proxy(
     _git("config", "--global", "https.proxy", proxy)
     _git("config", "--global", "credential.https://github.com.provider", "generic")
     log(f"git http(s).proxy = {proxy}")
+
+
+def force_git_direct_for_tun(
+    log: LogFn = noop,
+    *,
+    backup_path: Path | None = None,
+) -> None:
+    """Empty git proxy so HTTPS is raw TCP and enters TUN (not Squid / WinINET)."""
+    clear_instead_of(log)
+    if backup_path is not None:
+        _backup_git_proxy(backup_path)
+    for key, val in _git_config_list():
+        if "proxy" in key.lower() and (val or "").strip():
+            _git("config", "--global", key, "")
+    _git("config", "--global", "http.proxy", "")
+    _git("config", "--global", "https.proxy", "")
+    _git("config", "--global", "credential.https://github.com.provider", "generic")
+    log("git http(s).proxy cleared for TUN")
 
 
 def clear_git_proxy(

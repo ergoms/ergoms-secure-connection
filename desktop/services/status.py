@@ -66,19 +66,19 @@ def present_status(
         if probe_hint == "need-awg":
             title, sub, color = (
                 "Нет выхода",
-                "Reality не дал выход. Интернет закрыт — AWG или отключите VPN",
+                "Подключение без интернета. Отключите VPN или выберите AWG",
                 C_DANGER,
             )
         elif probe_hint == "udp-timeout":
             title, sub, color = (
                 "Нет выхода",
-                "UDP не дошёл. Интернет закрыт — проверьте порт на VPS или отключите VPN",
+                "Подключение без интернета. Отключите VPN и проверьте конфиг",
                 C_DANGER,
             )
         else:
             title, sub, color = (
                 "Нет выхода",
-                "Туннель без выхода. Интернет закрыт — отключите VPN, чтобы снять блок",
+                "Подключение без интернета. Отключите VPN, чтобы снять блок",
                 C_DANGER,
             )
         power = "Отключить"
@@ -88,18 +88,18 @@ def present_status(
     elif singbox and not socks_up:
         title, sub, color, power = (
             "Сбой",
-            f"процесс есть, SOCKS :{socks_port} молчит — смотрите журнал",
+            "Сбой подключения",
             C_DANGER,
             "Отключить",
         )
     elif singbox:
         title, sub, color, power = "Подключено", "", C_OK, "Отключить"
     elif tun:
-        title, sub, color, power = "TUN", "Без VLESS", C_WARN, "Отключить"
+        title, sub, color, power = "Подключено", "", C_WARN, "Отключить"
     elif ks_on:
         title, sub, color, power = (
             "Нет сети",
-            "Интернет закрыт: туннель упал. Отключите VPN, чтобы снять блок",
+            "Интернет закрыт. Отключите VPN, чтобы снять блок",
             C_WARN,
             "Отключить",
         )

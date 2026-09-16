@@ -7,7 +7,6 @@ import json
 from dataclasses import dataclass
 from typing import Any, Iterable
 
-from desktop.config.constants import BLOCKED_HOSTS
 
 KIND_DOMAIN = "domain"
 KIND_IP = "ip"
@@ -30,9 +29,6 @@ SHARED_PROCESS_NAMES = frozenset(
         "system",
     }
 )
-
-VPN_PRESET = list(BLOCKED_HOSTS)
-VPN_PRESET_SET = frozenset(h.strip().lower() for h in BLOCKED_HOSTS)
 
 _SINGLE_LABEL_DOMAINS = frozenset({"localhost", "local", "intranet"})
 
@@ -277,15 +273,6 @@ def process_matchers(value: str) -> tuple[list[str], list[str]]:
     if not name.lower().endswith(".exe"):
         names.append(f"{name}.exe")
     return names, []
-
-
-def split_vpn_preset(items: Iterable[str] | None) -> tuple[bool, list[str]]:
-    """Whether the GitHub+Cursor preset is fully present, plus leftover tokens."""
-    values = [str(x).strip() for x in (items or []) if str(x).strip()]
-    lows = {v.lower() for v in values}
-    has = bool(VPN_PRESET_SET) and VPN_PRESET_SET <= lows
-    extra = [v for v in values if v.lower() not in VPN_PRESET_SET]
-    return has, extra
 
 
 def tokens_json(items: Iterable[str] | None) -> str:

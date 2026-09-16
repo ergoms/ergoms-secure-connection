@@ -75,14 +75,13 @@ Item {
                 Card {
                     width: parent.width
                     implicitHeight: directEd.implicitHeight + 28
-                    clip: true
                     ExceptionEditor {
                         id: directEd
                         width: parent.width - 28
                         x: 14
                         y: 14
                         title: "Напрямую"
-                        subtitle: "Эти адреса и программы идут мимо VPN."
+                        subtitle: "Идут мимо VPN."
                         settingKey: "routeDirect"
                         onPickRequested: (kind) => {
                             root.pickerTarget = "routeDirect"
@@ -94,16 +93,14 @@ Item {
                 Card {
                     width: parent.width
                     implicitHeight: vpnEd.implicitHeight + 28
-                    clip: true
                     ExceptionEditor {
                         id: vpnEd
                         width: parent.width - 28
                         x: 14
                         y: 14
                         title: "Только VPN"
-                        subtitle: "Всегда через туннель, даже если правило выше отправило бы напрямую."
+                        subtitle: "Всегда через VPN."
                         settingKey: "routeVpn"
-                        presetEnabled: true
                         onPickRequested: (kind) => {
                             root.pickerTarget = "routeVpn"
                             picker.open(kind)

@@ -90,6 +90,8 @@ class OpsClient(ConnectionOps, ProbeOps, IntegrationOps):
         self._exit_probe_error: str | None = None
         self._exit_probe_hint: str | None = None
         self._pending_win_tun = False
+        self._pending_awg_tun = False
+        self._awg_tun_kwargs: dict[str, Any] | None = None
         self._defer_win_ks = False
         self._fail_closed = False
         self._hold_watchdog = False

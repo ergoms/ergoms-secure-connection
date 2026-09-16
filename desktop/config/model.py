@@ -76,6 +76,14 @@ def normalize_scope(value: Any) -> str:
     return "full"
 
 
+def normalize_git_via(value: Any) -> str:
+    """How git reaches the VPN: local HTTP bridge or raw TCP into TUN."""
+    text = str(value or "").strip().lower()
+    if text in ("tun", "tunnel"):
+        return "tun"
+    return "http"
+
+
 def filled_str(value: Any) -> str:
     return str(value or "").strip()
 
@@ -266,6 +274,7 @@ class AppConfig:
     watchdog_max_retries: int = WATCHDOG_MAX_RETRIES
     kill_switch: bool = True
     git_proxy: bool = False
+    git_via: str = "http"
     docker_proxy: bool = False
     server: ServerConfig = field(default_factory=ServerConfig)
     blocked_hosts: list[str] = field(default_factory=lambda: list(BLOCKED_HOSTS))
@@ -296,6 +305,7 @@ class AppConfig:
         self.watchdog_max_retries = max(0, as_int(self.watchdog_max_retries, WATCHDOG_MAX_RETRIES))
         self.kill_switch = as_bool(self.kill_switch, True)
         self.git_proxy = as_bool(self.git_proxy, False)
+        self.git_via = normalize_git_via(self.git_via)
         self.docker_proxy = as_bool(self.docker_proxy, False)
         self.blocked_hosts = [str(x) for x in (self.blocked_hosts or [])]
         self.proxy_bypass = [str(x) for x in (self.proxy_bypass or list(STANDARD_BYPASS_PRESET))]
@@ -314,6 +324,7 @@ class AppConfig:
         extra = {k: v for k, v in data.items() if k not in known and k not in ("ssh", "tun_enabled", "worker_base_url")}
         corporate = as_bool(data.get("corporate"), False)
         git_present = "git_proxy" in data
+        git_via_present = "git_via" in data
         docker_present = "docker_proxy" in data
         return cls(
             corporate=corporate,
@@ -327,6 +338,7 @@ class AppConfig:
             watchdog_max_retries=as_int(data.get("watchdog_max_retries"), WATCHDOG_MAX_RETRIES),
             kill_switch=as_bool(data.get("kill_switch"), True),
             git_proxy=as_bool(data.get("git_proxy"), corporate) if git_present else corporate,
+            git_via=normalize_git_via(data.get("git_via")) if git_via_present else ("tun" if corporate else "http"),
             docker_proxy=as_bool(data.get("docker_proxy"), corporate) if docker_present else corporate,
             server=ServerConfig.from_dict(data.get("server"), legacy_ssh=_section(data.get("ssh"))),
             blocked_hosts=list(data.get("blocked_hosts") or BLOCKED_HOSTS),

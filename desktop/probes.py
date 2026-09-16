@@ -226,6 +226,13 @@ class ProbeOps:
         self._exit_probe_hint = None
         self._fail_closed = False
         self.log(f"проверка выхода: OK (HTTPS {probe_host} через SOCKS)")
+        if getattr(self, "_pending_awg_tun", False):
+            try:
+                self._upgrade_awg_to_tun()
+            except Exception as exc:  # noqa: BLE001
+                self.log(f"AmneziaWG TUN после handshake: {exc}")
+                self._pending_awg_tun = False
+                self._awg_tun_kwargs = None
         if getattr(self, "_pending_win_tun", False):
             self._pending_win_tun = False
             allow = list(getattr(self, "_pending_allow", []) or [])

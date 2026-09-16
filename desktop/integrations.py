@@ -14,12 +14,18 @@ from desktop.config_io import (
     get_docker_proxy_enabled,
     get_git_proxy_enabled,
     get_http_bridge_port,
+    resolve_git_integration,
     get_pac_listen_port,
     get_socks_scope,
     get_tun_enabled,
     resolve_corporate_proxy,
 )
-from desktop.git_proxy import clear_git_proxy, set_git_http_proxy, write_cli_env
+from desktop.git_proxy import (
+    clear_git_proxy,
+    force_git_direct_for_tun,
+    set_git_http_proxy,
+    write_cli_env,
+)
 from desktop.paths import is_frozen, self_command
 from desktop.sys_proxy import (
     disable_browser_proxy,
@@ -385,24 +391,22 @@ class IntegrationOps:
 
     def _apply_integrations(self, cfg: dict[str, Any], http_port: int) -> None:
         """Git / Docker / PAC after sing-box is up. Git and Docker are optional."""
-        if get_git_proxy_enabled(cfg):
-            if get_tun_enabled():
-                clear_git_proxy(
-                    self.paths.cli_env,
-                    self.paths.cli_ps1,
-                    log=self.log,
-                    backup_path=self.paths.git_proxy_backup,
-                )
-            else:
-                set_git_http_proxy(
-                    f"http://127.0.0.1:{http_port}",
-                    log=self.log,
-                    backup_path=self.paths.git_proxy_backup,
-                )
-            write_cli_env(http_port, self.paths.cli_env, self.paths.cli_ps1)
-            self.log(
-                f"git via {'TUN' if get_tun_enabled() else f'sing-box HTTP :{http_port}'}"
+        git_mode = resolve_git_integration(cfg)
+        if git_mode == "http":
+            set_git_http_proxy(
+                f"http://127.0.0.1:{http_port}",
+                log=self.log,
+                backup_path=self.paths.git_proxy_backup,
             )
+            write_cli_env(http_port, self.paths.cli_env, self.paths.cli_ps1, via="http")
+            self.log(f"git via sing-box HTTP :{http_port}")
+        elif git_mode == "tun":
+            force_git_direct_for_tun(
+                log=self.log,
+                backup_path=self.paths.git_proxy_backup,
+            )
+            write_cli_env(http_port, self.paths.cli_env, self.paths.cli_ps1, via="tun")
+            self.log("git via TUN")
         elif (
             self.paths.git_proxy_backup.is_file()
             or self.paths.cli_env.is_file()

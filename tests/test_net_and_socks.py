@@ -9,10 +9,12 @@ from pathlib import Path
 
 import pytest
 
+from desktop.config.model import AppConfig, normalize_git_via
 from desktop.config_io import (
     default_config_template,
     merge_imported_config,
     normalize_dial,
+    resolve_git_integration,
     save_config,
 )
 from desktop.net_host import resolve_host
@@ -527,6 +529,7 @@ def test_mode_switch_save_keeps_disk_exceptions() -> None:
     cfg["proxy_bypass"] = ["*.local", "*.lan", "*.tu-bryansk.ru"]
     cfg["transport"]["dial"] = "vless-reality"
     cfg["git_proxy"] = True
+    cfg["git_via"] = "tun"
     cfg["docker_proxy"] = True
     settings = cfg_to_settings(cfg)
 
@@ -542,7 +545,44 @@ def test_mode_switch_save_keeps_disk_exceptions() -> None:
     assert "*.tu-bryansk.ru" in out["proxy_bypass"]
     assert out["transport"]["dial"] == "vless-reality"
     assert out["git_proxy"] is True
+    assert out["git_via"] == "tun"
     assert out["docker_proxy"] is True
+
+
+def test_corporate_git_defaults_to_tun() -> None:
+    office = AppConfig.from_dict({"corporate": True, "git_proxy": True})
+    assert office.git_via == "tun"
+    home = AppConfig.from_dict({"corporate": False, "git_proxy": True})
+    assert home.git_via == "http"
+    assert normalize_git_via("tunnel") == "tun"
+    assert normalize_git_via("") == "http"
+
+    tun_cfg = {
+        "corporate": True,
+        "git_proxy": True,
+        "git_via": "tun",
+        "tun": {"enabled": True},
+    }
+    assert resolve_git_integration(tun_cfg) == "tun"
+    tun_cfg["tun"] = {"enabled": False}
+    assert resolve_git_integration(tun_cfg) == "http"
+    tun_cfg["git_proxy"] = False
+    tun_cfg["tun"] = {"enabled": True}
+    assert resolve_git_integration(tun_cfg) == "off"
+    assert resolve_git_integration({"git_proxy": True, "git_via": "http", "tun": {"enabled": True}}) == "http"
+
+
+def test_write_cli_env_tun_unsets_proxy(tmp_path, monkeypatch) -> None:
+    from desktop.git_proxy import write_cli_env
+
+    monkeypatch.setenv("HTTP_PROXY", "http://10.16.0.8:3128")
+    env = tmp_path / "cli.env"
+    ps1 = tmp_path / "cli.ps1"
+    write_cli_env(1088, env, ps1, via="tun")
+    text = env.read_text(encoding="utf-8")
+    assert "unset HTTP_PROXY" in text
+    assert "127.0.0.1:1088" not in text
+    assert "HTTP_PROXY" not in __import__("os").environ
 
 
 def test_apply_settings_empty_form_keeps_disk() -> None:
@@ -583,24 +623,26 @@ def test_awg_conf_is_outside_json(tmp_path: Path) -> None:
         read_awg_source_name,
     )
 
+    priv = "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE="
+    pub = "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI="
     text = (
         "[Interface]\n"
-        "PrivateKey = client-priv\n"
+        f"PrivateKey = {priv}\n"
         "Address = 10.66.66.2/32\n"
         "MTU = 1280\n"
         "Jc = 10\n"
         "H1 = 111\n"
         "\n"
         "[Peer]\n"
-        "PublicKey = server-pub\n"
+        f"PublicKey = {pub}\n"
         "PresharedKey = psk\n"
         "Endpoint = 203.0.113.10:51821\n"
         "AllowedIPs = 0.0.0.0/0\n"
         "PersistentKeepalive = 25\n"
     )
     parsed = parse_amnezia_conf(text)
-    assert parsed["private_key"] == "client-priv"
-    assert parsed["peer_public_key"] == "server-pub"
+    assert parsed["private_key"] == priv
+    assert parsed["peer_public_key"] == pub
     assert parsed["host"] == "203.0.113.10"
     assert parsed["port"] == 51821
     path = tmp_path / "config.json"
@@ -609,12 +651,54 @@ def test_awg_conf_is_outside_json(tmp_path: Path) -> None:
     disk = json.loads(path.read_text(encoding="utf-8"))
     assert "amneziawg" not in disk["transport"]
     assert disk["transport"]["dial"] == "amneziawg"
-    assert cfg["transport"]["amneziawg"]["private_key"] == "client-priv"
+    assert cfg["transport"]["amneziawg"]["private_key"] == priv
     loaded = load_config(path)
-    assert loaded["transport"]["amneziawg"]["private_key"] == "client-priv"
+    assert loaded["transport"]["amneziawg"]["private_key"] == priv
     assert loaded["transport"]["amneziawg"]["jc"] == 10
     assert loaded["server"]["host"] == "203.0.113.10"
     assert read_awg_source_name(path) == "pc.conf"
+
+
+def test_install_amnezia_rejects_invalid_and_keeps_old(tmp_path: Path) -> None:
+    from desktop.config_io import install_amnezia_conf, load_config
+
+    good = (
+        "[Interface]\n"
+        "PrivateKey = QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE=\n"
+        "Address = 10.66.66.2/32\n"
+        "\n"
+        "[Peer]\n"
+        "PublicKey = QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=\n"
+        "Endpoint = 203.0.113.10:51820\n"
+    )
+    path = tmp_path / "config.json"
+    save_config(path, default_config_template())
+    install_amnezia_conf(path, good, source_name="good.conf")
+    with pytest.raises(ValueError, match="неверные ключи"):
+        install_amnezia_conf(
+            path,
+            "[Interface]\nPrivateKey = not-a-key\n\n[Peer]\nPublicKey = also-bad\n",
+            source_name="bad.conf",
+        )
+    loaded = load_config(path, force=True)
+    body = (tmp_path / "amneziawg.conf").read_text(encoding="utf-8")
+    assert loaded["transport"]["amneziawg"]["private_key"].startswith("QUFB")
+    assert "not-a-key" not in body
+
+
+def test_overlay_skips_broken_awg_conf(tmp_path: Path) -> None:
+    from desktop.config_io import load_config, overlay_amnezia_conf
+
+    path = tmp_path / "config.json"
+    save_config(path, default_config_template())
+    (tmp_path / "amneziawg.conf").write_text(
+        "[Interface]\nPrivateKey = garbage\n\n[Peer]\nPublicKey = trash\n",
+        encoding="utf-8",
+    )
+    cfg = load_config(path, force=True)
+    assert not str(cfg["transport"]["amneziawg"].get("private_key") or "").strip()
+    skipped = overlay_amnezia_conf(cfg, tmp_path / "amneziawg.conf")
+    assert not str(skipped["transport"]["amneziawg"].get("private_key") or "").strip()
 
 
 def test_save_config_empty_payload_keeps_disk(tmp_path: Path) -> None:
@@ -622,8 +706,12 @@ def test_save_config_empty_payload_keeps_disk(tmp_path: Path) -> None:
     live = default_config_template()
     live["server"]["host"] = "vps.example"
     live["transport"]["uuid"] = "keep-uuid"
-    live["transport"]["amneziawg"]["private_key"] = "awg-priv"
-    live["transport"]["amneziawg"]["peer_public_key"] = "awg-pub"
+    live["transport"]["amneziawg"]["private_key"] = (
+        "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE="
+    )
+    live["transport"]["amneziawg"]["peer_public_key"] = (
+        "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI="
+    )
     live["blocked_hosts"] = ["keep.example"]
     path.write_text(json.dumps(live), encoding="utf-8")
     save_config(path, {"transport": {"uuid": "", "amneziawg": {"private_key": ""}}})
@@ -635,8 +723,8 @@ def test_save_config_empty_payload_keeps_disk(tmp_path: Path) -> None:
     conf = tmp_path / "amneziawg.conf"
     assert conf.is_file()
     text = conf.read_text(encoding="utf-8")
-    assert "awg-priv" in text
-    assert "awg-pub" in text
+    assert "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE=" in text
+    assert "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=" in text
 
 
 def test_leak_shield_apply_restore_roundtrip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

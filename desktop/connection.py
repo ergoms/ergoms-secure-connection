@@ -138,8 +138,9 @@ class ConnectionOps:
         defer_win = sys.platform == "win32" and (not bool(office_proxy) or udp_dial)
         self._defer_win_ks = bool(defer_win and kill_switch and udp_dial)
         self._hold_watchdog = True
-        start_tun = enable_tun
-        start_ks = kill_switch and not self._defer_win_ks
+        awg_defer_tun = bool(awg and enable_tun)
+        start_tun = enable_tun and not awg_defer_tun
+        start_ks = kill_switch and not self._defer_win_ks and not awg_defer_tun
         if (
             self._defer_win_ks
             and kill_switch_is_applied()
@@ -161,6 +162,24 @@ class ConnectionOps:
         postlude = (
             kill_switch_pin_cmds(self.paths.var_dir, allow) if start_tun else []
         )
+        self._pending_awg_tun = awg_defer_tun
+        self._awg_tun_kwargs = None
+        if awg_defer_tun:
+            self._awg_tun_kwargs = {
+                "server_host": host,
+                "transport": transport,
+                "corporate_proxy": office_proxy,
+                "socks_port": socks_port,
+                "http_port": http_port,
+                "sing_box_path": sing_box_path,
+                "elevate": get_tun_elevate(),
+                "bypass_hosts": bypass,
+                "vpn_hosts": vpn_hosts,
+                "mtu": get_tun_mtu(cfg),
+                "vps_proxy_ports": get_vps_proxy_ports(cfg),
+                "kill_switch": kill_switch,
+            }
+            self.log("AmneziaWG: сначала handshake без TUN")
         self.singbox.start(
             server_host=host,
             transport=transport,
@@ -236,6 +255,75 @@ class ConnectionOps:
             daemon=True,
         ).start()
 
+
+    def _upgrade_awg_to_tun(self) -> None:
+        """After AWG handshake, restart sing-box with TUN + routes."""
+        kw = getattr(self, "_awg_tun_kwargs", None)
+        self._awg_tun_kwargs = None
+        self._pending_awg_tun = False
+        if not kw:
+            return
+        self.log("AmneziaWG: handshake есть — поднимаю TUN")
+        cfg = self.config()
+        allow = list(getattr(self, "_pending_allow", []) or [])
+        kill_switch = bool(kw.pop("kill_switch", get_kill_switch()))
+        start_ks = kill_switch and not getattr(self, "_defer_win_ks", False)
+        prelude: list[str] = []
+        if start_ks:
+            prelude = self._ensure_kill_switch(cfg)
+        elif allow:
+            remember_kill_switch_plan(self.paths.var_dir, allow)
+        postlude = kill_switch_pin_cmds(self.paths.var_dir, allow) if allow else []
+        try:
+            self.singbox.start(
+                enable_tun=True,
+                force_restart=True,
+                kill_switch=start_ks,
+                prelude_cmds=prelude,
+                postlude_cmds=postlude,
+                **kw,
+            )
+        except Exception:
+            self.log("AmneziaWG: TUN не поднялся — оставляю подключение без него")
+            self.singbox.start(
+                enable_tun=False,
+                force_restart=True,
+                kill_switch=False,
+                prelude_cmds=[],
+                postlude_cmds=[],
+                **kw,
+            )
+            raise
+        if self.paths.state_path.is_file():
+            try:
+                state = json.loads(self.paths.state_path.read_text(encoding="utf-8"))
+                if isinstance(state, dict):
+                    state["tun"] = True
+                    self.paths.state_path.write_text(
+                        json.dumps(state, indent=2), encoding="utf-8"
+                    )
+            except (OSError, json.JSONDecodeError, TypeError):
+                pass
+        self._pending_win_tun = bool(
+            procutil.is_admin() and sys.platform == "win32"
+        )
+        if self._pending_win_tun and allow:
+            try:
+                self._install_win_tun_routes(allow)
+            except Exception as exc:  # noqa: BLE001
+                self.log(f"TUN после AWG: {exc}")
+            self._pending_win_tun = False
+        if getattr(self, "_defer_win_ks", False) and kill_switch:
+            try:
+                apply_kill_switch(
+                    allow,
+                    var_dir=self.paths.var_dir,
+                    log=self.log,
+                    blackhole=False,
+                )
+            except Exception as exc:  # noqa: BLE001
+                self.log(f"kill switch после AWG: {exc}")
+            self._defer_win_ks = False
 
     def _stop_session_core(self, *, scan_helpers: bool = False) -> Exception | None:
         stop_err: Exception | None = None
@@ -572,6 +660,8 @@ class ConnectionOps:
         self._exit_probe_error = None
         self._exit_probe_hint = None
         self._fail_closed = False
+        self._pending_awg_tun = False
+        self._awg_tun_kwargs = None
         try:
             self.stop_watchdog_daemon()
         except Exception as exc:  # noqa: BLE001

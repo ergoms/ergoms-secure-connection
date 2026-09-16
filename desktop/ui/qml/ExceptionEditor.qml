@@ -1,5 +1,5 @@
 import QtQuick
-import QtQuick.Controls
+import QtQuick.Controls.Basic
 import "Theme.js" as T
 
 Column {
@@ -7,9 +7,6 @@ Column {
     property string title: ""
     property string subtitle: ""
     property string settingKey: ""
-    property bool presetEnabled: false
-    property bool presetExpanded: false
-    property bool listOpen: true
     property var hint: ({})
     property bool analyzing: false
     property alias query: input.text
@@ -17,25 +14,19 @@ Column {
 
     width: parent ? parent.width : 280
     spacing: 8
-    clip: true
 
     readonly property string rawJson: root.settingKey === "routeVpn"
         ? String(bridge.settings.routeVpn || "[]")
         : String(bridge.settings.routeDirect || "[]")
     readonly property var listItems: {
         var _watch = rawJson
-        var _exp = presetExpanded
-        return chipModel()
+        return tokens()
     }
     readonly property int listCount: {
         var _watch = rawJson
         return tokens().length
     }
-
-    readonly property var presetList: {
-        try { return JSON.parse(bridge.vpnPresetJson || "[]") }
-        catch (e) { return [] }
-    }
+    property bool listOpen: true
 
     function tokens() {
         try { return JSON.parse(String(bridge.settings[root.settingKey] || "[]")) }
@@ -79,44 +70,6 @@ Column {
         setTokens(tokens().filter(function (t) { return String(t).toLowerCase() !== want }))
     }
 
-    function removePreset() {
-        var set = {}
-        var preset = root.presetList
-        for (var i = 0; i < preset.length; i++)
-            set[String(preset[i]).toLowerCase()] = true
-        setTokens(tokens().filter(function (t) { return !set[String(t).toLowerCase()] }))
-        root.presetExpanded = false
-    }
-
-    function hasFullPreset() {
-        if (!root.presetEnabled)
-            return false
-        var cur = {}
-        var list = tokens()
-        for (var i = 0; i < list.length; i++)
-            cur[String(list[i]).toLowerCase()] = true
-        var preset = root.presetList
-        if (!preset.length)
-            return false
-        for (var j = 0; j < preset.length; j++) {
-            if (!cur[String(preset[j]).toLowerCase()])
-                return false
-        }
-        return true
-    }
-
-    function chipModel() {
-        var list = tokens()
-        if (!root.presetEnabled || !hasFullPreset() || root.presetExpanded)
-            return list
-        var set = {}
-        var preset = root.presetList
-        for (var i = 0; i < preset.length; i++)
-            set[String(preset[i]).toLowerCase()] = true
-        var extra = list.filter(function (t) { return !set[String(t).toLowerCase()] })
-        return ["__preset__"].concat(extra)
-    }
-
     function applyHint(obj) {
         root.hint = obj || {}
         root.analyzing = false
@@ -144,11 +97,13 @@ Column {
     }
 
     Text {
+        width: parent.width
         text: root.title
         color: T.text
         font.pixelSize: 14
         font.weight: Font.DemiBold
         font.family: T.fontUi
+        wrapMode: Text.WordWrap
     }
     Text {
         width: parent.width
@@ -201,19 +156,9 @@ Column {
             delegate: ExceptionRow {
                 required property var modelData
                 raw: String(modelData)
-                group: raw === "__preset__"
-                kind: group ? "domain" : bridge.tokenKind(raw)
-                label: group ? ("GitHub + Cursor · " + root.presetList.length) : bridge.tokenLabel(raw)
-                onRemoveRequested: {
-                    if (group)
-                        root.removePreset()
-                    else
-                        root.removeToken(raw)
-                }
-                onClicked: {
-                    if (group)
-                        root.presetExpanded = true
-                }
+                kind: bridge.tokenKind(raw)
+                label: bridge.tokenLabel(raw)
+                onRemoveRequested: root.removeToken(raw)
             }
         }
     }
@@ -222,7 +167,7 @@ Column {
         id: input
         width: parent.width
         height: 38
-        placeholderText: "домен, IP, *.suffix или name.exe"
+        placeholderText: "домен, IP или программа"
         placeholderTextColor: T.muted
         color: T.text
         selectedTextColor: T.text
@@ -231,6 +176,8 @@ Column {
         font.family: T.fontUi
         leftPadding: 12
         rightPadding: 12
+        topPadding: 0
+        bottomPadding: 0
         verticalAlignment: TextInput.AlignVCenter
         onTextEdited: analyzeTimer.restart()
         onAccepted: {

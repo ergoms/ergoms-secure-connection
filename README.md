@@ -111,7 +111,7 @@ ergoms install-service # автозапуск
 | `socks_scope` | `full` или `github` (область PAC) |
 | `tun.enabled` / `tun.elevate` | TUN вместе с `on` (по умолчанию вкл.), запрос прав |
 | `kill_switch` | при обрыве резать интернет (по умолчанию вкл.; нужен TUN) |
-| `git_proxy` | проксировать git через VPN (в корпоративном пресете вкл., иначе выкл.) |
+| `git_proxy` / `git_via` | git через VPN: выкл / `http` (мост :1088) / `tun`. В корпоративном пресете вкл. и `tun` |
 | `docker_proxy` | проксировать Docker Desktop / CLI через VPN (в корпоративном пресете вкл., иначе выкл.) |
 | `corporate_proxy` | корпоративный Squid |
 | `tun.sing_box_path` | пусто = авто `tools/sing-box` |

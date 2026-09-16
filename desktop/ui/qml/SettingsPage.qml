@@ -55,107 +55,62 @@ Item {
                     wrapMode: Text.WordWrap
                 }
 
-                SectionLabel { text: "VPN" }
+                SectionLabel { text: "РЕЖИМ" }
                 Card {
                     width: parent.width
-                    implicitHeight: vpnCol.implicitHeight + 24
-                    Column {
-                        id: vpnCol
+                    implicitHeight: 36 + 28
+                    Segmented {
                         anchors.left: parent.left
                         anchors.right: parent.right
-                        anchors.top: parent.top
+                        anchors.verticalCenter: parent.verticalCenter
                         anchors.margins: 14
-                        spacing: 10
+                        value: bridge.corporate ? "corp" : "home"
+                        model: [
+                            { label: "Обычный", value: "home" },
+                            { label: "Корпоративный", value: "corp" }
+                        ]
+                        onActivated: (v) => bridge.applyCorporateMode(v === "corp")
+                    }
+                }
 
-                        BoolSegmented {
-                            label: "Корпоративный VPN"
-                            on: bridge.corporate
-                            onToggled: (v) => bridge.applyCorporateMode(v)
+                SettingsSection {
+                    title: "ЗАЩИТА"
+                    BoolSegmented {
+                        label: "Весь трафик через VPN"
+                        on: bridge.settings.tunAuto
+                        onToggled: (v) => {
+                            bridge.settings.tunAuto = v
+                            if (!v)
+                                bridge.settings.killSwitch = false
                         }
-                        BoolSegmented {
-                            label: "TUN (весь трафик)"
-                            on: bridge.settings.tunAuto
-                            onToggled: (v) => {
-                                bridge.settings.tunAuto = v
-                                if (!v)
-                                    bridge.settings.killSwitch = false
-                            }
+                    }
+                    BoolSegmented {
+                        label: "Защита при обрыве"
+                        on: bridge.settings.killSwitch
+                        onToggled: (v) => {
+                            bridge.settings.killSwitch = v
+                            if (v)
+                                bridge.settings.tunAuto = true
                         }
-                        Text {
-                            width: parent.width
-                            text: root.tunOn
-                                  ? "Весь трафик устройства идёт через VPN."
-                                  : "Без этого режима часть приложений может ходить в интернет напрямую."
-                            color: T.muted
-                            font.pixelSize: 11
-                            font.family: T.fontUi
-                            wrapMode: Text.WordWrap
-                        }
-                        Text { text: "Системный прокси Windows"; color: T.muted; font.pixelSize: 11; font.weight: Font.Medium; font.family: T.fontUi }
-                        Segmented {
-                            width: parent.width
-                            enabled: false
-                            value: root.tunOn ? "0" : "1"
-                            model: [
-                                { label: "Выкл", value: "0" },
-                                { label: "PAC", value: "1" }
-                            ]
-                        }
-                        Text {
-                            width: parent.width
-                            text: root.tunOn
-                                  ? "Не используется, пока включён полный туннель."
-                                  : "Включается автоматически при подключении."
-                            color: T.muted
-                            font.pixelSize: 11
-                            font.family: T.fontUi
-                            wrapMode: Text.WordWrap
-                        }
-                        BoolSegmented {
-                            label: "Защита при обрыве"
-                            on: bridge.settings.killSwitch
-                            onToggled: (v) => {
-                                bridge.settings.killSwitch = v
-                                if (v)
-                                    bridge.settings.tunAuto = true
-                            }
-                        }
-                        Text {
-                            width: parent.width
-                            text: "При обрыве VPN интернет будет недоступен, пока вы не отключитесь."
-                            color: T.muted
-                            font.pixelSize: 11
-                            font.family: T.fontUi
-                            wrapMode: Text.WordWrap
-                        }
-                        Text {
-                            width: parent.width
-                            text: "Пока включён полный туннель, закрываются Secure DNS и WebRTC host-IP. Перезапустите Chrome или Edge. Чужой VPN с default-маршрутом будет снят."
-                            color: T.muted
-                            font.pixelSize: 11
-                            font.family: T.fontUi
-                            wrapMode: Text.WordWrap
-                        }
-                        BoolSegmented {
-                            label: "Автозапуск с компьютером"
-                            on: bridge.autostart
-                            onToggled: (v) => bridge.setAutostart(v)
-                        }
-                        Text {
-                            visible: bridge.corporate
-                            height: visible ? implicitHeight : 0
-                            text: "Прокси организации"
-                            color: T.muted
-                            font.pixelSize: 11
-                            font.weight: Font.Medium
-                            font.family: T.fontUi
-                        }
-                        SettingField {
-                            visible: bridge.corporate
-                            height: visible ? implicitHeight : 0
-                            label: "Адрес прокси"
-                            settingKey: "corporateProxy"
-                        }
+                    }
+                    Text {
+                        width: parent.width
+                        text: "При обрыве интернет будет недоступен, пока вы не отключитесь."
+                        color: T.muted
+                        font.pixelSize: 11
+                        font.family: T.fontUi
+                        wrapMode: Text.WordWrap
+                    }
+                    BoolSegmented {
+                        label: "Автозапуск с компьютером"
+                        on: bridge.autostart
+                        onToggled: (v) => bridge.setAutostart(v)
+                    }
+                    SettingField {
+                        visible: bridge.corporate
+                        height: visible ? implicitHeight : 0
+                        label: "Адрес прокси"
+                        settingKey: "corporateProxy"
                     }
                 }
 
@@ -228,16 +183,6 @@ Item {
                         anchors.margins: 14
                         spacing: 10
 
-                        Text {
-                            visible: bridge.corporate
-                            width: parent.width
-                            height: visible ? implicitHeight : 0
-                            text: "В офисе по умолчанию Reality через Squid. Можно выбрать AWG — он идёт минуя прокси."
-                            color: T.muted
-                            font.pixelSize: 11
-                            font.family: T.fontUi
-                            wrapMode: Text.WordWrap
-                        }
                         TransportFields {
                             fields: [
                                 { label: "UUID", key: "trUuid", password: true },
@@ -269,14 +214,6 @@ Item {
                         spacing: 10
 
                         Text {
-                            width: parent.width
-                            text: "Загрузка конфига AmneziaWG"
-                            color: T.muted
-                            font.pixelSize: 11
-                            font.family: T.fontUi
-                            wrapMode: Text.WordWrap
-                        }
-                        Text {
                             visible: Boolean(bridge.settings.awgLoaded)
                             width: parent.width
                             height: visible ? implicitHeight : 0
@@ -295,15 +232,7 @@ Item {
                 }
 
                 SettingsSection {
-                    title: "SSH С СЕРВЕРА"
-                    Text {
-                        width: parent.width
-                        text: "Удалённый доступ к этому компьютеру, пока VPN включён."
-                        color: T.muted
-                        font.pixelSize: 11
-                        font.family: T.fontUi
-                        wrapMode: Text.WordWrap
-                    }
+                    title: "УДАЛЁННЫЙ ДОСТУП"
                     BoolSegmented {
                         label: "Доступ с сервера на этот ПК"
                         on: bridge.settings.reverseSsh
@@ -328,22 +257,12 @@ Item {
                         settingKey: "reverseSshVpsPort"
                     }
                 }
-
-                Text {
-                    width: parent.width
-                    text: bridge.dataRoot
-                    color: T.muted
-                    font.pixelSize: 10
-                    font.family: T.fontUi
-                    wrapMode: Text.WrapAnywhere
-                    topPadding: 6
-                }
             }
         }
 
         Rectangle {
             Layout.fillWidth: true
-            Layout.preferredHeight: 62 + missingBox.implicitHeight
+            implicitHeight: missingCol.implicitHeight + 62
             color: T.bg
 
             Rectangle {
@@ -355,46 +274,26 @@ Item {
             }
 
             Column {
-                id: missingBox
+                id: missingCol
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.top: parent.top
                 anchors.leftMargin: 14
                 anchors.rightMargin: 14
-                anchors.topMargin: 8
-                spacing: 3
+                anchors.topMargin: 10
+                spacing: 8
 
-                Text {
+                MissingBanner {
                     visible: root.missingAppConfig
-                    width: parent.width
                     height: visible ? implicitHeight : 0
-                    text: "Нет общего конфига"
-                    color: T.warn
-                    font.pixelSize: 12
-                    font.family: T.fontUi
-                    wrapMode: Text.WordWrap
-                    MouseArea {
-                        anchors.fill: parent
-                        enabled: !bridge.active && !bridge.busy
-                        cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-                        onClicked: bridge.importConfigFile()
-                    }
+                    message: "Нет общего конфига"
+                    onActivated: bridge.importConfigFile()
                 }
-                Text {
+                MissingBanner {
                     visible: root.missingAwgConfig
-                    width: parent.width
                     height: visible ? implicitHeight : 0
-                    text: "Нет конфига Amnezia"
-                    color: T.warn
-                    font.pixelSize: 12
-                    font.family: T.fontUi
-                    wrapMode: Text.WordWrap
-                    MouseArea {
-                        anchors.fill: parent
-                        enabled: !bridge.active && !bridge.busy
-                        cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-                        onClicked: bridge.importAwgConfFile()
-                    }
+                    message: "Нет конфига Amnezia"
+                    onActivated: bridge.importAwgConfFile()
                 }
             }
 

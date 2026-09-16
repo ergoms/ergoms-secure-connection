@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from desktop.config.constants import BLOCKED_HOSTS
 from desktop.config.model import default_config_template
 from desktop.route_analyzer import analyze_token
 from desktop.route_tokens import (
@@ -23,7 +22,6 @@ from desktop.route_tokens import (
     parse_token,
     process_matchers,
     serialize_list,
-    split_vpn_preset,
     tokens_from_json,
     tokens_json,
 )
@@ -83,14 +81,6 @@ def test_host_patterns_skip_exe() -> None:
 def test_as_cidr() -> None:
     assert as_cidr("10.0.0.1") == "10.0.0.1/32"
     assert as_cidr("10.0.0.0/8") == "10.0.0.0/8"
-
-
-def test_vpn_preset_group() -> None:
-    has, extra = split_vpn_preset(list(BLOCKED_HOSTS) + ["corp.example"])
-    assert has
-    assert extra == ["corp.example"]
-    has_no, _ = split_vpn_preset(["github.com"])
-    assert not has_no
 
 
 def test_bypass_to_singbox_ignores_exe_and_ip() -> None:

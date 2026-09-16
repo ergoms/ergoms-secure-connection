@@ -17,6 +17,8 @@ from desktop.singbox_mode import (
     SingboxModeManager,
     amneziawg_opts,
     effective_tun_mtu,
+    require_transport,
+    rustdesk_hairpin_rules,
     underlay_bind_target,
     underlay_keep_hosts,
 )
@@ -85,6 +87,49 @@ def _build(
         )
 
 
+def _rustdesk_rules(box: dict[str, Any]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for rule in box["route"]["rules"]:
+        port = rule.get("port")
+        ports = port if isinstance(port, list) else [port] if port is not None else []
+        if 21117 in ports and rule.get("override_address") == "127.0.0.1":
+            out.append(rule)
+    return out
+
+
+def test_require_transport_awg_without_reality_uuid() -> None:
+    cfg = {
+        "transport": {
+            "dial": "amneziawg",
+            "type": "vless-reality",
+            "uuid": "",
+            "public_key": "",
+            "amneziawg": {
+                "private_key": "awg-priv",
+                "peer_public_key": "awg-pub",
+            },
+        }
+    }
+    out = require_transport(cfg)
+    assert out["dial"] == "amneziawg"
+    assert out["amneziawg"]["private_key"] == "awg-priv"
+
+
+def test_rustdesk_hairpin_ip_and_hostname() -> None:
+    with patch("desktop.singbox_mode.resolve_host", return_value="203.0.113.10"):
+        rules = rustdesk_hairpin_rules("vps.example")
+    assert any(
+        "203.0.113.10/32" in (r.get("ip_cidr") or [])
+        and r.get("override_address") == "127.0.0.1"
+        for r in rules
+    )
+    assert any(
+        "vps.example" in (r.get("domain") or [])
+        and r.get("override_address") == "127.0.0.1"
+        for r in rules
+    )
+
+
 def test_build_config_home_awg_minimal_without_tun() -> None:
     box = _build(dial="amneziawg", office=False, awg=True, enable_tun=False)
     tags = [ob.get("tag") for ob in box["outbounds"]]
@@ -147,6 +192,22 @@ def test_build_config_home_vless_with_tun() -> None:
     types = [ob["type"] for ob in box["outbounds"]]
     assert "vless" in types
     assert "http" not in types
+    rustdesk = _rustdesk_rules(box)
+    assert rustdesk
+    sniff_idx = next(
+        i
+        for i, r in enumerate(box["route"]["rules"])
+        if r.get("action") == "sniff" and r.get("inbound") == ["tun-in"]
+    )
+    rd_idx = next(
+        i
+        for i, r in enumerate(box["route"]["rules"])
+        if 21117 in (
+            r.get("port") if isinstance(r.get("port"), list) else [r.get("port")]
+        )
+        and r.get("override_address") == "127.0.0.1"
+    )
+    assert rd_idx < sniff_idx
 
 
 def _ssh_port_rules(box: dict[str, Any]) -> list[dict[str, Any]]:
@@ -188,6 +249,7 @@ def test_office_ssh_to_vps_via_proxy() -> None:
         and not r.get("inbound")
     ]
     assert hairpin
+    assert _rustdesk_rules(box)
 
 
 def test_user_ssh_and_remote_ssh_are_not_rejected() -> None:
@@ -257,6 +319,7 @@ def test_build_config_office_awg_with_tun() -> None:
     assert "192.0.2.10/32" in excluded
     assert "203.0.113.10/32" in excluded
     assert not _office_awg_hairpin(box)
+    assert _rustdesk_rules(box)
     assert not any(
         r.get("network") == "udp" and r.get("port") == 443 and r.get("action") == "reject"
         for r in box["route"]["rules"]

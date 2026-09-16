@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from desktop.config.model import AppConfig
+from desktop.config.model import AppConfig, normalize_git_via
 from desktop.config_io import (
     AWG_CONF_NAME,
     AWG_DEFAULT_ADDRESS,
@@ -36,6 +36,7 @@ def settings_defaults() -> dict[str, Any]:
         "tunAuto": app.tun.enabled,
         "killSwitch": app.kill_switch,
         "gitProxy": app.git_proxy,
+        "gitVia": app.git_via,
         "dockerProxy": app.docker_proxy,
         "httpBridgePort": str(app.http_bridge_port),
         "corporateProxy": app.corporate_proxy,
@@ -93,6 +94,11 @@ def cfg_to_settings(cfg: dict[str, Any]) -> dict[str, Any]:
             "tunAuto": bool(tun.get("enabled")),
             "killSwitch": bool(cfg.get("kill_switch", True)),
             "gitProxy": bool(cfg.get("git_proxy")),
+            "gitVia": (
+                normalize_git_via(cfg.get("git_via"))
+                if cfg.get("git_via") not in (None, "")
+                else ("tun" if corporate else "http")
+            ),
             "dockerProxy": bool(cfg.get("docker_proxy")),
             "httpBridgePort": str(cfg.get("http_bridge_port") or 1088),
             "useProxy": bool(cfg.get("use_proxy")) or corporate,
@@ -251,6 +257,13 @@ def apply_settings_to_cfg(
         cfg["proxy_bypass_via"] = "direct"
     cfg["kill_switch"] = bool(get("killSwitch"))
     cfg["git_proxy"] = bool(get("gitProxy"))
+    raw_via = get("gitVia")
+    if raw_via in ("http", "tun"):
+        cfg["git_via"] = raw_via
+    elif cfg["git_proxy"]:
+        cfg["git_via"] = "tun" if corporate else "http"
+    else:
+        cfg["git_via"] = normalize_git_via(raw_via) if raw_via else "http"
     cfg["docker_proxy"] = bool(get("dockerProxy"))
     cfg["tun"] = tun
     tun["enabled"] = bool(get("tunAuto")) or cfg["kill_switch"]
