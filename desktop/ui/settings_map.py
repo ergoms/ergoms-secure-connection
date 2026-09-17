@@ -94,7 +94,7 @@ def cfg_to_settings(cfg: dict[str, Any]) -> dict[str, Any]:
             "socksScope": str(cfg.get("socks_scope") or "full"),
             "tunAuto": bool(tun.get("enabled")),
             "killSwitch": bool(cfg.get("kill_switch", True)),
-            "rustdesk": bool(cfg.get("rustdesk", True)),
+            "rustdesk": bool(cfg.get("rustdesk", False)),
             "gitProxy": True,
             "gitVia": "tun",
             "dockerProxy": False,

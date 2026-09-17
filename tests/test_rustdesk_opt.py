@@ -12,10 +12,10 @@ from desktop.rustdesk_opt import (
 from desktop.tun import RUSTDESK_PROCS, TUN_LAN_CIDR
 
 
-def test_rustdesk_setting_defaults_on() -> None:
-    assert AppConfig.from_dict({}).rustdesk is True
-    assert get_rustdesk_enabled({}) is True
-    assert get_rustdesk_enabled({"rustdesk": False}) is False
+def test_rustdesk_setting_defaults_off() -> None:
+    assert AppConfig.from_dict({}).rustdesk is False
+    assert get_rustdesk_enabled({}) is False
+    assert get_rustdesk_enabled({"rustdesk": True}) is True
 
 
 def test_tun_lan_reject_targets_rustdesk_only() -> None:

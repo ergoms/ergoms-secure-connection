@@ -455,10 +455,10 @@ def test_settings_map_roundtrip_preserves_transport() -> None:
         return settings[key]
 
     out = apply_settings_to_cfg(default_config_template(), get, corporate=False)
-    assert out["rustdesk"] is True
-    settings["rustdesk"] = False
-    off = apply_settings_to_cfg(default_config_template(), get, corporate=False)
-    assert off["rustdesk"] is False
+    assert out["rustdesk"] is False
+    settings["rustdesk"] = True
+    on = apply_settings_to_cfg(default_config_template(), get, corporate=False)
+    assert on["rustdesk"] is True
     assert out["server"]["host"] == "vps.example"
     assert out["transport"]["uuid"] == "u-1"
     assert out["transport"]["dial"] == "amneziawg"

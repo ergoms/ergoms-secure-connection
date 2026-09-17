@@ -655,7 +655,7 @@ def update_config_key(path: Path, key: str, value: Any) -> None:
         elif target == "kill_switch":
             cfg["kill_switch"] = _as_bool(raw, True)
         elif target == "rustdesk":
-            cfg["rustdesk"] = _as_bool(raw, True)
+            cfg["rustdesk"] = _as_bool(raw, False)
         elif target == "tun.elevate":
             tun["elevate"] = _as_bool(raw, True)
         elif target == "tun.sing_box_path":
