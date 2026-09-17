@@ -172,7 +172,10 @@ function Invoke-PyInstaller {
     if ($LASTEXITCODE -ne 0) { throw "poetry env use failed: $LASTEXITCODE" }
     & $poetry install --extras gui --extras build
     if ($LASTEXITCODE -ne 0) { throw "poetry install failed: $LASTEXITCODE" }
-    $sb = Join-Path $Root 'tools\sing-box.exe'
+    $sb = Join-Path $Root 'tools\ergoms-tun.exe'
+    if (-not (Test-Path -LiteralPath $sb)) {
+        $sb = Join-Path $Root 'tools\sing-box.exe'
+    }
     $awg = Join-Path $Root 'tools\ergoms-tun-awg.exe'
     if (-not (Test-Path -LiteralPath $sb) -or -not (Test-Path -LiteralPath $awg)) {
         Install-SingBox

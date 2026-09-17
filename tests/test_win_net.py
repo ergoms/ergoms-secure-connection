@@ -173,6 +173,24 @@ def test_wait_ready_aborts_on_existing_wintun(
     assert any("leftover" in msg.lower() or "пересоздаю" in msg for msg in logs)
 
 
+def test_wait_ready_accepts_tun_started_after_leftover_fatal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from desktop.singbox_mode import SingboxModeManager
+
+    logs: list[str] = []
+    mgr = SingboxModeManager(tmp_path, tmp_path, tmp_path, log=logs.append)
+    monkeypatch.setattr("desktop.singbox.readiness.sys.platform", "win32")
+    monkeypatch.setattr("desktop.singbox.readiness.port_open", lambda *_a, **_k: True)
+    monkeypatch.setattr("desktop.singbox.readiness.procutil.pid_alive", lambda _pid: True)
+    mgr.tail_log = lambda n=40: [  # type: ignore[method-assign]
+        "FATAL start inbound/tun[tun-in]: configure tun interface: "
+        "Cannot create a file when that file already exists.",
+        "INFO inbound/tun[tun-in]: started at ergoms-secure-connection-tun",
+    ]
+    assert mgr._wait_ready(1080, 1088, enable_tun=True, pid=1, timeout=0.3) is True
+
+
 def test_netsh_has_interface_reads_l2_table(monkeypatch: pytest.MonkeyPatch) -> None:
     from desktop.sys import win_net
 

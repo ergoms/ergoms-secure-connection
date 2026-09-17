@@ -82,7 +82,7 @@ def wait_ready(
         if port_open("127.0.0.1", socks_port, timeout=0.08):
             socks_ok = True
             lines = tail(80)
-            if enable_tun and tun_create_conflict(lines):
+            if enable_tun and tun_create_conflict(lines) and not tun_log_started(lines):
                 log("TUN: leftover Wintun — пересоздаю адаптер")
                 return False
             if not enable_tun or tun_inbound_ready(lines, platform=platform):

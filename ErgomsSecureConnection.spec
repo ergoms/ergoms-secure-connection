@@ -6,10 +6,15 @@ from pathlib import Path
 
 root = Path(SPECPATH).resolve()
 
-sb = root / "tools" / ("sing-box.exe" if sys.platform == "win32" else "sing-box")
+if sys.platform == "win32":
+    sb = root / "tools" / "ergoms-tun.exe"
+    if not sb.is_file():
+        sb = root / "tools" / "sing-box.exe"
+else:
+    sb = root / "tools" / "sing-box"
 if not sb.is_file():
     raise SystemExit(
-        f"{sb.name} missing in tools/ — run: python -m desktop download-sing-box"
+        "sing-box missing in tools/ — run: python -m desktop download-sing-box"
     )
 awg = root / "tools" / ("ergoms-tun-awg.exe" if sys.platform == "win32" else "sing-box-awg")
 if not awg.is_file():

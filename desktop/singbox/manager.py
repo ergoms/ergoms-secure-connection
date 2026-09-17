@@ -771,6 +771,10 @@ class SingboxModeManager:
         kill_switch: bool = False,
         rustdesk: bool | None = None,
     ) -> dict[str, Any]:
+        if rustdesk is None:
+            from desktop.config_io import get_rustdesk_enabled
+
+            rustdesk = get_rustdesk_enabled()
         squid_host, squid_port = parse_corporate_proxy(corporate_proxy)
         use_office_proxy = bool(squid_host)
         office = bool(squid_host)
@@ -826,9 +830,13 @@ class SingboxModeManager:
             self.log("офис: VLESS+Reality через Squid")
             if enable_tun and not awg:
                 self.log(
-                    "офис: SSH/RustDesk на IP VPS идут через VLESS → 127.0.0.1 "
+                    "офис: SSH на IP VPS идёт через VLESS → 127.0.0.1 "
                     "(иначе hairpin на публичный адрес)"
                 )
+                if rustdesk:
+                    self.log(
+                        "офис: RustDesk на IP VPS идёт через VLESS без loopback"
+                    )
         rules, bypass_suffixes, bypass_domains = _build_route_rules(
             server_host=server_host,
             exclude_ips=exclude_ips,
@@ -888,10 +896,6 @@ class SingboxModeManager:
                     "timeout": "100ms",
                 }
             )
-        if rustdesk is None:
-            from desktop.config_io import get_rustdesk_enabled
-
-            rustdesk = get_rustdesk_enabled()
         rustdesk_rules = (
             [
                 *rustdesk_hairpin_rules(server_host),
@@ -1089,7 +1093,7 @@ class SingboxModeManager:
             self.log(f"старый tun ещё жив pid={','.join(str(p) for p in stale)} — останавливаю")
             self.stop()
         if enable_tun:
-            remove_stale_tun_adapter(log=self.log)
+            remove_stale_tun_adapter(log=self.log, hidden=True)
 
         self._rotate_log()
         fw = self._firewall_cmds(exe) if need_admin and not procutil.is_admin() else []
@@ -1115,7 +1119,10 @@ class SingboxModeManager:
             if leftover and procutil.pid_alive(leftover):
                 procutil.kill_pids([leftover])
             remove_stale_tun_adapter(log=self.log, hidden=True)
-            time.sleep(0.2)
+            # Same log file still has the previous FATAL "already exists" —
+            # wait_ready would abort the retry before the new process writes.
+            self._rotate_log()
+            time.sleep(1.0)
             pid = self._launch(
                 exe, elevate=need_admin, prelude_cmds=prelude, postlude_cmds=postlude
             )
