@@ -25,6 +25,7 @@ from desktop.singbox_mode import (
     choose_dial,
     require_transport,
     resolve_dial_bundle,
+    underlay_forget_hosts,
     underlay_keep_hosts,
 )
 
@@ -53,6 +54,7 @@ class ConnectPlan:
     ks_deferred: bool
     start_ks: bool
     allow: list[str] = field(default_factory=list)
+    forget: list[str] = field(default_factory=list)
 
     @property
     def udp_dial(self) -> bool:
@@ -92,6 +94,9 @@ def resolve_connect_plan(
         bypass = ["*.local", "*.lan"]
     vpn_hosts = [str(h) for h in cfg.get("blocked_hosts") or [] if h]
     allow = kill_switch_allow_ips(*underlay_keep_hosts(host, office_proxy, udp_dial=udp_dial))
+    forget = kill_switch_allow_ips(
+        *underlay_forget_hosts(host, office_proxy, udp_dial=udp_dial)
+    )
     return ConnectPlan(
         host=host,
         port=port,
@@ -115,4 +120,5 @@ def resolve_connect_plan(
         ks_deferred=ks_deferred,
         start_ks=start_ks,
         allow=allow,
+        forget=forget,
     )

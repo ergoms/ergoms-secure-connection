@@ -33,6 +33,7 @@ from desktop.singbox_mode import (
     effective_tun_mtu,
     require_transport,
     resolve_dial_bundle,
+    underlay_forget_hosts,
     underlay_keep_hosts,
 )
 from desktop.tun import (
@@ -376,6 +377,9 @@ class ConnectionOps:
         return leftover_cmds
 
     def _kill_switch_hosts(self, cfg: dict[str, Any]) -> list[str]:
+        return self._kill_switch_pins(cfg)[0]
+
+    def _kill_switch_pins(self, cfg: dict[str, Any]) -> tuple[list[str], list[str]]:
         from desktop.config_io import get_server_host
         from desktop.kill_switch import allow_ips as kill_switch_allow_ips
 
@@ -389,17 +393,24 @@ class ConnectionOps:
             udp = bool(awg)
         except Exception:  # noqa: BLE001
             pass
-        return kill_switch_allow_ips(*underlay_keep_hosts(host, proxy, udp_dial=udp))
+        return (
+            kill_switch_allow_ips(*underlay_keep_hosts(host, proxy, udp_dial=udp)),
+            kill_switch_allow_ips(*underlay_forget_hosts(host, proxy, udp_dial=udp)),
+        )
 
     def _ensure_kill_switch(self, cfg: dict[str, Any]) -> list[str]:
-        allow = self._kill_switch_hosts(cfg)
+        allow, forget = self._kill_switch_pins(cfg)
         if procutil.is_admin() or kill_switch_is_applied():
             apply_kill_switch(
-                allow, var_dir=self.paths.var_dir, log=self.log, blackhole=False
+                allow,
+                var_dir=self.paths.var_dir,
+                log=self.log,
+                blackhole=False,
+                forget=forget,
             )
             return []
-        cmds = kill_switch_install_cmds(allow)
+        cmds = kill_switch_install_cmds(allow, forget=forget)
         if cmds:
-            remember_kill_switch_plan(self.paths.var_dir, allow)
+            remember_kill_switch_plan(self.paths.var_dir, allow, forget=forget)
             self.log("kill switch: маршруты поставлю вместе с UAC для TUN")
         return cmds

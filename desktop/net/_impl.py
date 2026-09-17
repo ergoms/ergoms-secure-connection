@@ -816,6 +816,10 @@ def _direct_python_paths() -> list[str]:
 
 
 RUSTDESK_PORTS = [21114, 21115, 21116, 21117, 21118, 21119]
+# hbbs / API / ws — VPS lets only loopback in. hbbr :21117 treats
+# 127.0.0.1 as its admin console, so the relay stays on the WAN address.
+RUSTDESK_HBBS_PORTS = [21114, 21115, 21116, 21118, 21119]
+RUSTDESK_HBBR_PORTS = [21117]
 RUSTDESK_PROCS = ["rustdesk.exe", "rustdesk_service.exe"]
 
 

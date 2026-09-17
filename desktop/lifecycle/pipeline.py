@@ -252,7 +252,9 @@ class ConnectionPipeline:
         leftover_cmds = client._log_foreign_vpn(plan.host, plan.office_proxy)
         prelude = self._arm_kill_switch(plan, cfg, leftover_cmds)
         postlude = (
-            kill_switch_pin_cmds(client.paths.var_dir, plan.allow) if plan.start_tun else []
+            kill_switch_pin_cmds(client.paths.var_dir, plan.allow, forget=plan.forget)
+            if plan.start_tun
+            else []
         )
         client._awg_tun_kwargs = None
         if plan.tun_deferred:
@@ -303,7 +305,11 @@ class ConnectionPipeline:
         client._log_singbox_tail("после запуска")
         if plan.start_tun and procutil.is_admin() and plan.allow:
             pin_kill_switch_underlay(
-                plan.allow, var_dir=client.paths.var_dir, log=client.log, elevate=False
+                plan.allow,
+                var_dir=client.paths.var_dir,
+                log=client.log,
+                elevate=False,
+                forget=plan.forget,
             )
             threading.Thread(
                 target=client._pin_underlay_later,
@@ -368,7 +374,7 @@ class ConnectionPipeline:
             clear_kill_switch(var_dir=client.paths.var_dir, log=client.log)
         if plan.start_ks:
             return leftover_cmds + list(client._ensure_kill_switch(cfg))
-        remember_kill_switch_plan(client.paths.var_dir, plan.allow)
+        remember_kill_switch_plan(client.paths.var_dir, plan.allow, forget=plan.forget)
         return leftover_cmds
 
     def _write_state(self, plan: ConnectPlan) -> None:

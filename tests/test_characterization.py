@@ -121,15 +121,21 @@ def test_rustdesk_hairpin_ip_and_hostname() -> None:
     with patch("desktop.singbox.manager.resolve_host", return_value="203.0.113.10"):
         rules = rustdesk_hairpin_rules("vps.example")
     assert any(
-        "203.0.113.10/32" in (r.get("ip_cidr") or []) and r.get("outbound") == "proxy"
+        "203.0.113.10/32" in (r.get("ip_cidr") or [])
+        and r.get("port") == [21117]
+        and not r.get("override_address")
+        for r in rules
+    )
+    assert any(
+        "203.0.113.10/32" in (r.get("ip_cidr") or [])
+        and 21116 in (r.get("port") or [])
+        and r.get("override_address") == "127.0.0.1"
         for r in rules
     )
     assert any(
         "vps.example" in (r.get("domain") or []) and r.get("outbound") == "proxy"
         for r in rules
     )
-    # hbbr 1.1.16 treats a loopback peer on :21117 as its admin console
-    assert not any(r.get("override_address") for r in rules)
 
 
 def test_build_config_home_awg_minimal_without_tun() -> None:
@@ -324,6 +330,29 @@ def test_underlay_keep_hosts_office_vless_pins_only_squid() -> None:
     assert underlay_keep_hosts(
         "vps.example", "192.0.2.10:3128", udp_dial=True
     ) == ["192.0.2.10", "vps.example"]
+
+
+def test_underlay_forget_hosts_office_drops_vps_pin() -> None:
+    from desktop.singbox_mode import underlay_forget_hosts
+
+    assert underlay_forget_hosts("vps.example", "192.0.2.10:3128") == ["vps.example"]
+    assert underlay_forget_hosts("vps.example", "") == []
+    assert underlay_forget_hosts("vps.example", "192.0.2.10:3128", udp_dial=True) == []
+
+
+def test_win_kill_switch_install_forgets_stale_vps_pin(monkeypatch: Any) -> None:
+    from desktop.killswitch import _impl as ks
+
+    monkeypatch.setattr(ks.sys, "platform", "win32")
+    assert ks.forget_host_commands(["203.0.113.10"], ["10.16.0.8"]) == [
+        "route delete 203.0.113.10 mask 255.255.255.255"
+    ]
+    assert ks.forget_host_commands(["10.16.0.8"], ["10.16.0.8"]) == []
+    cmds = ks.pin_commands(
+        ["10.16.0.8"], gw="10.193.0.1", if_idx=10, forget=["203.0.113.10"]
+    )
+    assert cmds[0] == "route delete 203.0.113.10 mask 255.255.255.255"
+    assert any("route add 10.16.0.8" in c for c in cmds)
 
 
 def test_underlay_bind_target_awg_uses_vps_not_squid() -> None:

@@ -30,7 +30,8 @@ from desktop.rustdesk_opt import rustdesk_tun_lan_reject_rules
 from desktop.singbox.binaries import SingboxBinaries
 from desktop.sys.constants import SINGBOX_PROCESS_NAMES
 from desktop.tun import (
-    RUSTDESK_PORTS,
+    RUSTDESK_HBBR_PORTS,
+    RUSTDESK_HBBS_PORTS,
     TUN_IFACE_NAME,
     detect_bind_interface,
     direct_python_paths,
@@ -381,6 +382,26 @@ def underlay_keep_hosts(
     return hosts
 
 
+def underlay_forget_hosts(
+    server_host: str,
+    corporate_proxy: str = "",
+    *,
+    udp_dial: bool = False,
+) -> list[str]:
+    """VPS /32 that older builds pinned to Ethernet must be deleted in office mode.
+
+    Squid is the only underlay pin. hbbs :21116 and SSH need the public VPS IP
+    to follow TUN /1, then sing-box hairpin.
+    """
+    squid_host, _port = parse_corporate_proxy(corporate_proxy)
+    if udp_dial or not squid_host:
+        return []
+    host = (server_host or "").strip()
+    if not host or host == squid_host:
+        return []
+    return [host]
+
+
 _PRIVATE_ROUTE_EXCLUDE = [
     "10.0.0.0/8",
     "172.16.0.0/12",
@@ -543,33 +564,39 @@ def _host_is_ip(host: str) -> bool:
 def rustdesk_hairpin_rules(
     server_host: str, *, outbound: str = "proxy"
 ) -> list[dict[str, Any]]:
-    """Reach a RustDesk relay on the same VPS as the VPN (IP and hostname).
+    """Reach RustDesk on the same VPS as the VPN (IP and hostname).
 
-    Keep the VPS WAN destination. hbbr 1.1.16 treats any TCP peer from
-    127.0.0.1 on :21117 as its admin console and never answers RequestRelay,
-    so the client dies with "Failed to receive public key". The VPS holds
-    its WAN address on ens3, so this is still a local hairpin.
-    These rules must stay ahead of the generic VPS loopback hairpin.
+    hbbs (:21116) is only reachable via VPS loopback. hbbr (:21117) treats a
+    127.0.0.1 peer as its admin console, so the relay keeps the WAN address
+    (ens3 already holds it). These rules stay ahead of the generic VPS hairpin.
     """
     host = (server_host or "").strip()
     vps_ip = resolve_host(host) if host else ""
     rules: list[dict[str, Any]] = []
-    if vps_ip:
-        rules.append(
-            {
-                "ip_cidr": [f"{vps_ip}/32"],
-                "port": RUSTDESK_PORTS,
-                "outbound": outbound,
-            }
-        )
-    if host and not _host_is_ip(host) and host != vps_ip:
-        rules.append(
-            {
-                "domain": [host],
-                "port": RUSTDESK_PORTS,
-                "outbound": outbound,
-            }
-        )
+
+    def _add(ports: list[int], *, loopback: bool) -> None:
+        extra = {"override_address": "127.0.0.1"} if loopback else {}
+        if vps_ip:
+            rules.append(
+                {
+                    "ip_cidr": [f"{vps_ip}/32"],
+                    "port": ports,
+                    "outbound": outbound,
+                    **extra,
+                }
+            )
+        if host and not _host_is_ip(host) and host != vps_ip:
+            rules.append(
+                {
+                    "domain": [host],
+                    "port": ports,
+                    "outbound": outbound,
+                    **extra,
+                }
+            )
+
+    _add(RUSTDESK_HBBR_PORTS, loopback=False)
+    _add(RUSTDESK_HBBS_PORTS, loopback=True)
     return rules
 
 
@@ -835,7 +862,7 @@ class SingboxModeManager:
                 )
                 if rustdesk:
                     self.log(
-                        "офис: RustDesk на IP VPS идёт через VLESS без loopback"
+                        "офис: RustDesk hbbs → 127.0.0.1, релей :21117 на WAN"
                     )
         rules, bypass_suffixes, bypass_domains = _build_route_rules(
             server_host=server_host,

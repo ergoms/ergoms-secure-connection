@@ -58,6 +58,23 @@ def test_tun_iface_cidr_is_shared_under_pytest() -> None:
     assert tun_iface_cidr() == "172.19.0.1/30"
 
 
+def test_enable_relay_clears_local_ip(tmp_path: Path, monkeypatch) -> None:
+    from desktop import rustdesk_opt as opt
+
+    user = tmp_path / "user" / "RustDesk2.toml"
+    svc = tmp_path / "svc" / "RustDesk2.toml"
+    user.parent.mkdir()
+    svc.parent.mkdir()
+    user.write_text("[options]\nlocal-ip-addr = '10.193.0.102'\n", encoding="utf-8")
+    svc.write_text("[options]\nlocal-ip-addr = '172.19.125.1'\n", encoding="utf-8")
+    monkeypatch.setattr(opt, "rustdesk_config_paths", lambda: [user, svc])
+    opt.enable_rustdesk_always_relay(tmp_path / "bak.json")
+    for path in (user, svc):
+        text = path.read_text(encoding="utf-8")
+        assert "force-always-relay = 'Y'" in text
+        assert "local-ip-addr" not in text
+
+
 def test_restore_keeps_previous_value(tmp_path: Path) -> None:
     path = tmp_path / "RustDesk2.toml"
     path.write_text("[options]\nallow-always-relay = 'N'\n", encoding="utf-8")

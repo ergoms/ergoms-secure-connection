@@ -25,6 +25,7 @@ from desktop.singbox.manager import (
     resolve_dial_bundle,
     rustdesk_hairpin_rules,
     underlay_bind_target,
+    underlay_forget_hosts,
     underlay_keep_hosts,
 )
 
@@ -46,6 +47,7 @@ __all__ = [
     "rustdesk_hairpin_rules",
     "tun_inbound",
     "underlay_bind_target",
+    "underlay_forget_hosts",
     "underlay_keep_hosts",
     "vless_outbound",
 ]

@@ -176,14 +176,28 @@ def _gateway_win(dest: str) -> str | None:
     return preferred or (best[1] if best else None)
 
 
+def forget_host_commands(forget: list[str], allow: list[str] | None = None) -> list[str]:
+    """Drop stale host /32 pins that must ride TUN (office VPS, leftover KS)."""
+    blocked = set(allow or [])
+    unique = [ip for ip in dict.fromkeys(forget or []) if ip and ip not in blocked]
+    if sys.platform == "win32":
+        return [f"route delete {ip} mask 255.255.255.255" for ip in unique]
+    return [f"ip route del {ip}/32" for ip in unique]
+
+
 def install_commands(
-    allow: list[str], *, gw: str | None = None, blackhole: bool = False
+    allow: list[str],
+    *,
+    gw: str | None = None,
+    blackhole: bool = False,
+    forget: list[str] | None = None,
 ) -> list[str]:
     """Host /32 pins + IPv6 block. IPv4 loopback /1 only when blackhole=True."""
     hop = gw or (underlay_gateway(allow[0]) if allow else None)
+    drop = forget_host_commands(forget or [], allow)
     if sys.platform == "win32":
-        return _cmds_win_install(allow, hop, blackhole=blackhole)
-    return _cmds_linux_install(allow, hop, blackhole=blackhole)
+        return drop + _cmds_win_install(allow, hop, blackhole=blackhole)
+    return drop + _cmds_linux_install(allow, hop, blackhole=blackhole)
 
 
 def remove_commands(allow: list[str], *, gw: str | None = None) -> list[str]:
@@ -370,24 +384,40 @@ def _is_applied_uncached() -> bool:
     return "dev lo" in (r.stdout or "")
 
 
-def remember_plan(var_dir: Path, allow: list[str], *, gw: str | None = None) -> None:
+def remember_plan(
+    var_dir: Path,
+    allow: list[str],
+    *,
+    gw: str | None = None,
+    forget: list[str] | None = None,
+) -> None:
     hop = gw or (underlay_gateway(allow[0]) if allow else "") or ""
     idx = _iface_index_win(allow[0]) if sys.platform == "win32" and allow else None
     _update_state(
         var_dir,
         allow=list(allow),
+        forget=list(forget or []),
         gw=hop,
         if_idx=idx,
         applied=is_applied(),
     )
 
 
-def planned_pin_commands(var_dir: Path, allow: list[str] | None = None) -> list[str]:
+def planned_pin_commands(
+    var_dir: Path,
+    allow: list[str] | None = None,
+    forget: list[str] | None = None,
+) -> list[str]:
     """Host /32 commands using gw/if captured before TUN auto_route."""
     st = _load_state(var_dir)
     unique = list(
         dict.fromkeys(
             allow or [str(x) for x in (st.get("allow") or []) if x]
+        )
+    )
+    drop = list(
+        dict.fromkeys(
+            forget if forget is not None else [str(x) for x in (st.get("forget") or []) if x]
         )
     )
     hop = str(st.get("gw") or "") or None
@@ -396,20 +426,24 @@ def planned_pin_commands(var_dir: Path, allow: list[str] | None = None) -> list[
         idx = int(raw_idx) if raw_idx not in (None, "") else None
     except (TypeError, ValueError):
         idx = None
-    return pin_commands(unique, gw=hop, if_idx=idx)
+    return pin_commands(unique, gw=hop, if_idx=idx, forget=drop)
 
 
 def pin_commands(
-    allow: list[str], *, gw: str | None = None, if_idx: int | None = None
+    allow: list[str],
+    *,
+    gw: str | None = None,
+    if_idx: int | None = None,
+    forget: list[str] | None = None,
 ) -> list[str]:
     """Re-add host /32 routes so TUN auto_route cannot steal VPS/Squid."""
     unique = list(dict.fromkeys(ip for ip in allow if ip))
+    cmds = forget_host_commands(forget or [], unique)
     hop = gw or (underlay_gateway(unique[0]) if unique else None)
     if not hop or not unique:
-        return []
+        return cmds
     if sys.platform == "win32":
         idx = if_idx if if_idx else _iface_index_win(unique[0])
-        cmds: list[str] = []
         for ip in unique:
             line_change = f"route change {ip} mask 255.255.255.255 {hop} metric 1"
             line_add = f"route add {ip} mask 255.255.255.255 {hop} metric 1"
@@ -420,7 +454,8 @@ def pin_commands(
             cmds.append(line_change)
             cmds.append(line_add)
         return cmds
-    return [f"ip route replace {ip}/32 via {hop}" for ip in unique]
+    cmds.extend(f"ip route replace {ip}/32 via {hop}" for ip in unique)
+    return cmds
 
 
 def _ipv6_binding_args(name: str, *, enable: bool) -> list[str]:
@@ -581,20 +616,28 @@ def pin_underlay(
     var_dir: Path,
     log: LogFn = noop,
     elevate: bool = False,
+    forget: list[str] | None = None,
 ) -> bool:
     """Restore VPS/Squid /32 after TUN is up. Uses gw/if saved before auto_route."""
     st = _load_state(var_dir)
     unique = list(dict.fromkeys(allow or [str(x) for x in (st.get("allow") or []) if x]))
+    drop = list(
+        dict.fromkeys(
+            forget if forget is not None else [str(x) for x in (st.get("forget") or []) if x]
+        )
+    )
     hop = str(st.get("gw") or "") or (underlay_gateway(unique[0]) if unique else "")
     raw_idx = st.get("if_idx")
     try:
         idx = int(raw_idx) if raw_idx not in (None, "") else None
     except (TypeError, ValueError):
         idx = None
-    cmds = pin_commands(unique, gw=hop or None, if_idx=idx)
+    cmds = pin_commands(unique, gw=hop or None, if_idx=idx, forget=drop)
     if not cmds:
         log("underlay pin: нет gw/allow — /32 к VPS не закрепляю")
         return False
+    if drop:
+        log(f"underlay pin: снимаю stale /32 {', '.join(drop)}")
     log(f"underlay pin: gw={hop} if={idx or '?'} allow={', '.join(unique)}")
     if procutil.is_admin():
         ok = _run_lines_now(cmds, ignore_fail=True)
@@ -612,15 +655,24 @@ def apply(
     var_dir: Path,
     log: LogFn = noop,
     blackhole: bool = False,
+    forget: list[str] | None = None,
 ) -> bool:
     """Pin VPS/Squid. IPv4 loopback /1 only when blackhole=True (fail-closed)."""
     unique = list(dict.fromkeys(allow))
+    drop = list(dict.fromkeys(ip for ip in (forget or []) if ip and ip not in unique))
     if is_applied() and not blackhole:
         hop = underlay_gateway(unique[0]) if unique else underlay_gateway("")
         idx = _iface_index_win(unique[0]) if sys.platform == "win32" and unique else None
         _update_state(
-            var_dir, allow=unique, gw=hop or "", if_idx=idx, applied=True
+            var_dir, allow=unique, forget=drop, gw=hop or "", if_idx=idx, applied=True
         )
+        drop_cmds = forget_host_commands(drop, unique)
+        if drop_cmds:
+            log(f"kill switch: снимаю stale /32 {', '.join(drop)}")
+            if procutil.is_admin():
+                _run_lines_now(drop_cmds, ignore_fail=True)
+            else:
+                _run_privileged_lines(drop_cmds, log=log, ignore_fail=True)
         log("kill switch: маршруты уже стоят")
         suppress_underlay_ipv6(var_dir=var_dir, log=log)
         _apply_leak_shield(var_dir=var_dir, log=log)
@@ -630,19 +682,21 @@ def apply(
     if not gw:
         log("kill switch: нет default gateway — OS-маршруты не ставлю (останется strict_route)")
         _update_state(
-            var_dir, allow=unique, gw="", if_idx=idx, applied=False
+            var_dir, allow=unique, forget=drop, gw="", if_idx=idx, applied=False
         )
         return False
     reachable_before = _host_open(unique[0], 443) if unique else False
-    cmds = install_commands(unique, gw=gw, blackhole=blackhole)
+    cmds = install_commands(unique, gw=gw, blackhole=blackhole, forget=drop)
     log(f"kill switch: gw={gw} allow={', '.join(unique) or 'нет'}")
+    if drop:
+        log(f"kill switch: снимаю stale /32 {', '.join(drop)} — иначе hbbs/SSH мимо TUN")
     _run_privileged_lines(
         cmds, log=log, expect_applied=True if blackhole else None
     )
     invalidate_applied_cache()
     present = is_applied(force=True)
     _update_state(
-        var_dir, allow=unique, gw=gw, if_idx=idx, applied=present
+        var_dir, allow=unique, forget=drop, gw=gw, if_idx=idx, applied=present
     )
     text = _route_print_win(force=True) if sys.platform == "win32" else ""
     for ip in unique:
@@ -659,14 +713,14 @@ def apply(
     if blackhole and present:
         log("kill switch: OK — интернет закрыт (чёрные /1), кроме VPS")
         _update_state(
-            var_dir, allow=unique, gw=gw, if_idx=idx, applied=True
+            var_dir, allow=unique, forget=drop, gw=gw, if_idx=idx, applied=True
         )
         _apply_leak_shield(var_dir=var_dir, log=log)
         return True
     if not blackhole and host_ok:
         log("kill switch: VPS закреплён, чёрные IPv4 /1 не ставлю — их глушил браузер")
         _update_state(
-            var_dir, allow=unique, gw=gw, if_idx=idx, applied=True
+            var_dir, allow=unique, forget=drop, gw=gw, if_idx=idx, applied=True
         )
         suppress_underlay_ipv6(var_dir=var_dir, log=log)
         _apply_leak_shield(var_dir=var_dir, log=log)

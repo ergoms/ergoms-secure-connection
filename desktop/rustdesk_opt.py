@@ -25,20 +25,29 @@ def rustdesk_config_path() -> Path:
     return Path(appdata) / "RustDesk" / "config" / "RustDesk2.toml"
 
 
+def rustdesk_service_config_path() -> Path:
+    return Path(
+        r"C:\Windows\ServiceProfiles\LocalService\AppData\Roaming"
+        r"\RustDesk\config\RustDesk2.toml"
+    )
+
+
+def rustdesk_config_paths() -> list[Path]:
+    """User UI and the Windows service use different RustDesk2.toml files."""
+    found: list[Path] = []
+    seen: set[str] = set()
+    for path in (rustdesk_config_path(), rustdesk_service_config_path()):
+        key = str(path).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        if path.is_file():
+            found.append(path)
+    return found
+
+
 def rustdesk_peers_dir() -> Path:
     return rustdesk_config_path().parent / "peers"
-
-
-def _underlay_ipv4() -> str:
-    try:
-        from desktop.tun import iface_ipv4s, underlay_ifaces
-    except Exception:  # noqa: BLE001
-        return ""
-    for _idx, _metric, name in underlay_ifaces():
-        ips = [ip for ip in iface_ipv4s(name) if not ip.startswith("172.19.")]
-        if ips:
-            return ips[0]
-    return ""
 
 
 def rustdesk_exe_paths() -> list[Path]:
@@ -153,43 +162,50 @@ def restore_toml_options(path: Path, previous: dict[str, str | None]) -> None:
 
 
 def enable_rustdesk_always_relay(backup_path: Path, log: LogFn = noop) -> None:
-    cfg = rustdesk_config_path()
-    if not cfg.is_file():
+    paths = rustdesk_config_paths()
+    if not paths:
         return
-    updates = dict(_ALWAYS_RELAY)
-    lan = _underlay_ipv4()
-    if lan:
-        updates["local-ip-addr"] = lan
-    prev = set_toml_options(cfg, updates)
+    first_prev: dict[str, str | None] | None = None
+    for cfg in paths:
+        prev = set_toml_options(cfg, dict(_ALWAYS_RELAY))
+        if first_prev is None:
+            first_prev = prev
+        # Binding to Ethernet (local-ip-addr) sends :21116 past TUN; kill
+        # switch then drops it. Incoming sessions use the service toml.
+        restore_toml_options(cfg, {"local-ip-addr": None})
+        peers = cfg.parent / "peers"
+        if peers.is_dir():
+            for peer in peers.glob("*.toml"):
+                set_toml_options(peer, {"force-always-relay": "Y"})
     backup_path.parent.mkdir(parents=True, exist_ok=True)
-    if not backup_path.is_file():
+    if first_prev is not None and not backup_path.is_file():
         backup_path.write_text(
-            json.dumps(prev, ensure_ascii=False, indent=2), encoding="utf-8"
+            json.dumps(first_prev, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-    peers = rustdesk_peers_dir()
-    if peers.is_dir():
-        for peer in peers.glob("*.toml"):
-            set_toml_options(peer, {"force-always-relay": "Y"})
-    extra = f", local-ip={lan}" if lan else ""
     log(
-        "RustDesk: always-relay — punch в 172.19.* (TUN) отключён, "
-        f"идём на ретранслятор{extra}"
+        "RustDesk: always-relay — punch в 172.19.* режет firewall, "
+        f"конфиг ({len(paths)}): идём на ретранслятор через TUN"
     )
 
 
 def restore_rustdesk_always_relay(backup_path: Path, log: LogFn = noop) -> None:
-    if not backup_path.is_file():
-        return
-    try:
-        prev = json.loads(backup_path.read_text(encoding="utf-8-sig"))
-    except (OSError, json.JSONDecodeError):
-        prev = {}
-    if isinstance(prev, dict):
-        restore_toml_options(
-            rustdesk_config_path(),
-            {str(k): (None if v is None else str(v)) for k, v in prev.items()},
-        )
-    backup_path.unlink(missing_ok=True)
+    prev: dict[str, str | None] = {}
+    if backup_path.is_file():
+        try:
+            loaded = json.loads(backup_path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            loaded = {}
+        if isinstance(loaded, dict):
+            prev = {
+                str(k): (None if v is None else str(v))
+                for k, v in loaded.items()
+                if k in _ALWAYS_RELAY
+            }
+        backup_path.unlink(missing_ok=True)
+    for cfg in rustdesk_config_paths():
+        if prev:
+            restore_toml_options(cfg, prev)
+        restore_toml_options(cfg, {"local-ip-addr": None})
     log("RustDesk: always-relay вернул")
 
 
