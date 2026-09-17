@@ -49,6 +49,15 @@ from desktop.ui.settings_map import (
     cfg_to_settings,
     settings_defaults,
 )
+from desktop.update import (
+    CheckResult,
+    ReleaseInfo,
+    apply_downloaded,
+    can_apply_in_place,
+    download_asset,
+    fetch_latest,
+    open_release_page,
+)
 
 LogFn = Callable[[str], None]
 
@@ -76,6 +85,22 @@ def _analyze_spec(spec: str) -> dict[str, Any]:
     if "\\" in name or "/" in name:
         path = name
     return analyze_process(name=name, path=path)
+
+
+def _release_from_dict(raw: object) -> ReleaseInfo | None:
+    if not isinstance(raw, dict):
+        return None
+    version = str(raw.get("version") or "").strip()
+    url = str(raw.get("asset_url") or "").strip()
+    if not version or not url:
+        return None
+    return ReleaseInfo(
+        version=version,
+        tag=str(raw.get("tag") or f"v{version}"),
+        html_url=str(raw.get("html_url") or ""),
+        asset_name=str(raw.get("asset_name") or ""),
+        asset_url=url,
+    )
 
 
 class _BgTask(QRunnable):
@@ -115,8 +140,14 @@ class GuiBridge(QObject):
     serviceListReady = Signal(str)
     peersReady = Signal(str, str)
     executablePicked = Signal(str)
+    updateAvailableChanged = Signal()
+    updateVersionChanged = Signal()
 
     _bgFinished = Signal(str)
+    _updateCheckFinished = Signal(str, bool)
+    _updateProgress = Signal(str)
+    _updateApplyReady = Signal()
+    _updateApplyFailed = Signal(str)
     _statusReady = Signal(object, bool)
     _statusFailed = Signal(str)
     _schedulePoll = Signal(int)
@@ -177,6 +208,12 @@ class GuiBridge(QObject):
         self._busy_action: Action | None = None
         self._status_queued = False
         self._status_force = False
+        self._update_available = False
+        self._update_version = ""
+        self._update_info: ReleaseInfo | None = None
+        self._update_checking = False
+        self._update_applying = False
+        self._update_toast_shown = False
 
         self._settings = QQmlPropertyMap(self)
         for key, value in settings_defaults().items():
@@ -185,6 +222,10 @@ class GuiBridge(QObject):
         self._bgFinished.connect(self._on_bg_finished)
         self._statusReady.connect(self._on_status_ready)
         self._statusFailed.connect(self._apply_status_error)
+        self._updateCheckFinished.connect(self._on_update_check_finished)
+        self._updateProgress.connect(self._on_update_progress)
+        self._updateApplyReady.connect(self._on_update_apply_ready)
+        self._updateApplyFailed.connect(self._on_update_apply_failed)
 
         if not self.paths.config_path.is_file():
             try:
@@ -208,6 +249,7 @@ class GuiBridge(QObject):
         self._busy_timer.setSingleShot(True)
         self._busy_timer.timeout.connect(self._busy_timed_out)
         QTimer.singleShot(300, self._on_poll_tick)
+        QTimer.singleShot(2000, self._startup_update_check)
         if autostart.launched_from_autostart():
             self._start_hidden = True
         resume_action = action_from_resume(env(ENV_RESUME).lower())
@@ -289,6 +331,18 @@ class GuiBridge(QObject):
     @Property(QObject, constant=True)
     def settings(self) -> QQmlPropertyMap:
         return self._settings
+
+    @Property(str, constant=True)
+    def appVersion(self) -> str:
+        return __version__
+
+    @Property(bool, notify=updateAvailableChanged)
+    def updateAvailable(self) -> bool:
+        return self._update_available
+
+    @Property(str, notify=updateVersionChanged)
+    def updateVersion(self) -> str:
+        return self._update_version
 
     # ── slots ───────────────────────────────────────────────────────────
 
@@ -685,6 +739,118 @@ class GuiBridge(QObject):
         self.toast.emit("Журнал скопирован", "info")
 
     @Slot()
+    def checkForUpdate(self) -> None:
+        self._check_for_update(manual=True)
+
+    @Slot()
+    def _startup_update_check(self) -> None:
+        self._check_for_update(manual=False)
+
+    def _check_for_update(self, *, manual: bool) -> None:
+        if self._update_checking or self._update_applying:
+            return
+        self._update_checking = True
+        socks_port = int(self._socks_port or 1080)
+
+        def work() -> None:
+            result = fetch_latest(socks_port=socks_port)
+            self._updateCheckFinished.emit(json.dumps(result.as_dict(), ensure_ascii=False), manual)
+
+        self._spawn(work)
+
+    @Slot(str, bool)
+    def _on_update_check_finished(self, payload: str, manual: bool) -> None:
+        self._update_checking = False
+        try:
+            data = json.loads(payload)
+        except json.JSONDecodeError:
+            data = {"error": "не удалось разобрать ответ", "release": None}
+        result = CheckResult(
+            release=_release_from_dict(data.get("release")),
+            current_is_latest=bool(data.get("current_is_latest")),
+            error=str(data.get("error") or ""),
+        )
+        if result.error:
+            self._enqueue_log(f"проверка обновлений: {result.error}")
+            if manual:
+                self.toast.emit("Не удалось проверить обновления", "error")
+            return
+        info = result.release
+        if info is None:
+            self._set_update_info(None)
+            if manual:
+                self.toast.emit("Уже последняя версия", "info")
+            return
+        self._set_update_info(info)
+        self._enqueue_log(f"доступна версия {info.version}")
+        if not self._update_toast_shown:
+            self._update_toast_shown = True
+            self.toast.emit(f"Доступна версия {info.version}", "info")
+
+    def _set_update_info(self, info: ReleaseInfo | None) -> None:
+        available = info is not None
+        version = info.version if info is not None else ""
+        self._update_info = info
+        if available != self._update_available:
+            self._update_available = available
+            self.updateAvailableChanged.emit()
+        if version != self._update_version:
+            self._update_version = version
+            self.updateVersionChanged.emit()
+
+    @Slot()
+    def startUpdate(self) -> None:
+        if self._busy or self._update_applying:
+            return
+        info = self._update_info
+        if info is None:
+            self._check_for_update(manual=True)
+            return
+        if not can_apply_in_place():
+            open_release_page(info.html_url)
+            return
+        self._update_applying = True
+        self._set_busy(True, "Скачиваю обновление…", timeout_ms=600_000)
+        socks_port = int(self._socks_port or 1080)
+
+        def work() -> None:
+            try:
+                dest_dir = self.paths.var_dir / "updates"
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                path = download_asset(info, dest_dir, socks_port=socks_port)
+                self._updateProgress.emit("Отключаю VPN…")
+                try:
+                    self.connection.disable()
+                except Exception as exc:  # noqa: BLE001
+                    self._enqueue_log(f"отключение перед обновлением: {exc}")
+                self._updateProgress.emit("Запускаю установщик…")
+                apply_downloaded(path, pid=os.getpid(), relaunch=gui_command())
+                self._updateApplyReady.emit()
+            except Exception as exc:  # noqa: BLE001
+                self._updateApplyFailed.emit(str(exc))
+
+        self._spawn(work)
+
+    @Slot(str)
+    def _on_update_progress(self, text: str) -> None:
+        if not self._busy:
+            return
+        self._busy_text = text
+        self.busyTextChanged.emit()
+
+    @Slot()
+    def _on_update_apply_ready(self) -> None:
+        self._update_applying = False
+        self.quitApp()
+
+    @Slot(str)
+    def _on_update_apply_failed(self, err: str) -> None:
+        self._update_applying = False
+        self._set_busy(False)
+        self._enqueue_log(f"обновление: {err}")
+        self.toast.emit(err[:180] or "Не удалось обновить", "error")
+
+    @Slot()
     def hideWindow(self) -> None:
         self.hideRequested.emit()
 
@@ -744,13 +910,13 @@ class GuiBridge(QObject):
         self.logAppended.emit(line)
         self.logTextChanged.emit()
 
-    def _set_busy(self, busy: bool, waiting: str = "Подождите…") -> None:
+    def _set_busy(self, busy: bool, waiting: str = "Подождите…", *, timeout_ms: int = 180_000) -> None:
         self._busy = busy
         self._busy_text = waiting if busy else ""
         self.busyChanged.emit()
         self.busyTextChanged.emit()
         if busy:
-            self._busy_timer.start(180_000)
+            self._busy_timer.start(timeout_ms)
         else:
             self._busy_timer.stop()
 
@@ -758,6 +924,7 @@ class GuiBridge(QObject):
     def _busy_timed_out(self) -> None:
         if not self._busy:
             return
+        self._update_applying = False
         self._enqueue_log("операция слишком долгая — снимаю блокировку кнопок")
         self._finish_await_status()
         self._refresh_status(force=True)

@@ -29,17 +29,40 @@ Item {
             Layout.fillHeight: true
             clip: true
             contentWidth: width
-            contentHeight: form.height
+            contentHeight: pageCol.height
             boundsBehavior: Flickable.StopAtBounds
             ScrollBar.vertical: AppScrollBar {}
 
             Column {
-                id: form
+                id: pageCol
                 width: flick.width - 28
                 x: 14
                 spacing: 8
                 topPadding: 8
-                bottomPadding: 16
+                bottomPadding: 8
+
+                Text {
+                    width: parent.width
+                    text: "Версия " + bridge.appVersion
+                    color: T.muted
+                    font.pixelSize: 12
+                    font.family: T.fontUi
+                }
+                PrimaryButton {
+                    width: parent.width
+                    implicitHeight: 44
+                    text: bridge.updateAvailable
+                          ? "Обновить до " + bridge.updateVersion
+                          : "Проверить обновления"
+                    primary: bridge.updateAvailable
+                    enabled: !bridge.busy
+                    onClicked: bridge.updateAvailable ? bridge.startUpdate() : bridge.checkForUpdate()
+                }
+
+            Column {
+                id: form
+                width: parent.width
+                spacing: 8
                 enabled: !bridge.active && !bridge.busy
                 opacity: (bridge.active || bridge.busy) ? 0.55 : 1
 
@@ -256,6 +279,7 @@ Item {
                         settingKey: "reverseSshVpsPort"
                     }
                 }
+            }
             }
         }
 

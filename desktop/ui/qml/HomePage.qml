@@ -34,6 +34,12 @@ Item {
                 ringColor: bridge.statusColor
                 busy: bridge.busy
                 active: bridge.active
+                onClicked: {
+                    if (bridge.canReconnect)
+                        bridge.reconnectConnection()
+                    else
+                        bridge.toggleConnection()
+                }
             }
         }
 
@@ -83,6 +89,13 @@ Item {
 
         Item { Layout.fillHeight: true }
 
+        UpdateBanner {
+            visible: bridge.updateAvailable
+            Layout.fillWidth: true
+            Layout.preferredHeight: visible ? implicitHeight : 0
+            version: bridge.updateVersion
+            onUpdateClicked: bridge.startUpdate()
+        }
         MissingBanner {
             visible: root.missingAppConfig
             Layout.fillWidth: true
