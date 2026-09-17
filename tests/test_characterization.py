@@ -54,6 +54,7 @@ def _build(
     office: bool,
     enable_tun: bool = False,
     awg: bool = False,
+    rustdesk: bool = True,
 ) -> dict[str, Any]:
     mgr = SingboxModeManager(
         var_dir=__import__("pathlib").Path("var"),
@@ -84,6 +85,7 @@ def _build(
             mtu=1400,
             vps_proxy_ports=[22],
             kill_switch=False,
+            rustdesk=rustdesk,
         )
 
 
@@ -92,7 +94,7 @@ def _rustdesk_rules(box: dict[str, Any]) -> list[dict[str, Any]]:
     for rule in box["route"]["rules"]:
         port = rule.get("port")
         ports = port if isinstance(port, list) else [port] if port is not None else []
-        if 21117 in ports and rule.get("override_address") == "127.0.0.1":
+        if 21117 in ports and not rule.get("override_address"):
             out.append(rule)
     return out
 
@@ -119,15 +121,15 @@ def test_rustdesk_hairpin_ip_and_hostname() -> None:
     with patch("desktop.singbox.manager.resolve_host", return_value="203.0.113.10"):
         rules = rustdesk_hairpin_rules("vps.example")
     assert any(
-        "203.0.113.10/32" in (r.get("ip_cidr") or [])
-        and r.get("override_address") == "127.0.0.1"
+        "203.0.113.10/32" in (r.get("ip_cidr") or []) and r.get("outbound") == "proxy"
         for r in rules
     )
     assert any(
-        "vps.example" in (r.get("domain") or [])
-        and r.get("override_address") == "127.0.0.1"
+        "vps.example" in (r.get("domain") or []) and r.get("outbound") == "proxy"
         for r in rules
     )
+    # hbbr 1.1.16 treats a loopback peer on :21117 as its admin console
+    assert not any(r.get("override_address") for r in rules)
 
 
 def test_build_config_home_awg_minimal_without_tun() -> None:
@@ -205,7 +207,7 @@ def test_build_config_home_vless_with_tun() -> None:
         if 21117 in (
             r.get("port") if isinstance(r.get("port"), list) else [r.get("port")]
         )
-        and r.get("override_address") == "127.0.0.1"
+        and not r.get("override_address")
     )
     assert rd_idx < sniff_idx
 
@@ -245,11 +247,17 @@ def test_rustdesk_tun_lan_rejected_before_sniff() -> None:
             for i, r in enumerate(rules)
             if 21117
             in (r.get("port") if isinstance(r.get("port"), list) else [r.get("port")])
-            and r.get("override_address") == "127.0.0.1"
+            and not r.get("override_address")
         )
         priv_idx = next(i for i, r in enumerate(rules) if r.get("ip_is_private"))
         assert rd_idx < reject_idx < sniff_idx
         assert reject_idx < priv_idx
+
+
+def test_rustdesk_rules_omitted_when_disabled() -> None:
+    box = _build(dial="vless-reality", office=True, enable_tun=True, rustdesk=False)
+    assert not _rustdesk_rules(box)
+    assert not _rustdesk_tun_lan_reject(box)
 
 
 def _ssh_port_rules(box: dict[str, Any]) -> list[dict[str, Any]]:
@@ -447,6 +455,10 @@ def test_settings_map_roundtrip_preserves_transport() -> None:
         return settings[key]
 
     out = apply_settings_to_cfg(default_config_template(), get, corporate=False)
+    assert out["rustdesk"] is True
+    settings["rustdesk"] = False
+    off = apply_settings_to_cfg(default_config_template(), get, corporate=False)
+    assert off["rustdesk"] is False
     assert out["server"]["host"] == "vps.example"
     assert out["transport"]["uuid"] == "u-1"
     assert out["transport"]["dial"] == "amneziawg"

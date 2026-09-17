@@ -13,6 +13,7 @@ from desktop.client_util import find_pythonw, pid_from_file, wait_port
 from desktop.config_io import (
     get_docker_proxy_enabled,
     get_git_proxy_enabled,
+    get_rustdesk_enabled,
     get_http_bridge_port,
     resolve_git_integration,
     get_pac_listen_port,
@@ -349,10 +350,16 @@ class IntegrationOps:
         self.log("дом: системный прокси снял — трафик через TUN")
 
 
-    def _enable_rustdesk_guards(self) -> None:
+    def _enable_rustdesk_guards(self, cfg: dict[str, Any] | None = None) -> None:
         try:
-            from desktop.rustdesk_opt import enable_rustdesk_vpn_guards
+            from desktop.rustdesk_opt import (
+                disable_rustdesk_vpn_guards,
+                enable_rustdesk_vpn_guards,
+            )
 
+            if not get_rustdesk_enabled(cfg):
+                disable_rustdesk_vpn_guards(self.paths.rustdesk_opt_backup, log=self.log)
+                return
             enable_rustdesk_vpn_guards(self.paths.rustdesk_opt_backup, log=self.log)
         except Exception as exc:  # noqa: BLE001
             self.log(f"RustDesk guards: {exc}")
@@ -483,7 +490,7 @@ class IntegrationOps:
             except Exception as exc:  # noqa: BLE001
                 self.log(f"env proxy off (TUN): {exc}")
             self.log("системный прокси не ставится — трафик через TUN")
-            self._enable_rustdesk_guards()
+            self._enable_rustdesk_guards(cfg)
             return
         if office:
             self.stop_pac_server()
@@ -501,7 +508,7 @@ class IntegrationOps:
                 self.paths.env_proxy_backup,
                 log=self.log,
             )
-            self._enable_rustdesk_guards()
+            self._enable_rustdesk_guards(cfg)
             return
         pac_url = self.start_pac_server(cfg, proxy_port=http_port)
         self._enable_browser_pac(cfg, http_port, pac_url=pac_url)
@@ -510,7 +517,7 @@ class IntegrationOps:
             self.paths.env_proxy_backup,
             log=self.log,
         )
-        self._enable_rustdesk_guards()
+        self._enable_rustdesk_guards(cfg)
 
 
     def write_docker_helpers(

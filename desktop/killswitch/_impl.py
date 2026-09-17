@@ -491,11 +491,19 @@ def suppress_underlay_ipv6(
         names.append(TUN_IFACE_NAME)
     if not names:
         return
-    _set_ipv6_binding(names, enable=False, log=log)
     st = _load_state(var_dir)
+    already = {str(n) for n in (st.get("ipv6_disabled_names") or []) if n}
+    to_disable = [
+        name
+        for name in names
+        if name == TUN_IFACE_NAME or name not in already
+    ]
+    if to_disable:
+        _set_ipv6_binding(to_disable, enable=False, log=log)
     st["ipv6_disabled_names"] = [n for n in names if n != TUN_IFACE_NAME]
     _save_state(var_dir, st)
-    log("kill switch: IPv6 выкл на " + ", ".join(names))
+    if to_disable:
+        log("kill switch: IPv6 выкл на " + ", ".join(to_disable))
 
 
 def prefer_tun_ipv4(tun_idx: int, *, var_dir: Path, log: LogFn = noop) -> None:

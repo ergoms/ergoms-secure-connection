@@ -139,6 +139,18 @@ def netsh_ipv4_interfaces(*, timeout: float = 5.0) -> list[NetshIface]:
     return out
 
 
+def netsh_has_interface(name: str, *, timeout: float = 4.0) -> bool:
+    """True if netsh L2 table lists the alias — even without IPv4."""
+    want = (name or "").strip().lower()
+    if sys.platform != "win32" or not want:
+        return False
+    text = _run_console(
+        ["netsh", "interface", "show", "interface"],
+        timeout=timeout,
+    )
+    return want in text.lower()
+
+
 def best_interface_index(dest_ip: str) -> int | None:
     """Windows GetBestInterface for an IPv4 address."""
     if sys.platform != "win32" or not dest_ip:

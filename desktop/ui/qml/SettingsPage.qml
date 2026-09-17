@@ -220,6 +220,19 @@ Item {
                 SettingsSection {
                     title: "УДАЛЁННЫЙ ДОСТУП"
                     BoolSegmented {
+                        label: "RustDesk через наш сервер"
+                        on: bridge.settings.rustdesk
+                        onToggled: (v) => { bridge.settings.rustdesk = v }
+                    }
+                    Text {
+                        width: parent.width
+                        text: "Ретранслятор на том же VPS. Выключите, если RustDesk не используете."
+                        color: T.muted
+                        font.pixelSize: 11
+                        font.family: T.fontUi
+                        wrapMode: Text.WordWrap
+                    }
+                    BoolSegmented {
                         label: "Доступ с сервера на этот ПК"
                         on: bridge.settings.reverseSsh
                         onToggled: (v) => { bridge.settings.reverseSsh = v }

@@ -119,8 +119,14 @@ Item {
         onBrowseRequested: bridge.browseExecutable()
     }
 
+    onVisibleChanged: if (visible) picker.prefetch()
+
     Connections {
         target: bridge
+        function onPageChanged() {
+            if (bridge.page === "exceptions")
+                picker.prefetch()
+        }
         function onAnalyzeReady(query, payload) {
             var obj = {}
             try { obj = JSON.parse(payload) } catch (e) { return }
@@ -132,8 +138,8 @@ Item {
             else if (q && q === v)
                 vpnEd.applyHint(obj)
         }
-        function onProcessListReady(payload) { picker.applyList(payload) }
-        function onServiceListReady(payload) { picker.applyList(payload) }
+        function onProcessListReady(payload) { picker.applyList(payload, "process") }
+        function onServiceListReady(payload) { picker.applyList(payload, "service") }
         function onPeersReady(spec, payload) {
             var obj = {}
             try { obj = JSON.parse(payload) } catch (e) { return }

@@ -141,6 +141,72 @@ def test_tun_still_opening_from_wintun_warning(tmp_path: Path) -> None:
     assert mgr._tun_inbound_ready() is True
 
 
+def test_tun_create_conflict_from_wintun_already_exists() -> None:
+    from desktop.singbox.readiness import tun_adapter_busy, tun_create_conflict
+
+    fatal = [
+        "FATAL start inbound/tun[tun-in]: configure tun interface: "
+        "Cannot create a file when that file already exists."
+    ]
+    assert tun_create_conflict(fatal) is True
+    assert tun_adapter_busy(fatal) is True
+    assert tun_create_conflict(
+        ["WARN inbound/tun[tun-in]: open interface take too much time to finish!"]
+    ) is False
+
+
+def test_wait_ready_aborts_on_existing_wintun(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from desktop.singbox_mode import SingboxModeManager
+
+    logs: list[str] = []
+    mgr = SingboxModeManager(tmp_path, tmp_path, tmp_path, log=logs.append)
+    monkeypatch.setattr("desktop.singbox.readiness.sys.platform", "win32")
+    monkeypatch.setattr("desktop.singbox.readiness.port_open", lambda *_a, **_k: True)
+    monkeypatch.setattr("desktop.singbox.readiness.procutil.pid_alive", lambda _pid: True)
+    mgr.tail_log = lambda n=40: [  # type: ignore[method-assign]
+        "FATAL start inbound/tun[tun-in]: configure tun interface: "
+        "Cannot create a file when that file already exists."
+    ]
+    assert mgr._wait_ready(1080, 1088, enable_tun=True, pid=1, timeout=2.0) is False
+    assert any("leftover" in msg.lower() or "пересоздаю" in msg for msg in logs)
+
+
+def test_netsh_has_interface_reads_l2_table(monkeypatch: pytest.MonkeyPatch) -> None:
+    from desktop.sys import win_net
+
+    monkeypatch.setattr(win_net, "sys", type("S", (), {"platform": "win32"})())
+    monkeypatch.setattr(
+        win_net,
+        "_run_console",
+        lambda args, timeout=4.0: (
+            "Admin State    State          Type             Interface Name\n"
+            "Enabled        Disconnected   Dedicated        ergoms-secure-connection-tun\n"
+        ),
+    )
+    assert win_net.netsh_has_interface("ergoms-secure-connection-tun") is True
+    assert win_net.netsh_has_interface("Ethernet") is False
+
+
+def test_remove_stale_tun_without_ipv4(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from desktop.tun import TUN_IFACE_NAME, remove_stale_tun_adapter
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr("desktop.tun.sys.platform", "win32")
+    monkeypatch.setattr("desktop.tun._win_if_index_by_alias", lambda *_a, **_k: None)
+    monkeypatch.setattr("desktop.tun.netsh_has_interface", lambda _name: True)
+    monkeypatch.setattr(
+        "desktop.tun.procutil.run",
+        lambda args, timeout=8: calls.append(list(args)),
+    )
+    assert remove_stale_tun_adapter(hidden=True) is True
+    assert any("delete" in " ".join(args) for args in calls)
+    assert TUN_IFACE_NAME in " ".join(" ".join(args) for args in calls)
+
+
 def test_tun_inbound_ready_ignores_singbox_started_while_wintun_opens(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -643,6 +643,7 @@ def update_config_key(path: Path, key: str, value: Any) -> None:
         "WATCHDOG_INTERVAL": ("watchdog_interval", value),
         "WATCHDOG_MAX_RETRIES": ("watchdog_max_retries", value),
         "KILL_SWITCH": ("kill_switch", value),
+        "RUSTDESK": ("rustdesk", value),
         "SING_BOX_PATH": ("tun.sing_box_path", value),
         "TUN_MTU": ("tun.mtu", value),
         "REVERSE_SSH": ("reverse_ssh.enabled", value),
@@ -653,6 +654,8 @@ def update_config_key(path: Path, key: str, value: Any) -> None:
             tun["enabled"] = _as_bool(raw, True)
         elif target == "kill_switch":
             cfg["kill_switch"] = _as_bool(raw, True)
+        elif target == "rustdesk":
+            cfg["rustdesk"] = _as_bool(raw, True)
         elif target == "tun.elevate":
             tun["elevate"] = _as_bool(raw, True)
         elif target == "tun.sing_box_path":
@@ -750,6 +753,10 @@ def get_tun_enabled(cfg: dict[str, Any] | None = None) -> bool:
 
 def get_kill_switch(cfg: dict[str, Any] | None = None) -> bool:
     return _app(cfg).kill_switch
+
+
+def get_rustdesk_enabled(cfg: dict[str, Any] | None = None) -> bool:
+    return _app(cfg).rustdesk
 
 
 def get_tun_elevate(cfg: dict[str, Any] | None = None) -> bool:

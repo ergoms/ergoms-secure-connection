@@ -21,6 +21,7 @@ from desktop.net_host import resolve_host, underlay_gateway
 from desktop.paths import bundle_dir, is_frozen
 from desktop.sys.win_net import (
     best_interface_index,
+    netsh_has_interface,
     netsh_ipv4_interfaces,
     route_print_v4,
     run_route_lines,
@@ -282,14 +283,7 @@ def wait_tun_iface(*, timeout: float = 20.0) -> int | None:
     return None
 
 
-def remove_stale_tun_adapter(*, log: LogFn = noop) -> bool:
-    """Drop a leftover Wintun NIC so the next start can create TUN."""
-    if sys.platform != "win32":
-        return False
-    idx = _win_if_index_by_alias(TUN_IFACE_NAME, require_up=False)
-    if not idx:
-        return False
-    log(f"убираю зависший TUN «{TUN_IFACE_NAME}» if={idx}")
+def _delete_tun_adapter_cmds() -> None:
     for args in (
         ["netsh", "interface", "set", "interface", f"name={TUN_IFACE_NAME}", "admin=disabled"],
         ["netsh", "interface", "delete", "interface", f"name={TUN_IFACE_NAME}"],
@@ -298,11 +292,57 @@ def remove_stale_tun_adapter(*, log: LogFn = noop) -> bool:
             procutil.run(args, timeout=8)
         except OSError:
             continue
-    deadline = time.monotonic() + 3.0
+
+
+def _remove_hidden_tun_adapter(*, log: LogFn = noop) -> bool:
+    """Hidden Wintun is invisible to `netsh ipv4` and still blocks CreateAdapter."""
+    safe = TUN_IFACE_NAME.replace("'", "''")
+    ps = (
+        f"$a=Get-NetAdapter -Name '{safe}' -IncludeHidden "
+        "-ErrorAction SilentlyContinue; "
+        "if(-not $a){ exit 2 }; "
+        "$a | Remove-NetAdapter -Confirm:$false"
+    )
+    try:
+        r = procutil.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+            timeout=12,
+        )
+    except OSError:
+        return False
+    if int(getattr(r, "returncode", 1) or 1) != 0:
+        return False
+    log(f"убираю скрытый TUN «{TUN_IFACE_NAME}»")
+    return True
+
+
+def remove_stale_tun_adapter(*, log: LogFn = noop, hidden: bool = False) -> bool:
+    """Drop a leftover Wintun NIC so the next start can create TUN.
+
+    `hidden=True` also looks at the L2 table and Get-NetAdapter -IncludeHidden.
+    A leftover name blocks Wintun CreateAdapter even when ipv4 netsh is empty.
+    """
+    if sys.platform != "win32":
+        return False
+    idx = _win_if_index_by_alias(TUN_IFACE_NAME, require_up=False)
+    listed = idx is not None
+    if not listed and hidden:
+        listed = netsh_has_interface(TUN_IFACE_NAME)
+    if idx:
+        log(f"убираю зависший TUN «{TUN_IFACE_NAME}» if={idx}")
+        _delete_tun_adapter_cmds()
+    elif listed:
+        log(f"убираю зависший TUN «{TUN_IFACE_NAME}» (без IPv4)")
+        _delete_tun_adapter_cmds()
+    elif hidden:
+        _remove_hidden_tun_adapter(log=log)
+    else:
+        return False
+    deadline = time.monotonic() + 2.0
     while time.monotonic() < deadline:
         if not _win_if_index_by_alias(TUN_IFACE_NAME, require_up=False):
             return True
-        time.sleep(0.2)
+        time.sleep(0.15)
     return _win_if_index_by_alias(TUN_IFACE_NAME, require_up=False) is None
 
 

@@ -512,7 +512,8 @@ def _vps_loopback_rule(
     """Send traffic to the VPS public IP onto that host's loopback.
 
     The VPN endpoint *is* the VPS: connecting back to its WAN address from
-    inside the tunnel is a hairpin (SSH timeout, RustDesk relay dead).
+    inside the tunnel is a hairpin (SSH timeout). RustDesk relay must not use
+    this — see rustdesk_hairpin_rules.
     """
     rule: dict[str, Any] = {
         "ip_cidr": [f"{vps_ip}/32"],
@@ -542,19 +543,31 @@ def _host_is_ip(host: str) -> bool:
 def rustdesk_hairpin_rules(
     server_host: str, *, outbound: str = "proxy"
 ) -> list[dict[str, Any]]:
-    """Reach a RustDesk relay on the same VPS as the VPN (IP and hostname)."""
+    """Reach a RustDesk relay on the same VPS as the VPN (IP and hostname).
+
+    Keep the VPS WAN destination. hbbr 1.1.16 treats any TCP peer from
+    127.0.0.1 on :21117 as its admin console and never answers RequestRelay,
+    so the client dies with "Failed to receive public key". The VPS holds
+    its WAN address on ens3, so this is still a local hairpin.
+    These rules must stay ahead of the generic VPS loopback hairpin.
+    """
     host = (server_host or "").strip()
     vps_ip = resolve_host(host) if host else ""
     rules: list[dict[str, Any]] = []
     if vps_ip:
-        rules.append(_vps_loopback_rule(vps_ip, outbound=outbound, port=RUSTDESK_PORTS))
+        rules.append(
+            {
+                "ip_cidr": [f"{vps_ip}/32"],
+                "port": RUSTDESK_PORTS,
+                "outbound": outbound,
+            }
+        )
     if host and not _host_is_ip(host) and host != vps_ip:
         rules.append(
             {
                 "domain": [host],
                 "port": RUSTDESK_PORTS,
                 "outbound": outbound,
-                "override_address": "127.0.0.1",
             }
         )
     return rules
@@ -756,6 +769,7 @@ class SingboxModeManager:
         mtu: int = 1400,
         vps_proxy_ports: list[int] | None = None,
         kill_switch: bool = False,
+        rustdesk: bool | None = None,
     ) -> dict[str, Any]:
         squid_host, squid_port = parse_corporate_proxy(corporate_proxy)
         use_office_proxy = bool(squid_host)
@@ -874,10 +888,18 @@ class SingboxModeManager:
                     "timeout": "100ms",
                 }
             )
-        rustdesk = [
-            *rustdesk_hairpin_rules(server_host),
-            *rustdesk_tun_lan_reject_rules(),
-        ]
+        if rustdesk is None:
+            from desktop.config_io import get_rustdesk_enabled
+
+            rustdesk = get_rustdesk_enabled()
+        rustdesk_rules = (
+            [
+                *rustdesk_hairpin_rules(server_host),
+                *rustdesk_tun_lan_reject_rules(),
+            ]
+            if rustdesk
+            else []
+        )
         box: dict[str, Any] = {
             **config_skeleton(
                 log_path=self.log_path,
@@ -896,7 +918,7 @@ class SingboxModeManager:
                 "auto_detect_interface": not bool(bind_iface),
                 **({"default_interface": bind_iface} if bind_iface else {}),
                 "final": "proxy",
-                "rules": [*rustdesk, *sniff, *rules],
+                "rules": [*rustdesk_rules, *sniff, *rules],
             },
         }
         if awg:
@@ -1003,6 +1025,7 @@ class SingboxModeManager:
         vps_proxy_ports: list[int] | None = None,
         force_restart: bool = False,
         kill_switch: bool = False,
+        rustdesk: bool | None = None,
         prelude_cmds: list[str] | None = None,
         postlude_cmds: list[str] | None = None,
     ) -> None:
@@ -1024,6 +1047,7 @@ class SingboxModeManager:
             mtu=mtu,
             vps_proxy_ports=vps_proxy_ports,
             kill_switch=kill_switch,
+            rustdesk=rustdesk,
         )
         config_text = json.dumps(cfg, indent=2)
         if self.running():
@@ -1090,8 +1114,8 @@ class SingboxModeManager:
             leftover = self.pid() or pid
             if leftover and procutil.pid_alive(leftover):
                 procutil.kill_pids([leftover])
-            remove_stale_tun_adapter(log=self.log)
-            time.sleep(1.0)
+            remove_stale_tun_adapter(log=self.log, hidden=True)
+            time.sleep(0.2)
             pid = self._launch(
                 exe, elevate=need_admin, prelude_cmds=prelude, postlude_cmds=postlude
             )

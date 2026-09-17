@@ -2,12 +2,20 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from desktop.config.model import AppConfig
+from desktop.config_io import get_rustdesk_enabled
 from desktop.rustdesk_opt import (
     restore_toml_options,
     rustdesk_tun_lan_reject_rules,
     set_toml_options,
 )
 from desktop.tun import RUSTDESK_PROCS, TUN_LAN_CIDR
+
+
+def test_rustdesk_setting_defaults_on() -> None:
+    assert AppConfig.from_dict({}).rustdesk is True
+    assert get_rustdesk_enabled({}) is True
+    assert get_rustdesk_enabled({"rustdesk": False}) is False
 
 
 def test_tun_lan_reject_targets_rustdesk_only() -> None:

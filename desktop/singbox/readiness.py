@@ -14,10 +14,17 @@ from lib.netutil import port_open
 LogFn = Callable[[str], None]
 
 
+def tun_create_conflict(lines: list[str]) -> bool:
+    """Wintun leftover: CreateAdapter fails after ~15s if we wait it out."""
+    text = "\n".join(lines).lower()
+    return "already exists" in text or "cannot create a file" in text
+
+
 def tun_adapter_busy(lines: list[str]) -> bool:
     text = "\n".join(lines).lower()
     return (
-        "configure tun interface" in text
+        tun_create_conflict(lines)
+        or "configure tun interface" in text
         or "wintun" in text
         or "take too much time" in text
     )
@@ -72,9 +79,12 @@ def wait_ready(
     socks_ok = False
     extended = False
     while time.monotonic() < deadline:
-        if port_open("127.0.0.1", socks_port, timeout=0.35):
+        if port_open("127.0.0.1", socks_port, timeout=0.08):
             socks_ok = True
-            lines = tail(60)
+            lines = tail(80)
+            if enable_tun and tun_create_conflict(lines):
+                log("TUN: leftover Wintun — пересоздаю адаптер")
+                return False
             if not enable_tun or tun_inbound_ready(lines, platform=platform):
                 kind = "mixed + TUN" if enable_tun else "mixed"
                 log(f"sing-box слушает SOCKS :{socks_port} и HTTP :{http_port} ({kind})")

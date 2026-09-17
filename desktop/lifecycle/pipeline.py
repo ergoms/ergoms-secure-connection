@@ -27,7 +27,7 @@ from desktop.lifecycle.plan import ConnectPlan, resolve_connect_plan
 from desktop.lifecycle.session import ConnectionSession, SessionBusy
 from desktop.lifecycle.snapshot import Phase
 from desktop.singbox_mode import dial_label
-from desktop.tun import our_tun_split_leftover
+from desktop.tun import our_tun_split_leftover, remove_stale_tun_adapter
 from lib.netutil import port_open
 
 
@@ -231,6 +231,15 @@ class ConnectionPipeline:
         client = self.client
         self._stop_legacy_tun()
         client.reap_leftovers(socks_port=plan.socks_port)
+        stale_tun = None
+        if plan.start_tun and sys.platform == "win32":
+            stale_tun = threading.Thread(
+                target=remove_stale_tun_adapter,
+                kwargs={"log": client.log, "hidden": True},
+                name="ergoms-tun-cleanup",
+                daemon=True,
+            )
+            stale_tun.start()
         if plan.office_proxy and plan.dial == "vless-reality":
             client.log(f"Probing CONNECT {plan.host}:{plan.port} via proxy...")
             if client.probe(plan.host, plan.port) != 0:
@@ -262,6 +271,8 @@ class ConnectionPipeline:
                 "kill_switch": plan.ks_wanted,
             }
             client.log("AmneziaWG: сначала handshake без TUN")
+        if stale_tun is not None:
+            stale_tun.join(timeout=8.0)
         self.session.transition(Phase.LAUNCHING, "запуск sing-box")
         client.singbox.start(
             server_host=plan.host,

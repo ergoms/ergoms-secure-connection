@@ -9,6 +9,7 @@
   "watchdog_interval": 15,
   "watchdog_max_retries": 0,
   "kill_switch": true,
+  "rustdesk": true,
   "git_proxy": true,
   "git_via": "tun",
   "docker_proxy": false,
