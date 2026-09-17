@@ -1,5 +1,4 @@
 import QtQuick
-import "Theme.js" as T
 
 Rectangle {
     id: root

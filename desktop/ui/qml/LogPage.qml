@@ -1,7 +1,6 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
-import "Theme.js" as T
 
 Item {
     id: root
@@ -46,7 +45,7 @@ Item {
         anchors.margins: 14
         color: T.surface
         radius: 14
-        border.color: Qt.rgba(1, 1, 1, 0.04)
+        border.color: T.hairline
         border.width: 1
         clip: true
 
@@ -81,7 +80,7 @@ Item {
                     radius: 8
                     color: copyMouse.containsMouse ? T.btn : "transparent"
                     border.width: 1
-                    border.color: Qt.rgba(1, 1, 1, 0.08)
+                    border.color: T.hairline
                     Text {
                         id: copyLabel
                         anchors.centerIn: parent
@@ -104,7 +103,7 @@ Item {
             Rectangle {
                 Layout.fillWidth: true
                 Layout.preferredHeight: 1
-                color: Qt.rgba(1, 1, 1, 0.04)
+                color: T.hairline
             }
 
             ToastHost {

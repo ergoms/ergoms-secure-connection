@@ -1,11 +1,11 @@
 import QtQuick
-import "Theme.js" as T
 
 Item {
     id: root
     property color ringColor: T.muted
     property bool busy: false
     property bool active: false
+    signal clicked()
     width: 168
     height: 168
 
@@ -76,5 +76,11 @@ Item {
         font.pixelSize: 28
         font.family: T.fontUi
         Behavior on color { ColorAnimation { duration: 280 } }
+    }
+
+    MouseArea {
+        anchors.fill: parent
+        cursorShape: Qt.PointingHandCursor
+        onClicked: root.clicked()
     }
 }

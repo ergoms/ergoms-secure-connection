@@ -1,5 +1,4 @@
 import QtQuick
-import "Theme.js" as T
 
 Rectangle {
     id: root
@@ -22,9 +21,9 @@ Rectangle {
     implicitHeight: 44
     height: 44
     radius: 10
-    color: Qt.rgba(1, 1, 1, 0.03)
+    color: T.rowBg
     border.width: 1
-    border.color: Qt.rgba(1, 1, 1, 0.05)
+    border.color: T.hairline
 
     Text {
         id: kindLbl
@@ -61,11 +60,11 @@ Rectangle {
         width: 78
         height: 32
         radius: 8
-        color: delMouse.containsMouse ? T.danger : Qt.rgba(0.941, 0.443, 0.471, 0.16)
+        color: delMouse.containsMouse ? T.danger : T.dangerSoft
         Text {
             anchors.centerIn: parent
             text: "Удалить"
-            color: delMouse.containsMouse ? "#04140f" : T.danger
+            color: delMouse.containsMouse ? T.accentText : T.danger
             font.pixelSize: 12
             font.weight: Font.DemiBold
             font.family: T.fontUi

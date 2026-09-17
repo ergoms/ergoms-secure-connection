@@ -1,5 +1,4 @@
 import QtQuick
-import "Theme.js" as T
 
 Rectangle {
     id: root
@@ -11,7 +10,7 @@ Rectangle {
     implicitHeight: bannerText.implicitHeight + 16
     height: visible ? implicitHeight : 0
     radius: 10
-    color: "#3a3220"
+    color: T.toastWarn
     clip: true
 
     Text {

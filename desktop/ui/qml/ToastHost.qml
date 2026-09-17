@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Layouts
-import "Theme.js" as T
 
 Item {
     id: root
@@ -40,7 +39,7 @@ Item {
         width: parent.width
         height: Math.max(40, toastText.implicitHeight + 18)
         radius: 12
-        color: kind === "error" ? "#3a1d24" : (kind === "warn" ? "#3a3220" : T.surface2)
+        color: kind === "error" ? T.toastError : (kind === "warn" ? T.toastWarn : T.surface2)
         border.width: 1
         border.color: kind === "error" ? T.danger : (kind === "warn" ? T.warn : T.accent)
 

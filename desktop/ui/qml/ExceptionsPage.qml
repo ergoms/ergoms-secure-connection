@@ -1,7 +1,6 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
-import "Theme.js" as T
 
 Item {
     id: root
@@ -56,7 +55,7 @@ Item {
                     width: parent.width
                     height: visible ? bannerText.implicitHeight + 16 : 0
                     radius: 10
-                    color: "#3a3220"
+                    color: T.toastWarn
                     clip: true
                     Text {
                         id: bannerText

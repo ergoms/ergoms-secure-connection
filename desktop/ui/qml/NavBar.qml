@@ -1,5 +1,4 @@
 import QtQuick
-import "Theme.js" as T
 
 Rectangle {
     id: root
@@ -11,7 +10,7 @@ Rectangle {
         anchors.left: parent.left
         anchors.right: parent.right
         height: 1
-        color: Qt.rgba(1, 1, 1, 0.05)
+        color: T.hairline
     }
 
     Row {

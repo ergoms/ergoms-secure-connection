@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Controls.Basic
-import "Theme.js" as T
 
 Item {
     id: root
@@ -95,7 +94,7 @@ Item {
     Rectangle {
         id: dim
         anchors.fill: parent
-        color: Qt.rgba(0, 0, 0, 0.52)
+        color: T.dim
         opacity: root.opened ? 1 : 0
         Behavior on opacity { NumberAnimation { duration: 140; easing.type: Easing.OutCubic } }
         MouseArea {
@@ -178,7 +177,7 @@ Item {
                     color: T.surface2
                     radius: 10
                     border.width: 1
-                    border.color: search.activeFocus ? T.accent : Qt.rgba(1, 1, 1, 0.04)
+                    border.color: search.activeFocus ? T.accent : T.hairline
                 }
             }
         }

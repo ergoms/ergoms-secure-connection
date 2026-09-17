@@ -43,11 +43,20 @@ from desktop.route_tokens import token_payload
 from desktop.services.connection import ConnectionService
 from desktop.services.elevation import ElevationService
 from desktop.services.settings import SettingsService
-from desktop.services.status import C_MUTED, present_status
+from desktop.services.status import C_DANGER, C_MUTED, present_status
 from desktop.ui.settings_map import (
     apply_mode_to_settings,
     cfg_to_settings,
     settings_defaults,
+)
+from desktop.ui.theme import (
+    THEME_DARK,
+    THEME_ERGOMS,
+    apply_theme_map,
+    load_ui_theme,
+    save_ui_theme,
+    status_color,
+    status_role,
 )
 from desktop.update import (
     CheckResult,
@@ -62,10 +71,7 @@ from desktop.update import (
 LogFn = Callable[[str], None]
 
 _C_MUTED = C_MUTED
-_C_ACCENT = "#2dd4a8"
-_C_OK = "#2dd4a8"
-_C_WARN = "#e6c07b"
-_C_DANGER = "#f07178"
+_C_DANGER = C_DANGER
 
 
 def _analyze_spec(spec: str) -> dict[str, Any]:
@@ -142,6 +148,7 @@ class GuiBridge(QObject):
     executablePicked = Signal(str)
     updateAvailableChanged = Signal()
     updateVersionChanged = Signal()
+    uiThemeChanged = Signal()
 
     _bgFinished = Signal(str)
     _updateCheckFinished = Signal(str, bool)
@@ -177,7 +184,9 @@ class GuiBridge(QObject):
         self._busy_text = ""
         self._status_title = "Отключено"
         self._status_sub = ""
-        self._status_color = _C_MUTED
+        self._ui_theme = load_ui_theme()
+        self._status_role = "muted"
+        self._status_color = status_color(self._ui_theme, _C_MUTED)
         self._server_target = "—"
         self._scope = "—"
         self._mode_label = "VPN"
@@ -218,6 +227,8 @@ class GuiBridge(QObject):
         self._settings = QQmlPropertyMap(self)
         for key, value in settings_defaults().items():
             self._settings.insert(key, value)
+        self._theme = QQmlPropertyMap(self)
+        apply_theme_map(self._theme, self._ui_theme)
 
         self._bgFinished.connect(self._on_bg_finished)
         self._statusReady.connect(self._on_status_ready)
@@ -332,6 +343,14 @@ class GuiBridge(QObject):
     def settings(self) -> QQmlPropertyMap:
         return self._settings
 
+    @Property(QObject, constant=True)
+    def themeTokens(self) -> QQmlPropertyMap:
+        return self._theme
+
+    @Property(str, notify=uiThemeChanged)
+    def uiTheme(self) -> str:
+        return self._ui_theme
+
     @Property(str, constant=True)
     def appVersion(self) -> str:
         return __version__
@@ -345,6 +364,21 @@ class GuiBridge(QObject):
         return self._update_version
 
     # ── slots ───────────────────────────────────────────────────────────
+
+    @Slot(str)
+    def setUiTheme(self, name: str) -> None:
+        next_id = save_ui_theme(name)
+        if next_id == self._ui_theme:
+            return
+        self._ui_theme = next_id
+        apply_theme_map(self._theme, next_id)
+        self._status_color = status_color(next_id, self._status_role)
+        self.uiThemeChanged.emit()
+        self.statusColorChanged.emit()
+
+    @Slot()
+    def toggleUiTheme(self) -> None:
+        self.setUiTheme(THEME_ERGOMS if self._ui_theme != THEME_ERGOMS else THEME_DARK)
 
     @Slot(str)
     def setPage(self, page: str) -> None:
@@ -1038,7 +1072,8 @@ class GuiBridge(QObject):
             return
         self._status_title = "Ошибка"
         self._status_sub = err[:80]
-        self._status_color = _C_DANGER
+        self._status_role = status_role(_C_DANGER)
+        self._status_color = status_color(self._ui_theme, _C_DANGER)
         self._can_reconnect = bool(self._active or self._kill_switch_on)
         self.statusTitleChanged.emit()
         self.statusSubChanged.emit()
@@ -1104,7 +1139,8 @@ class GuiBridge(QObject):
             self._last_probe_toast = None
         self._status_title = view.title
         self._status_sub = view.subtitle
-        self._status_color = view.color
+        self._status_role = status_role(view.color)
+        self._status_color = status_color(self._ui_theme, view.color)
         self._power_text = view.power_text
         self._can_reconnect = bool(view.can_reconnect)
 

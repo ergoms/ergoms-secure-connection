@@ -30,6 +30,15 @@ datas = [
 ]
 if ico.is_file():
     datas.append((str(ico), "desktop"))
+ico_ergoms = root / "desktop" / "app_icon_ergoms.ico"
+if ico_ergoms.is_file():
+    datas.append((str(ico_ergoms), "desktop"))
+png_ergoms = root / "desktop" / "app_icon_ergoms.png"
+if png_ergoms.is_file():
+    datas.append((str(png_ergoms), "desktop"))
+png_dark = root / "desktop" / "app_icon.png"
+if png_dark.is_file():
+    datas.append((str(png_dark), "desktop"))
 if awg_ver.is_file():
     datas.append((str(awg_ver), "tools"))
 
@@ -44,6 +53,7 @@ a = Analysis(
         "desktop.gui",
         "desktop.ui",
         "desktop.ui.bridge",
+        "desktop.ui.theme",
         "desktop.client",
         "desktop.reverse_ssh",
         "desktop.autostart",

@@ -3,7 +3,6 @@ import QtQuick.Controls
 import QtQuick.Controls.Material
 import QtQuick.Layouts
 import QtQuick.Window
-import "Theme.js" as T
 
 ApplicationWindow {
     id: win
@@ -18,7 +17,7 @@ ApplicationWindow {
     color: "transparent"
     flags: Qt.Window | Qt.FramelessWindowHint | Qt.WindowSystemMenuHint | Qt.WindowMinimizeButtonHint
     font.family: Qt.platform.os === "windows" ? T.fontUi : "sans-serif"
-    Material.theme: Material.Dark
+    Material.theme: bridge.uiTheme === "ergoms" ? Material.Light : Material.Dark
     Material.accent: T.accent
     Material.background: T.bg
     Material.foreground: T.text
@@ -53,9 +52,22 @@ ApplicationWindow {
                     onActiveChanged: if (active) win.startSystemMove()
                 }
 
-                Text {
+                Image {
+                    id: themeLogo
                     anchors.left: parent.left
-                    anchors.leftMargin: 18
+                    anchors.leftMargin: 14
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 22
+                    height: 22
+                    source: T.iconUrl
+                    fillMode: Image.PreserveAspectFit
+                    smooth: true
+                    mipmap: true
+                }
+
+                Text {
+                    anchors.left: themeLogo.right
+                    anchors.leftMargin: 8
                     anchors.right: chromeBtns.left
                     anchors.rightMargin: 10
                     anchors.verticalCenter: parent.verticalCenter
@@ -75,6 +87,28 @@ ApplicationWindow {
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: 4
 
+                    Rectangle {
+                        width: 30
+                        height: 30
+                        radius: 9
+                        color: themeMouse.containsMouse ? T.btn : "transparent"
+                        Image {
+                            anchors.centerIn: parent
+                            width: 16
+                            height: 16
+                            source: T.otherIconUrl
+                            fillMode: Image.PreserveAspectFit
+                            smooth: true
+                            mipmap: true
+                        }
+                        MouseArea {
+                            id: themeMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: bridge.toggleUiTheme()
+                        }
+                    }
                     ChromeButton {
                         kind: "min"
                         onClicked: win.showMinimized()
@@ -90,7 +124,7 @@ ApplicationWindow {
                     anchors.right: parent.right
                     anchors.bottom: parent.bottom
                     height: 1
-                    color: Qt.rgba(1, 1, 1, 0.05)
+                    color: T.hairline
                 }
             }
 

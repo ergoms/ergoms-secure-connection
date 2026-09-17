@@ -1,5 +1,4 @@
 import QtQuick
-import "Theme.js" as T
 
 Rectangle {
     id: root
@@ -14,7 +13,7 @@ Rectangle {
     readonly property color hoverColor: danger ? T.dangerDim : (primary ? T.accentDim : T.btn)
     color: mouse.containsMouse && enabled ? hoverColor : baseColor
     border.width: primary || danger ? 0 : 1
-    border.color: mouse.containsMouse && enabled ? T.border : Qt.rgba(1, 1, 1, 0.06)
+    border.color: mouse.containsMouse && enabled ? T.border : T.hairline
     scale: mouse.pressed && enabled ? 0.985 : 1.0
     opacity: enabled ? 1 : 0.42
     Behavior on color { ColorAnimation { duration: 140 } }
@@ -23,7 +22,7 @@ Rectangle {
     Text {
         anchors.centerIn: parent
         text: root.text
-        color: root.primary && !root.danger ? "#04140f" : T.text
+        color: root.primary && !root.danger ? T.accentText : T.text
         font.pixelSize: 13
         font.weight: Font.DemiBold
         font.letterSpacing: 0.25

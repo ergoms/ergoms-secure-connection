@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Controls
-import "Theme.js" as T
 
 ScrollBar {
     id: control
@@ -14,7 +13,7 @@ ScrollBar {
         implicitWidth: 3
         implicitHeight: 3
         radius: 1.5
-        color: control.pressed ? "#d5dbe6" : (control.hovered ? "#9aa3b4" : "#5c6678")
+        color: control.pressed ? T.scrollPress : (control.hovered ? T.scrollHover : T.scroll)
         opacity: control.size < 1.0 && (control.active || control.hovered || control.pressed) ? 1 : 0
         Behavior on opacity { NumberAnimation { duration: 160 } }
         Behavior on color { ColorAnimation { duration: 120 } }

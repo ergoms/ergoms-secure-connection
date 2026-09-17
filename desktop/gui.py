@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import os
 import sys
-from pathlib import Path
 
 from desktop.branding import APP_AUMID, APP_NAME, ORG_NAME
-from desktop.paths import Paths, bundle_dir
+from desktop.paths import Paths
+from desktop.ui.theme import THEME_ERGOMS, icon_path
 
 
 def run_gui() -> None:
@@ -56,19 +56,21 @@ def run_gui() -> None:
     app.setOrganizationName(ORG_NAME)
     app.setQuitOnLastWindowClosed(False)
 
-    ico_path = _icon_path()
-    icon = QIcon(str(ico_path)) if ico_path else _fallback_icon()
-    app.setWindowIcon(icon)
-
     from desktop.instance import listen
     from desktop.ui.bridge import GuiBridge, qml_dir
 
     bridge = GuiBridge()
     app._ergoms_ipc = listen(bridge.showWindow)  # noqa: SLF001 — keep server alive
+
+    icon = _window_icon(bridge.uiTheme)
+    app.setWindowIcon(icon)
+
     engine = QQmlApplicationEngine()
     qml_root = qml_dir()
     engine.addImportPath(str(qml_root))
-    engine.rootContext().setContextProperty("bridge", bridge)
+    ctx = engine.rootContext()
+    ctx.setContextProperty("bridge", bridge)
+    ctx.setContextProperty("T", bridge.themeTokens)
     engine.warnings.connect(lambda ws: [print(w.toString(), file=sys.stderr) for w in ws])
     main_qml = qml_root / "Main.qml"
     if not main_qml.is_file():
@@ -81,29 +83,42 @@ def run_gui() -> None:
 
     window = engine.rootObjects()[0]
     _round_corners(window)
+    _apply_window_icon(window, icon)
 
     tray = _setup_tray(app, icon, bridge, window)
     bridge.closingUi.connect(tray.hide)
     bridge.quitRequested.connect(app.quit)
     app.aboutToQuit.connect(bridge.teardownNow)
+
+    def _sync_icons() -> None:
+        next_icon = _window_icon(bridge.uiTheme)
+        app.setWindowIcon(next_icon)
+        _apply_window_icon(window, next_icon)
+        tray.setIcon(next_icon)
+
+    bridge.uiThemeChanged.connect(_sync_icons)
     if getattr(bridge, "startHidden", False):
         window.setProperty("visible", False)
 
     raise SystemExit(app.exec())
 
 
-def _icon_path() -> Path | None:
-    candidates = (
-        Path(__file__).with_name("app_icon.ico"),
-        bundle_dir() / "desktop" / "app_icon.ico",
-    )
-    for path in candidates:
-        if path.is_file():
-            return path
-    return None
+def _window_icon(theme_id: str) -> object:
+    from PySide6.QtGui import QIcon
+
+    ico = icon_path(theme_id)
+    if ico is not None:
+        return QIcon(str(ico))
+    return _fallback_icon(theme_id)
 
 
-def _fallback_icon() -> QIcon:
+def _apply_window_icon(window: object, icon: object) -> None:
+    setter = getattr(window, "setIcon", None)
+    if callable(setter):
+        setter(icon)
+
+
+def _fallback_icon(theme_id: str = "") -> object:
     from PySide6.QtCore import QRectF, Qt
     from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 
@@ -111,19 +126,34 @@ def _fallback_icon() -> QIcon:
     pix.fill(QColor(0, 0, 0, 0))
     painter = QPainter(pix)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setBrush(QColor(12, 16, 23))
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.drawRoundedRect(2, 2, 60, 60, 14, 14)
-    mint = QColor(45, 212, 168)
-    pen = QPen(mint)
-    pen.setWidth(6)
-    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-    painter.setPen(pen)
-    painter.setBrush(Qt.BrushStyle.NoBrush)
-    painter.drawArc(QRectF(16, 16, 32, 32), 115 * 16, 310 * 16)
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(mint)
-    painter.drawEllipse(28, 28, 8, 8)
+    if theme_id == THEME_ERGOMS:
+        painter.setBrush(QColor(242, 242, 242))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(2, 2, 60, 60, 14, 14)
+        red = QColor(208, 50, 45)
+        pen = QPen(red)
+        pen.setWidth(5)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(QRectF(14, 14, 36, 36))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(red)
+        painter.drawEllipse(28, 28, 8, 8)
+    else:
+        painter.setBrush(QColor(12, 16, 23))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(2, 2, 60, 60, 14, 14)
+        mint = QColor(45, 212, 168)
+        pen = QPen(mint)
+        pen.setWidth(6)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawArc(QRectF(16, 16, 32, 32), 115 * 16, 310 * 16)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(mint)
+        painter.drawEllipse(28, 28, 8, 8)
     painter.end()
     return QIcon(pix)
 

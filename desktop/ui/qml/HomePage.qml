@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Layouts
-import "Theme.js" as T
 
 Item {
     id: root

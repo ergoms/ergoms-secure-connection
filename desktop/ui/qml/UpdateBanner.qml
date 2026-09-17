@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Layouts
-import "Theme.js" as T
 
 Rectangle {
     id: root
@@ -11,9 +10,9 @@ Rectangle {
     visible: version.length > 0
     implicitHeight: 52
     radius: 10
-    color: "#16352d"
+    color: T.bannerUpdate
     border.width: 1
-    border.color: Qt.rgba(45 / 255, 212 / 255, 168 / 255, 0.35)
+    border.color: T.bannerUpdateBorder
     clip: true
 
     RowLayout {

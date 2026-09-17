@@ -1,5 +1,4 @@
 import QtQuick
-import "Theme.js" as T
 
 Rectangle {
     id: root
@@ -24,7 +23,7 @@ Rectangle {
     radius: 10
     color: T.surface2
     border.width: 1
-    border.color: Qt.rgba(1, 1, 1, 0.04)
+    border.color: T.hairline
     clip: true
 
     Column {
@@ -108,7 +107,7 @@ Rectangle {
                     implicitWidth: Math.min(hintTxt.implicitWidth + 16, 180)
                     implicitHeight: 24
                     radius: 8
-                    color: Qt.rgba(0.176, 0.831, 0.659, 0.12)
+                    color: T.accentSoft
                     Text {
                         id: hintTxt
                         anchors.centerIn: parent
@@ -150,7 +149,7 @@ Rectangle {
                     width: col.width
                     implicitHeight: peerCol.implicitHeight + 10
                     radius: 8
-                    color: Qt.rgba(1, 1, 1, 0.03)
+                    color: T.rowBg
                     Column {
                         id: peerCol
                         anchors.left: parent.left

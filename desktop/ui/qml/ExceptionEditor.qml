@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Controls.Basic
-import "Theme.js" as T
 
 Column {
     id: root
@@ -204,7 +203,7 @@ Column {
             color: T.surface2
             radius: 10
             border.width: 1
-            border.color: input.activeFocus ? T.accent : Qt.rgba(1, 1, 1, 0.04)
+            border.color: input.activeFocus ? T.accent : T.hairline
         }
     }
 
@@ -230,7 +229,7 @@ Column {
                 radius: 9
                 color: mouse.containsMouse ? T.btn : T.surface2
                 border.width: 1
-                border.color: Qt.rgba(1, 1, 1, 0.05)
+                border.color: T.hairline
                 Text {
                     anchors.centerIn: parent
                     text: modelData.label

@@ -1,5 +1,4 @@
 import QtQuick
-import "Theme.js" as T
 
 Rectangle {
     id: root
@@ -12,7 +11,7 @@ Rectangle {
     clip: true
     opacity: enabled ? 1 : 0.45
     border.width: 1
-    border.color: Qt.rgba(1, 1, 1, 0.04)
+    border.color: T.hairline
 
     Row {
         anchors.fill: parent
@@ -28,7 +27,7 @@ Rectangle {
                 width: (root.width - 6 - (root.model.length - 1) * 3) / root.model.length
                 height: parent.height
                 radius: 8
-                color: selected ? Qt.rgba(0.176, 0.831, 0.659, 0.16) : "transparent"
+                color: selected ? T.accentSoft : "transparent"
                 Behavior on color { ColorAnimation { duration: 140 } }
 
                 Text {

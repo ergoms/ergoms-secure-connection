@@ -1,7 +1,6 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
-import "Theme.js" as T
 
 Item {
     id: root
@@ -57,6 +56,24 @@ Item {
                     primary: bridge.updateAvailable
                     enabled: !bridge.busy
                     onClicked: bridge.updateAvailable ? bridge.startUpdate() : bridge.checkForUpdate()
+                }
+
+                SectionLabel { text: "ВНЕШНИЙ ВИД" }
+                Card {
+                    width: parent.width
+                    implicitHeight: 36 + 28
+                    Segmented {
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.margins: 14
+                        value: bridge.uiTheme
+                        model: [
+                            { label: "Тёмная", value: "dark" },
+                            { label: "Красно-белая", value: "ergoms" }
+                        ]
+                        onActivated: (v) => bridge.setUiTheme(v)
+                    }
                 }
 
             Column {
@@ -293,7 +310,7 @@ Item {
                 anchors.left: parent.left
                 anchors.right: parent.right
                 height: 1
-                color: Qt.rgba(1, 1, 1, 0.05)
+                color: T.hairline
             }
 
             Column {

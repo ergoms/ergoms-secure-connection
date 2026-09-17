@@ -1,5 +1,4 @@
 import QtQuick
-import "Theme.js" as T
 
 Column {
     id: root

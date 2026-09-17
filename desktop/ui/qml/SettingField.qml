@@ -1,6 +1,5 @@
 import QtQuick
 import QtQuick.Controls
-import "Theme.js" as T
 
 Column {
     id: root
@@ -42,7 +41,7 @@ Column {
             color: T.surface2
             radius: 10
             border.width: field.activeFocus ? 1 : 1
-            border.color: field.activeFocus ? T.accent : Qt.rgba(1, 1, 1, 0.04)
+            border.color: field.activeFocus ? T.accent : T.hairline
         }
     }
 }
