@@ -6,6 +6,7 @@ import ipaddress
 import json
 from dataclasses import dataclass
 from typing import Any, Iterable
+from urllib.parse import urlparse
 
 
 KIND_DOMAIN = "domain"
@@ -74,6 +75,34 @@ def _strip_prefix(raw: str, prefix: str) -> str:
     return text
 
 
+def extract_url_host(raw: str) -> str | None:
+    """Host from http(s) URL, or None if this is not a web URL."""
+    text = (raw or "").strip().strip('"')
+    if not text:
+        return None
+    low = text.lower()
+    if not (low.startswith("http://") or low.startswith("https://")):
+        return None
+    host = (urlparse(text).hostname or "").strip().rstrip(".")
+    return host or None
+
+
+def normalize_route_input(raw: str) -> str:
+    """Strip quotes and pull a bare host out of https://example.com/path."""
+    text = (raw or "").strip().strip('"')
+    return extract_url_host(text) or text
+
+
+def canonical_route_token(raw: str) -> str:
+    """Value stored in the rules list (domain host, not the pasted URL)."""
+    tok = parse_token(raw)
+    if tok is None:
+        return ""
+    if tok.kind in (KIND_DOMAIN, KIND_IP):
+        return tok.value
+    return tok.serialize()
+
+
 def looks_like_ip(raw: str) -> bool:
     text = (raw or "").strip().strip("[]")
     if not text:
@@ -90,6 +119,8 @@ def looks_like_ip(raw: str) -> bool:
 
 def looks_like_path(raw: str) -> bool:
     text = (raw or "").strip().strip('"')
+    if extract_url_host(text):
+        return False
     return "\\" in text or "/" in text
 
 
@@ -113,7 +144,7 @@ def is_shared_process(raw: str) -> bool:
 
 def is_host_pattern(raw: str) -> bool:
     """Domain, glob, or IP — not an exe/service token."""
-    text = (raw or "").strip()
+    text = normalize_route_input(raw)
     if not text:
         return False
     low = text.lower()
@@ -128,7 +159,7 @@ def host_patterns(items: Iterable[str] | None) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
     for raw in items or []:
-        text = str(raw or "").strip()
+        text = normalize_route_input(str(raw or "").strip())
         if not text or not is_host_pattern(text):
             continue
         key = text.lower()
@@ -152,7 +183,7 @@ def as_cidr(raw: str) -> str:
 
 def classify_input(raw: str) -> tuple[str, bool]:
     """Return (kind, ambiguous). Ambiguous names can be domain or process."""
-    text = (raw or "").strip().strip('"')
+    text = normalize_route_input(raw)
     if not text:
         return KIND_UNKNOWN, False
     low = text.lower()
@@ -168,7 +199,7 @@ def classify_input(raw: str) -> tuple[str, bool]:
 
 
 def parse_token(raw: str) -> RouteToken | None:
-    text = (raw or "").strip().strip('"')
+    text = normalize_route_input(raw)
     if not text:
         return None
     low = text.lower()

@@ -57,8 +57,9 @@ def analyze_token(query: str) -> dict[str, Any]:
         payload["token"] = tok.serialize() if tok.kind != KIND_UNKNOWN else tok.value
         payload["label"] = tok.label
         payload["shared"] = is_shared_process(tok.value) if tok.kind == KIND_PROCESS else False
-    if looks_like_ip(raw):
-        return _analyze_ip(raw, payload)
+    host = tok.value if tok else raw
+    if looks_like_ip(host) or payload["kind"] == KIND_IP:
+        return _analyze_ip(host, payload)
     if payload["kind"] == KIND_DOMAIN:
         return _analyze_domain(tok.value if tok else raw, payload)
     if payload["kind"] == KIND_PROCESS:

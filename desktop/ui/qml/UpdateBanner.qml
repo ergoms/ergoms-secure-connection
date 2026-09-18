@@ -4,10 +4,11 @@ import QtQuick.Layouts
 Rectangle {
     id: root
     property string version: ""
+    property bool checking: false
     signal updateClicked()
 
     width: parent ? parent.width : 280
-    visible: version.length > 0
+    visible: checking || version.length > 0
     implicitHeight: 52
     radius: 10
     color: T.bannerUpdate
@@ -23,9 +24,17 @@ Rectangle {
         anchors.bottomMargin: 8
         spacing: 8
 
+        Spinner {
+            visible: root.checking
+            Layout.preferredWidth: visible ? 18 : 0
+            Layout.preferredHeight: 18
+        }
+
         Text {
             Layout.fillWidth: true
-            text: "Доступна версия " + root.version
+            text: root.checking
+                  ? "Проверяю обновления…"
+                  : ("Доступна версия " + root.version)
             color: T.accent
             font.pixelSize: 12
             font.family: T.fontUi
@@ -34,7 +43,8 @@ Rectangle {
         }
 
         PrimaryButton {
-            Layout.preferredWidth: 108
+            visible: !root.checking && root.version.length > 0
+            Layout.preferredWidth: visible ? 108 : 0
             Layout.preferredHeight: 34
             implicitHeight: 34
             text: "Обновить"

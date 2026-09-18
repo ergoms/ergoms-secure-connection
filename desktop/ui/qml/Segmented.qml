@@ -9,7 +9,7 @@ Rectangle {
     radius: 10
     color: T.surface2
     clip: true
-    opacity: enabled ? 1 : 0.45
+    opacity: enabled ? 1 : (T.light ? 0.78 : 0.5)
     border.width: 1
     border.color: T.hairline
 

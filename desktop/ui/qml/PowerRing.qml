@@ -17,7 +17,7 @@ Item {
         radius: 74
         color: "transparent"
         border.width: 18
-        border.color: Qt.rgba(root.ringColor.r, root.ringColor.g, root.ringColor.b, 0.16)
+        border.color: Qt.rgba(root.ringColor.r, root.ringColor.g, root.ringColor.b, T.light ? 0.10 : 0.16)
         scale: root.active || root.busy ? 1.06 : 1.0
         Behavior on scale { NumberAnimation { duration: 420; easing.type: Easing.OutCubic } }
         Behavior on border.color { ColorAnimation { duration: 280 } }
@@ -30,7 +30,7 @@ Item {
         radius: 59
         color: T.surface
         border.width: 3
-        border.color: Qt.rgba(root.ringColor.r, root.ringColor.g, root.ringColor.b, 0.35)
+        border.color: Qt.rgba(root.ringColor.r, root.ringColor.g, root.ringColor.b, T.light ? 0.22 : 0.35)
         Behavior on border.color { ColorAnimation { duration: 280 } }
     }
 

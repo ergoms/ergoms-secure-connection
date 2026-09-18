@@ -75,9 +75,9 @@ class ConnectionSession:
             if self._op is not None:
                 elapsed = time.monotonic() - self._op_started
                 if elapsed < self._op_timeout:
-                    raise SessionBusy(f"уже выполняется {self._op.value}")
+                    raise SessionBusy(f"уже выполняется {self._op.ru_name}")
                 self._log(
-                    f"фаза: операция {self._op.value} зависла ({elapsed:.0f}s) — снимаю"
+                    f"фаза: операция {self._op.ru_name} зависла ({elapsed:.0f}s) — снимаю"
                 )
             self._op = action
             self._op_started = time.monotonic()

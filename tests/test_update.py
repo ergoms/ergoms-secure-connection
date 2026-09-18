@@ -7,12 +7,15 @@ import tarfile
 from pathlib import Path
 
 from desktop.update import (
+    DEFAULT_GITHUB_REPO,
     CheckResult,
     apply_downloaded,
     asset_suffix,
     extract_linux_archive,
     fetch_latest,
+    github_repo,
     is_newer,
+    newest_release_payload,
     parse_release,
     parse_version,
     pick_asset,
@@ -129,14 +132,45 @@ def test_fetch_latest_already_current(monkeypatch: object) -> None:
     assert result.release is None
 
 
-def test_fetch_latest_network_error(monkeypatch: object) -> None:
+def test_github_repo_default() -> None:
+    assert github_repo() == DEFAULT_GITHUB_REPO
+
+
+def test_newest_release_skips_draft_and_prerelease() -> None:
+    draft = _payload("v9.9.9")
+    draft["draft"] = True
+    pre = _payload("v8.8.8")
+    pre["prerelease"] = True
+    older = _payload("v1.2.0")
+    newer = _payload("v1.2.8")
+    picked = newest_release_payload([draft, pre, older, newer])
+    assert picked is not None
+    assert picked["tag_name"] == "v1.2.8"
+
+
+def test_fetch_latest_falls_back_to_releases_list(monkeypatch: object) -> None:
+    def _fake_get(url: str, **kwargs: object) -> bytes:
+        if "/latest" in url:
+            raise RuntimeError("HTTP Error 404: Not Found (curl: curl: (22) The requested URL returned error: 404)")
+        return json.dumps([_payload("v1.2.7")]).encode("utf-8")
+
+    monkeypatch.setattr("desktop.update.http_get", _fake_get)
+    result = fetch_latest(current="1.2.6", platform="win32")
+    assert result.error == ""
+    assert result.release is not None
+    assert result.release.version == "1.2.7"
+
+
+def test_fetch_latest_private_repo_message(monkeypatch: object) -> None:
     def _boom(url: str, **kwargs: object) -> bytes:
-        raise OSError("offline")
+        raise RuntimeError("HTTP Error 404: Not Found")
 
     monkeypatch.setattr("desktop.update.http_get", _boom)
+    monkeypatch.setattr("desktop.update.github_token", lambda: "")
     result = fetch_latest(current="1.2.6")
     assert result.release is None
-    assert "offline" in result.error
+    assert "закрытый" in result.error
+
 
 
 def test_check_result_as_dict() -> None:

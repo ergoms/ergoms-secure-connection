@@ -14,6 +14,7 @@ from desktop.lifecycle.plan import resolve_connect_plan
 from desktop.lifecycle.session import ConnectionSession, SessionBusy
 from desktop.lifecycle.snapshot import Phase, Snapshot
 from desktop.services.status import present_status
+from desktop.ui.messages import format_user_error
 
 
 def test_action_table_is_single_vocabulary() -> None:
@@ -27,7 +28,9 @@ def test_action_table_is_single_vocabulary() -> None:
     assert Action.RECONNECT.elevation_key == "on"
     assert Action.CONNECT.client_method == "enable"
     assert Action.TUN_OFF.client_method == "disable_tun"
-    assert "TUN" in Action.TUN_ON.waiting_text
+    assert Action.DISCONNECT.ru_name == "отключение"
+    assert "disconnect" not in format_user_error("уже выполняется disconnect").lower()
+    assert Action.CONNECT.ru_name == "подключение"
 
 
 def test_session_logs_every_phase_change() -> None:
@@ -47,7 +50,7 @@ def test_session_logs_every_phase_change() -> None:
 def test_session_operation_serializes_and_times_out() -> None:
     session = ConnectionSession(log=lambda _m: None, op_timeout=0.01)
     with session.operation(Action.CONNECT):
-        with pytest.raises(SessionBusy):
+        with pytest.raises(SessionBusy, match="подключение"):
             with session.operation(Action.DISCONNECT):
                 pass
     with session.operation(Action.DISCONNECT):

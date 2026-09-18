@@ -13,6 +13,7 @@ from desktop.route_tokens import (
     KIND_SERVICE,
     KIND_UNKNOWN,
     as_cidr,
+    canonical_route_token,
     classify_input,
     host_patterns,
     is_host_pattern,
@@ -131,7 +132,22 @@ def test_tokens_json_empty() -> None:
     assert tokens_json(["a", " b "]) == tokens_json(["a", "b"])
 
 
-def test_analyze_classify_without_dns() -> None:
+def test_https_url_becomes_domain() -> None:
+    tok = parse_token("https://github.com/org/repo?tab=readme")
+    assert tok is not None
+    assert tok.kind == KIND_DOMAIN
+    assert tok.value == "github.com"
+    assert canonical_route_token("HTTPS://WWW.Example.com:443/path") == "www.example.com"
+    assert classify_input("https://github.com/foo") == (KIND_DOMAIN, False)
+    assert parse_token("http://10.0.0.8/health") is not None
+    assert parse_token("http://10.0.0.8/health").kind == KIND_IP
+    assert parse_token("http://10.0.0.8/health").value == "10.0.0.8"
+    parsed = parse_routes(["https://api.github.com/user"])
+    assert parsed.domains == ["api.github.com"]
+    assert host_patterns(["https://github.com/org/repo"]) == ["github.com"]
+
+
+def test_analyze_https_url_without_dns() -> None:
     with (
         patch("desktop.route_analyzer.resolve_ips", return_value=["1.2.3.4"]),
         patch("desktop.route_analyzer.reverse_name", return_value="dns.google"),
@@ -144,6 +160,14 @@ def test_analyze_classify_without_dns() -> None:
         assert ip["domains"] == ["dns.google"]
     lonely = analyze_token("spotify")
     assert lonely["ambiguous"]
+    with (
+        patch("desktop.route_analyzer.resolve_ips", return_value=["1.2.3.4"]),
+        patch("desktop.route_analyzer.reverse_name", return_value="dns.google"),
+    ):
+        url = analyze_token("https://example.com/path")
+        assert url["kind"] == KIND_DOMAIN
+        assert url["token"] == "example.com"
+        assert url["ips"] == ["1.2.3.4"]
 
 
 def test_route_rules_vpn_before_direct() -> None:

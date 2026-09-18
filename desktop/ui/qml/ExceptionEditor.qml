@@ -53,7 +53,7 @@ Column {
     }
 
     function addToken(raw) {
-        var t = String(raw || "").replace(/^\s+|\s+$/g, "")
+        var t = bridge.normalizeRouteToken(String(raw || ""))
         if (!t)
             return
         var cur = tokens()
@@ -190,7 +190,7 @@ Column {
         verticalAlignment: TextInput.AlignVCenter
         onTextEdited: analyzeTimer.restart()
         onAccepted: {
-            var q = text.replace(/^\s+|\s+$/g, "")
+            var q = bridge.normalizeRouteToken(text)
             if (!q)
                 return
             if (bridge.tokenAmbiguous(q)) {

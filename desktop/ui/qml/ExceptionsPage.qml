@@ -49,6 +49,7 @@ Item {
                 spacing: 10
                 topPadding: 10
                 bottomPadding: 16
+                enabled: !bridge.active && !bridge.busy
 
                 Rectangle {
                     visible: bridge.active || bridge.busy
@@ -63,7 +64,9 @@ Item {
                         anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
                         anchors.margins: 10
-                        text: "Правила применятся при следующем подключении."
+                        text: bridge.busy
+                              ? "Дождитесь окончания операции"
+                              : "Отключите VPN, чтобы менять правила"
                         color: T.warn
                         font.pixelSize: 12
                         font.family: T.fontUi

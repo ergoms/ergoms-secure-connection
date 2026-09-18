@@ -24,15 +24,15 @@ def test_normalize_theme_id() -> None:
     assert normalize_theme_id(None) == THEME_DARK
 
 
-def test_ergoms_palette_matches_core_client() -> None:
+def test_ergoms_palette_is_warm_brick_on_paper() -> None:
     pal = palette(THEME_ERGOMS)
-    assert pal["bg"] == "#f2f2f2"
-    assert pal["surface"] == "#ffffff"
-    assert pal["text"] == "#101223"
-    assert pal["muted"] == "#6e6e6e"
-    assert pal["accent"] == "#d0322d"
-    assert pal["accentText"] == "#ffffff"
     assert pal["light"] is True
+    assert pal["bg"].lower() == "#f4efe9"
+    assert pal["surface"].lower() == "#fbf7f3"
+    assert pal["accent"].lower() == "#d03a34"
+    assert pal["danger"].lower() == "#8a3036"
+    assert pal["accent"] != pal["danger"]
+    assert pal["warn"].lower() != "#ffab00"
 
 
 def test_dark_palette_keeps_mint() -> None:
@@ -49,10 +49,10 @@ def test_status_hex_maps_to_theme_tokens() -> None:
     assert status_role(C_WARN) == "warn"
     assert status_role(C_DANGER) == "danger"
     assert status_color(THEME_DARK, C_ACCENT) == "#2dd4a8"
-    assert status_color(THEME_ERGOMS, C_ACCENT) == "#d0322d"
-    assert status_color(THEME_ERGOMS, C_DANGER) == "#dc3545"
-    assert status_color(THEME_ERGOMS, "muted") == "#6e6e6e"
-    assert status_color(THEME_ERGOMS, "unknown") == "#6e6e6e"
+    assert status_color(THEME_ERGOMS, C_ACCENT) == palette(THEME_ERGOMS)["accent"]
+    assert status_color(THEME_ERGOMS, C_DANGER) == palette(THEME_ERGOMS)["danger"]
+    assert status_color(THEME_ERGOMS, "muted") == palette(THEME_ERGOMS)["muted"]
+    assert status_color(THEME_ERGOMS, "unknown") == palette(THEME_ERGOMS)["muted"]
 
 
 def test_theme_tokens_and_map() -> None:

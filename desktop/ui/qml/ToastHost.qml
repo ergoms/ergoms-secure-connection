@@ -15,8 +15,8 @@ Item {
         hideTimer.restart()
     }
 
-    // Overlay: full-width strip under the window title.
-    // Inline (journal): lives in the page layout under «Журнал» / «Копировать».
+    // Overlay: unused in the main window (toasts sit in the layout above the nav).
+    // Inline: journal page, or the shared strip above «Главная / Настройки / …».
     anchors.left: overlay ? parent.left : undefined
     anchors.right: overlay ? parent.right : undefined
     anchors.top: overlay ? parent.top : undefined
@@ -25,7 +25,7 @@ Item {
     anchors.topMargin: overlay ? 58 : 0
     Layout.fillWidth: overlay ? false : true
     height: shown ? box.height : 0
-    visible: shown && (!overlay || bridge.page !== "log")
+    visible: shown && bridge.page !== "log"
     z: 20
 
     Timer {

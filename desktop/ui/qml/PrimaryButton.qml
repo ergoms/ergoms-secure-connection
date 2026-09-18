@@ -15,14 +15,14 @@ Rectangle {
     border.width: primary || danger ? 0 : 1
     border.color: mouse.containsMouse && enabled ? T.border : T.hairline
     scale: mouse.pressed && enabled ? 0.985 : 1.0
-    opacity: enabled ? 1 : 0.42
+    opacity: enabled ? 1 : (T.light ? 0.78 : 0.5)
     Behavior on color { ColorAnimation { duration: 140 } }
     Behavior on scale { NumberAnimation { duration: 90 } }
 
     Text {
         anchors.centerIn: parent
         text: root.text
-        color: root.primary && !root.danger ? T.accentText : T.text
+        color: (root.primary || root.danger) ? T.accentText : T.text
         font.pixelSize: 13
         font.weight: Font.DemiBold
         font.letterSpacing: 0.25

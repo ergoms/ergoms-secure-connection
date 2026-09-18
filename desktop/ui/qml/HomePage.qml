@@ -89,9 +89,10 @@ Item {
         Item { Layout.fillHeight: true }
 
         UpdateBanner {
-            visible: bridge.updateAvailable
+            visible: bridge.updateChecking || bridge.updateAvailable
             Layout.fillWidth: true
             Layout.preferredHeight: visible ? implicitHeight : 0
+            checking: bridge.updateChecking && !bridge.updateAvailable
             version: bridge.updateVersion
             onUpdateClicked: bridge.startUpdate()
         }

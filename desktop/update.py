@@ -16,13 +16,16 @@ from pathlib import Path
 from typing import Any
 
 from desktop import __version__, procutil
-from desktop.paths import gui_command, is_frozen
+from desktop.branding import ENV_GITHUB_REPO, ENV_GITHUB_TOKEN, env
+from desktop.paths import data_root, gui_command, is_frozen
 
-GITHUB_REPO = "DohaoSTR/ergoms-secure-connection"
-LATEST_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+DEFAULT_GITHUB_REPO = "ergoms/ergoms-secure-connection"
 WIN_ASSET_SUFFIX = "windows-x64-setup.exe"
 LINUX_ASSET_SUFFIX = "linux-x64.tar.gz"
 INNO_SILENT_ARGS = ("/SILENT", "/NORESTART", "/MERGETASKS=removeold,!wipeconfigs")
+_GITHUB_JSON = "application/vnd.github+json"
+_GITHUB_ASSET = "application/octet-stream"
+_token_cache: str | None = None
 
 
 @dataclass(frozen=True)
@@ -32,6 +35,7 @@ class ReleaseInfo:
     html_url: str
     asset_name: str
     asset_url: str
+    asset_api_url: str = ""
 
 
 @dataclass(frozen=True)
@@ -53,8 +57,43 @@ class CheckResult:
                 "html_url": info.html_url,
                 "asset_name": info.asset_name,
                 "asset_url": info.asset_url,
+                "asset_api_url": info.asset_api_url,
             },
         }
+
+
+def github_repo() -> str:
+    return env(ENV_GITHUB_REPO, DEFAULT_GITHUB_REPO) or DEFAULT_GITHUB_REPO
+
+
+def github_token() -> str:
+    global _token_cache
+    if _token_cache is not None:
+        return _token_cache
+    found = (
+        env(ENV_GITHUB_TOKEN)
+        or (os.environ.get("GITHUB_TOKEN") or "").strip()
+        or (os.environ.get("GH_TOKEN") or "").strip()
+    )
+    if not found:
+        try:
+            found = (data_root() / "github.token").read_text(encoding="utf-8").strip()
+        except OSError:
+            found = ""
+    if not found:
+        gh = shutil.which("gh")
+        if gh:
+            result = procutil.run([gh, "auth", "token"], timeout=8)
+            if result.returncode == 0:
+                found = (result.stdout or "").strip()
+    _token_cache = found
+    return found
+
+
+def is_not_found(exc: BaseException) -> bool:
+    if isinstance(exc, urllib.error.HTTPError) and int(exc.code) == 404:
+        return True
+    return "404" in str(exc)
 
 
 def user_agent(version: str | None = None) -> str:
@@ -115,7 +154,11 @@ def pick_asset(
         url = str(item.get("browser_download_url") or "")
         hay = f"{name} {url}".lower()
         if suffix in hay and url:
-            return {"name": name or Path(url).name, "url": url}
+            return {
+                "name": name or Path(url).name,
+                "url": url,
+                "api_url": str(item.get("url") or ""),
+            }
     return None
 
 
@@ -138,7 +181,29 @@ def parse_release(
         html_url=str(payload.get("html_url") or ""),
         asset_name=picked["name"],
         asset_url=picked["url"],
+        asset_api_url=picked.get("api_url") or "",
     )
+
+
+def newest_release_payload(payload: Any) -> dict[str, Any] | None:
+    if isinstance(payload, dict):
+        if payload.get("tag_name"):
+            return payload
+        return None
+    if not isinstance(payload, list):
+        return None
+    best: dict[str, Any] | None = None
+    best_ver = ""
+    for item in payload:
+        if not isinstance(item, dict) or item.get("draft") or item.get("prerelease"):
+            continue
+        ver = normalize_tag_version(str(item.get("tag_name") or ""))
+        if not ver:
+            continue
+        if best is None or is_newer(ver, best_ver):
+            best = item
+            best_ver = ver
+    return best
 
 
 def socks_proxy_url(port: int = 1080) -> str | None:
@@ -159,6 +224,7 @@ def http_get(
     dest: Path | None = None,
     socks_port: int = 1080,
     timeout: int = 60,
+    accept: str = _GITHUB_JSON,
 ) -> bytes:
     """GET *url*. If *dest* is set, write the body there and return b''."""
     proxy = socks_proxy_url(socks_port)
@@ -166,27 +232,36 @@ def http_get(
     curl = _curl_bin()
     if curl:
         try:
-            return _curl_get(curl, url, dest=dest, proxy=proxy, timeout=timeout)
+            return _curl_get(
+                curl, url, dest=dest, proxy=proxy, timeout=timeout, accept=accept
+            )
         except Exception as exc:  # noqa: BLE001
             last_err = str(exc)
             if proxy:
                 try:
-                    return _curl_get(curl, url, dest=dest, proxy=None, timeout=timeout)
+                    return _curl_get(
+                        curl, url, dest=dest, proxy=None, timeout=timeout, accept=accept
+                    )
                 except Exception as exc2:  # noqa: BLE001
                     last_err = str(exc2)
     try:
-        return _urllib_get(url, dest=dest, timeout=timeout)
+        return _urllib_get(url, dest=dest, timeout=timeout, accept=accept)
     except Exception as exc:  # noqa: BLE001
         if last_err:
             raise RuntimeError(f"{exc} (curl: {last_err})") from exc
         raise
 
 
-def _headers() -> dict[str, str]:
-    return {
+def _headers(accept: str) -> dict[str, str]:
+    headers = {
         "User-Agent": user_agent(),
-        "Accept": "application/vnd.github+json",
+        "Accept": accept,
+        "X-GitHub-Api-Version": "2022-11-28",
     }
+    token = github_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
 
 
 def _curl_get(
@@ -196,6 +271,7 @@ def _curl_get(
     dest: Path | None,
     proxy: str | None,
     timeout: int,
+    accept: str,
 ) -> bytes:
     args = [
         curl,
@@ -203,12 +279,17 @@ def _curl_get(
         "-A",
         user_agent(),
         "-H",
-        "Accept: application/vnd.github+json",
+        f"Accept: {accept}",
+        "-H",
+        "X-GitHub-Api-Version: 2022-11-28",
         "--connect-timeout",
         "30",
         "--max-time",
         str(max(30, timeout)),
     ]
+    token = github_token()
+    if token:
+        args.extend(["-H", f"Authorization: Bearer {token}"])
     if sys.platform == "win32":
         args.insert(1, "--ssl-no-revoke")
     if proxy:
@@ -229,8 +310,8 @@ def _curl_get(
     return (result.stdout or "").encode("utf-8")
 
 
-def _urllib_get(url: str, *, dest: Path | None, timeout: int) -> bytes:
-    req = urllib.request.Request(url, headers=_headers())  # noqa: S310
+def _urllib_get(url: str, *, dest: Path | None, timeout: int, accept: str) -> bytes:
+    req = urllib.request.Request(url, headers=_headers(accept))  # noqa: S310
     with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
         if dest is None:
             return resp.read()
@@ -242,6 +323,29 @@ def _urllib_get(url: str, *, dest: Path | None, timeout: int) -> bytes:
     return b""
 
 
+def _decode_payload(raw: bytes) -> Any:
+    return json.loads(raw.decode("utf-8"))
+
+
+def _load_release_payload(*, socks_port: int) -> dict[str, Any]:
+    repo = github_repo()
+    latest = f"https://api.github.com/repos/{repo}/releases/latest"
+    listed = f"https://api.github.com/repos/{repo}/releases?per_page=15"
+    try:
+        payload = _decode_payload(http_get(latest, socks_port=socks_port, timeout=30))
+        picked = newest_release_payload(payload)
+        if picked is not None:
+            return picked
+    except Exception as exc:  # noqa: BLE001
+        if not is_not_found(exc):
+            raise
+    payload = _decode_payload(http_get(listed, socks_port=socks_port, timeout=30))
+    picked = newest_release_payload(payload)
+    if picked is None:
+        raise RuntimeError("в GitHub нет опубликованных релизов")
+    return picked
+
+
 def fetch_latest(
     *,
     current: str | None = None,
@@ -250,14 +354,12 @@ def fetch_latest(
 ) -> CheckResult:
     local = current if current is not None else __version__
     try:
-        raw = http_get(LATEST_URL, socks_port=socks_port, timeout=30)
-        payload = json.loads(raw.decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        return CheckResult(error=f"GitHub HTTP {exc.code}")
+        payload = _load_release_payload(socks_port=socks_port)
     except Exception as exc:  # noqa: BLE001
-        return CheckResult(error=str(exc)[:240])
-    if not isinstance(payload, dict):
-        return CheckResult(error="неожиданный ответ GitHub")
+        err = str(exc)[:240]
+        if is_not_found(exc) and not github_token():
+            err = "нет доступа к релизам GitHub (репозиторий закрытый)"
+        return CheckResult(error=err)
     message = str(payload.get("message") or "").strip()
     if message and "assets" not in payload:
         return CheckResult(error=message[:240])
@@ -283,7 +385,17 @@ def download_asset(
     dest = dest_dir / name
     if dest.exists():
         dest.unlink()
-    http_get(info.asset_url, dest=dest, socks_port=socks_port, timeout=600)
+    token = github_token()
+    if token and info.asset_api_url:
+        http_get(
+            info.asset_api_url,
+            dest=dest,
+            socks_port=socks_port,
+            timeout=600,
+            accept=_GITHUB_ASSET,
+        )
+    else:
+        http_get(info.asset_url, dest=dest, socks_port=socks_port, timeout=600)
     if not dest.is_file() or dest.stat().st_size < 1000:
         raise RuntimeError("скачанный файл слишком маленький")
     return dest
@@ -368,7 +480,7 @@ def launch_linux_update(extracted_dir: Path, *, pid: int, relaunch: list[str] | 
 def open_release_page(html_url: str) -> None:
     import webbrowser
 
-    target = (html_url or "").strip() or f"https://github.com/{GITHUB_REPO}/releases/latest"
+    target = (html_url or "").strip() or f"https://github.com/{github_repo()}/releases/latest"
     webbrowser.open(target)
 
 

@@ -7,7 +7,7 @@ Column {
     property string settingKey: ""
     property bool password: false
     spacing: 6
-    opacity: enabled ? 1 : 0.45
+    opacity: enabled ? 1 : (T.light ? 0.78 : 0.5)
     width: parent ? parent.width : 280
 
     Text {

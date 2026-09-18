@@ -39,11 +39,12 @@ from desktop.lifecycle.actions import Action, action_from_resume
 from desktop.paths import Paths, gui_command
 from desktop.proc_net import list_processes, list_services
 from desktop.route_analyzer import analyze_process, analyze_service, analyze_token
-from desktop.route_tokens import token_payload
+from desktop.route_tokens import canonical_route_token, token_payload
 from desktop.services.connection import ConnectionService
 from desktop.services.elevation import ElevationService
 from desktop.services.settings import SettingsService
 from desktop.services.status import C_DANGER, C_MUTED, present_status
+from desktop.ui.messages import format_user_error
 from desktop.ui.settings_map import (
     apply_mode_to_settings,
     cfg_to_settings,
@@ -106,6 +107,7 @@ def _release_from_dict(raw: object) -> ReleaseInfo | None:
         html_url=str(raw.get("html_url") or ""),
         asset_name=str(raw.get("asset_name") or ""),
         asset_url=url,
+        asset_api_url=str(raw.get("asset_api_url") or ""),
     )
 
 
@@ -148,6 +150,7 @@ class GuiBridge(QObject):
     executablePicked = Signal(str)
     updateAvailableChanged = Signal()
     updateVersionChanged = Signal()
+    updateCheckingChanged = Signal()
     uiThemeChanged = Signal()
 
     _bgFinished = Signal(str)
@@ -223,6 +226,8 @@ class GuiBridge(QObject):
         self._update_checking = False
         self._update_applying = False
         self._update_toast_shown = False
+        self._update_retry_on_socks = False
+        self._update_socks_seen = False
 
         self._settings = QQmlPropertyMap(self)
         for key, value in settings_defaults().items():
@@ -363,6 +368,10 @@ class GuiBridge(QObject):
     def updateVersion(self) -> str:
         return self._update_version
 
+    @Property(bool, notify=updateCheckingChanged)
+    def updateChecking(self) -> bool:
+        return self._update_checking
+
     # ── slots ───────────────────────────────────────────────────────────
 
     @Slot(str)
@@ -390,6 +399,10 @@ class GuiBridge(QObject):
     @Slot(str, result=str)
     def tokenKind(self, raw: str) -> str:
         return str(token_payload(raw).get("kind") or "unknown")
+
+    @Slot(str, result=str)
+    def normalizeRouteToken(self, raw: str) -> str:
+        return canonical_route_token(raw)
 
     @Slot(str, result=str)
     def tokenLabel(self, raw: str) -> str:
@@ -470,7 +483,7 @@ class GuiBridge(QObject):
             if self._active:
                 self.toast.emit("Сохранено. Применится при следующем подключении.", "info")
         except Exception as exc:  # noqa: BLE001
-            self.toast.emit(str(exc), "error")
+            self._toast_err(exc)
 
     def _handoff_if_needed(self, action: Action | str) -> bool:
         """Relaunch elevated once. True = caller must stop (handoff or cancel)."""
@@ -598,7 +611,7 @@ class GuiBridge(QObject):
                 "info",
             )
         except Exception as exc:  # noqa: BLE001
-            self.toast.emit(str(exc), "error")
+            self._toast_err(exc)
 
     def _apply_cfg_to_settings(self, cfg: dict[str, Any]) -> None:
         self._set_corporate(infer_corporate(cfg))
@@ -632,7 +645,7 @@ class GuiBridge(QObject):
                 "режим: корпоративный" if on else "режим: обычный VPN"
             )
         except Exception as exc:  # noqa: BLE001
-            self.toast.emit(str(exc), "error")
+            self._toast_err(exc)
 
     @Slot()
     def importConfigFile(self) -> None:
@@ -650,7 +663,7 @@ class GuiBridge(QObject):
         try:
             self._import_config_path(Path(path))
         except Exception as exc:  # noqa: BLE001
-            self.toast.emit(str(exc), "error")
+            self._toast_err(exc)
 
     def _import_config_path(self, src: Path) -> None:
         from desktop.config_crypto import MAGIC
@@ -696,7 +709,7 @@ class GuiBridge(QObject):
             src = Path(path)
             self._import_awg_conf_text(src.read_text(encoding="utf-8-sig"), source_name=src.name)
         except Exception as exc:  # noqa: BLE001
-            self.toast.emit(str(exc), "error")
+            self._toast_err(exc)
 
     def _import_awg_conf_text(self, text: str, *, source_name: str = "") -> None:
         self.settings_svc.import_awg_text(text, source_name=source_name)
@@ -721,7 +734,7 @@ class GuiBridge(QObject):
             self._enqueue_log(f"Копия конфига → {dest}")
             self.toast.emit("JSON сохранён. AmneziaWG — отдельный .conf", "info")
         except Exception as exc:  # noqa: BLE001
-            self.toast.emit(str(exc), "error")
+            self._toast_err(exc)
 
     def _sync_config_ready(self) -> None:
         try:
@@ -760,7 +773,7 @@ class GuiBridge(QObject):
             self._sync_config_ready()
             self._refresh_status(force=True)
         except Exception as exc:  # noqa: BLE001
-            self.toast.emit(str(exc), "error")
+            self._toast_err(exc)
 
     @Slot()
     def copyLog(self) -> None:
@@ -783,7 +796,8 @@ class GuiBridge(QObject):
     def _check_for_update(self, *, manual: bool) -> None:
         if self._update_checking or self._update_applying:
             return
-        self._update_checking = True
+        self._set_update_checking(True)
+        self._enqueue_log("проверка обновлений…")
         socks_port = int(self._socks_port or 1080)
 
         def work() -> None:
@@ -792,9 +806,15 @@ class GuiBridge(QObject):
 
         self._spawn(work)
 
+    def _set_update_checking(self, on: bool) -> None:
+        if on == self._update_checking:
+            return
+        self._update_checking = on
+        self.updateCheckingChanged.emit()
+
     @Slot(str, bool)
     def _on_update_check_finished(self, payload: str, manual: bool) -> None:
-        self._update_checking = False
+        self._set_update_checking(False)
         try:
             data = json.loads(payload)
         except json.JSONDecodeError:
@@ -805,10 +825,12 @@ class GuiBridge(QObject):
             error=str(data.get("error") or ""),
         )
         if result.error:
+            self._update_retry_on_socks = not self._socks_up
             self._enqueue_log(f"проверка обновлений: {result.error}")
             if manual:
-                self.toast.emit("Не удалось проверить обновления", "error")
+                self._toast_err(result.error[:120])
             return
+        self._update_retry_on_socks = False
         info = result.release
         if info is None:
             self._set_update_info(None)
@@ -834,7 +856,7 @@ class GuiBridge(QObject):
 
     @Slot()
     def startUpdate(self) -> None:
-        if self._busy or self._update_applying:
+        if self._busy or self._update_applying or self._update_checking:
             return
         info = self._update_info
         if info is None:
@@ -882,7 +904,7 @@ class GuiBridge(QObject):
         self._update_applying = False
         self._set_busy(False)
         self._enqueue_log(f"обновление: {err}")
-        self.toast.emit(err[:180] or "Не удалось обновить", "error")
+        self._toast_err(err[:180] or "Не удалось обновить")
 
     @Slot()
     def hideWindow(self) -> None:
@@ -921,6 +943,9 @@ class GuiBridge(QObject):
         self._spawn(work)
 
     # ── internals ───────────────────────────────────────────────────────
+
+    def _toast_err(self, err: object) -> None:
+        self.toast.emit(format_user_error(err), "error")
 
     def _spawn(self, fn: Callable[[], None]) -> None:
         QThreadPool.globalInstance().start(_BgTask(fn))
@@ -990,7 +1015,7 @@ class GuiBridge(QObject):
             self._busy_intent = ""
             self._busy_action = None
             self._set_busy(False)
-            self.toast.emit(err, "error")
+            self._toast_err(err)
             self._refresh_status(force=True)
             return
         self._refresh_status(force=True)
@@ -1121,6 +1146,16 @@ class GuiBridge(QObject):
         self._socks_port = view.socks_port
         self._http_port = view.http_port
         self._pac_port = view.pac_port
+        if (
+            self._socks_up
+            and not self._update_socks_seen
+            and self._update_retry_on_socks
+            and not self._update_checking
+            and not self._update_available
+        ):
+            self._update_retry_on_socks = False
+            QTimer.singleShot(800, self._startup_update_check)
+        self._update_socks_seen = self._socks_up
         self._server_target = view.server_target
         self._scope = view.scope
         self._mode_label = "Корпоративный" if self._corporate else "VPN"

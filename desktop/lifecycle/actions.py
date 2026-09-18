@@ -53,6 +53,16 @@ class Action(StrEnum):
         }[self]
 
     @property
+    def ru_name(self) -> str:
+        return {
+            Action.CONNECT: "подключение",
+            Action.DISCONNECT: "отключение",
+            Action.RECONNECT: "переподключение",
+            Action.TUN_ON: "включение TUN",
+            Action.TUN_OFF: "выключение TUN",
+        }[self]
+
+    @property
     def waiting_text(self) -> str:
         return {
             Action.CONNECT: "Подключение…",

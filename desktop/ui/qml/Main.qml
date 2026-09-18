@@ -140,13 +140,19 @@ ApplicationWindow {
                 LogPage {}
             }
 
+            ToastHost {
+                id: toasts
+                overlay: false
+                Layout.fillWidth: true
+                Layout.leftMargin: 14
+                Layout.rightMargin: 14
+                Layout.topMargin: shown ? 6 : 0
+                Layout.bottomMargin: shown ? 8 : 0
+            }
+
             NavBar {
                 Layout.fillWidth: true
             }
-        }
-
-        ToastHost {
-            id: toasts
         }
     }
 

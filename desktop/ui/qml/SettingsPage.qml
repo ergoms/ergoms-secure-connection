@@ -47,15 +47,26 @@ Item {
                     font.pixelSize: 12
                     font.family: T.fontUi
                 }
-                PrimaryButton {
+                Item {
                     width: parent.width
-                    implicitHeight: 44
-                    text: bridge.updateAvailable
-                          ? "Обновить до " + bridge.updateVersion
-                          : "Проверить обновления"
-                    primary: bridge.updateAvailable
-                    enabled: !bridge.busy
-                    onClicked: bridge.updateAvailable ? bridge.startUpdate() : bridge.checkForUpdate()
+                    height: 44
+                    PrimaryButton {
+                        anchors.fill: parent
+                        text: bridge.updateChecking
+                              ? "Проверяю…"
+                              : (bridge.updateAvailable
+                                 ? "Обновить до " + bridge.updateVersion
+                                 : "Проверить обновления")
+                        primary: bridge.updateAvailable && !bridge.updateChecking
+                        enabled: !bridge.busy && !bridge.updateChecking
+                        onClicked: bridge.updateAvailable ? bridge.startUpdate() : bridge.checkForUpdate()
+                    }
+                    Spinner {
+                        visible: bridge.updateChecking
+                        anchors.left: parent.left
+                        anchors.leftMargin: 14
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
                 }
 
                 SectionLabel { text: "ВНЕШНИЙ ВИД" }
@@ -81,7 +92,6 @@ Item {
                 width: parent.width
                 spacing: 8
                 enabled: !bridge.active && !bridge.busy
-                opacity: (bridge.active || bridge.busy) ? 0.55 : 1
 
                 Text {
                     visible: bridge.active || bridge.busy
