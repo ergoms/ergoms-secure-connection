@@ -3,7 +3,7 @@
 Одна команда:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DohaoSTR/ergoms-secure-connection/main/modes/linux/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/ergoms/ergoms-secure-connection/main/modes/linux/install.sh | sudo bash
 ```
 
 Ставит программу в `/opt/ergoms-secure-connection` и команду `ergoms-sc`.
@@ -20,7 +20,7 @@ ergoms-sc install-service # автозапуск (systemd)
 Снять:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DohaoSTR/ergoms-secure-connection/main/modes/linux/uninstall.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/ergoms/ergoms-secure-connection/main/modes/linux/uninstall.sh | sudo bash
 ```
 
 Или: `sudo bash /opt/ergoms-secure-connection/uninstall.sh`

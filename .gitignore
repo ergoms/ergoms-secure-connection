@@ -12,7 +12,6 @@ package-lock.json
 package.json
 
 # Secrets
-github.token
 creds/*
 !creds/.gitkeep
 !creds/certs/

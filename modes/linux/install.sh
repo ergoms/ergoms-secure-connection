@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install the Linux client to /opt and put `ergoms-sc` on PATH.
 # From a release folder:  sudo bash install.sh
-# One-liner:              curl -fsSL https://raw.githubusercontent.com/DohaoSTR/ergoms-secure-connection/main/modes/linux/install.sh | sudo bash
+# One-liner:              curl -fsSL https://raw.githubusercontent.com/ergoms/ergoms-secure-connection/main/modes/linux/install.sh | sudo bash
 set -euo pipefail
 
 APP_NAME="ERGOMS SECURE CONNECTION"
@@ -10,7 +10,7 @@ BIN_NAME="$APP_NAME"
 INSTALL_DIR="${ERGOMS_LINUX_PREFIX:-/opt/ergoms-secure-connection}"
 LINK_DIR="/usr/local/bin"
 DESKTOP_DST="/usr/share/applications/${APP_ID}.desktop"
-REPO="${ERGOMS_LINUX_REPO:-DohaoSTR/ergoms-secure-connection}"
+REPO="${ERGOMS_LINUX_REPO:-ergoms/ergoms-secure-connection}"
 
 usage() {
   cat <<'EOF'
@@ -18,7 +18,7 @@ usage: install.sh
 
 Ставит клиент в /opt/ergoms-secure-connection и команду ergoms-sc.
 
-  curl -fsSL https://raw.githubusercontent.com/DohaoSTR/ergoms-secure-connection/main/modes/linux/install.sh | sudo bash
+  curl -fsSL https://raw.githubusercontent.com/ergoms/ergoms-secure-connection/main/modes/linux/install.sh | sudo bash
 EOF
 }
 

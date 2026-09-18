@@ -8,7 +8,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 Write-Host '[deploy] VPS: одна команда с консоли хостинга (root)' -ForegroundColor Cyan
-Write-Host '  curl -fsSL https://raw.githubusercontent.com/DohaoSTR/ergoms-secure-connection/main/modes/vps/install.sh | bash'
+Write-Host '  curl -fsSL https://raw.githubusercontent.com/ergoms/ergoms-secure-connection/main/modes/vps/install.sh | bash'
 Write-Host 'Если репозиторий уже на сервере:'
 Write-Host '  sudo bash modes/vps/install.sh'
 Write-Host 'Только Reality, без AmneziaWG:  sudo bash modes/vps/install.sh --no-awg'

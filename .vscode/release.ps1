@@ -3,7 +3,7 @@ param(
     [ValidateSet('all', 'windows', 'linux', 'publish')]
     [string]$Target = 'all',
     [string]$WslDistro = 'Ubuntu-24.04',
-    [string]$GitHubRepo = 'DohaoSTR/ergoms-secure-connection'
+    [string]$GitHubRepo = 'ergoms/ergoms-secure-connection'
 )
 
 $ErrorActionPreference = 'Stop'

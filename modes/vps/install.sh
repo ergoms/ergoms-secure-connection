@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # One-shot VPS setup: VLESS+Reality on :443 and AmneziaWG on UDP :51820.
 # From a repo checkout:  sudo bash modes/vps/install.sh
-# From hosting console:  curl -fsSL https://raw.githubusercontent.com/DohaoSTR/ergoms-secure-connection/main/modes/vps/install.sh | bash
+# From hosting console:  curl -fsSL https://raw.githubusercontent.com/ergoms/ergoms-secure-connection/main/modes/vps/install.sh | bash
 set -euo pipefail
 
-REPO_URL="${ERGOMS_VPS_REPO:-https://github.com/DohaoSTR/ergoms-secure-connection.git}"
+REPO_URL="${ERGOMS_VPS_REPO:-https://github.com/ergoms/ergoms-secure-connection.git}"
 DEST="${ERGOMS_VPS_ROOT:-/opt/ergoms-secure-connection}"
 CLIENT_JSON="/var/lib/ops-content-singbox/client.json"
 ENABLE_AWG=1

@@ -7,7 +7,7 @@
 
 Домашний провайдер часто режет Reality. Офисный Squid UDP не проводит — поэтому на одном VPS оба транспорта.
 
-Релизы: [GitHub Releases](https://github.com/DohaoSTR/ergoms-secure-connection/releases)
+Релизы: [GitHub Releases](https://github.com/ergoms/ergoms-secure-connection/releases)
 
 ---
 
@@ -16,7 +16,7 @@
 С консоли хостинга, под root:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DohaoSTR/ergoms-secure-connection/main/modes/vps/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ergoms/ergoms-secure-connection/main/modes/vps/install.sh | bash
 ```
 
 Если репозиторий уже на сервере: `sudo bash modes/vps/install.sh`
@@ -33,14 +33,14 @@ curl -fsSL https://raw.githubusercontent.com/DohaoSTR/ergoms-secure-connection/m
 
 ## 2. Windows
 
-Скачайте `*-windows-x64-setup.exe` из [Releases](https://github.com/DohaoSTR/ergoms-secure-connection/releases) и установите как обычную программу.
+Скачайте `*-windows-x64-setup.exe` из [Releases](https://github.com/ergoms/ergoms-secure-connection/releases) и установите как обычную программу.
 
 ---
 
 ## 3. Linux
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DohaoSTR/ergoms-secure-connection/main/modes/linux/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/ergoms/ergoms-secure-connection/main/modes/linux/install.sh | sudo bash
 ```
 
 Подробности: [`modes/linux/README.md`](modes/linux/README.md).
@@ -218,7 +218,7 @@ Linux: `./.vscode/setup.sh build` → `dist/ERGOMS SECURE CONNECTION/` (в па�
 
 ### GitHub Release (локально)
 
-Сборка без GitHub Actions: Windows на хосте, Linux в WSL, файлы в `artifacts/` и на [GitHub Releases](https://github.com/DohaoSTR/ergoms-secure-connection/releases). `dist/` и `artifacts/` в git не коммитятся.
+Сборка без GitHub Actions: Windows на хосте, Linux в WSL, файлы в `artifacts/` и на [GitHub Releases](https://github.com/ergoms/ergoms-secure-connection/releases). `dist/` и `artifacts/` в git не коммитятся.
 
 ```powershell
 .\.vscode\release.ps1

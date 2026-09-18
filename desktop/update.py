@@ -16,16 +16,14 @@ from pathlib import Path
 from typing import Any
 
 from desktop import __version__, procutil
-from desktop.branding import ENV_GITHUB_REPO, ENV_GITHUB_TOKEN, env
-from desktop.paths import data_root, gui_command, is_frozen
+from desktop.branding import ENV_GITHUB_REPO, env
+from desktop.paths import gui_command, is_frozen
 
 DEFAULT_GITHUB_REPO = "ergoms/ergoms-secure-connection"
 WIN_ASSET_SUFFIX = "windows-x64-setup.exe"
 LINUX_ASSET_SUFFIX = "linux-x64.tar.gz"
 INNO_SILENT_ARGS = ("/SILENT", "/NORESTART", "/MERGETASKS=removeold,!wipeconfigs")
 _GITHUB_JSON = "application/vnd.github+json"
-_GITHUB_ASSET = "application/octet-stream"
-_token_cache: str | None = None
 
 
 @dataclass(frozen=True)
@@ -35,7 +33,6 @@ class ReleaseInfo:
     html_url: str
     asset_name: str
     asset_url: str
-    asset_api_url: str = ""
 
 
 @dataclass(frozen=True)
@@ -57,37 +54,12 @@ class CheckResult:
                 "html_url": info.html_url,
                 "asset_name": info.asset_name,
                 "asset_url": info.asset_url,
-                "asset_api_url": info.asset_api_url,
             },
         }
 
 
 def github_repo() -> str:
     return env(ENV_GITHUB_REPO, DEFAULT_GITHUB_REPO) or DEFAULT_GITHUB_REPO
-
-
-def github_token() -> str:
-    global _token_cache
-    if _token_cache is not None:
-        return _token_cache
-    found = (
-        env(ENV_GITHUB_TOKEN)
-        or (os.environ.get("GITHUB_TOKEN") or "").strip()
-        or (os.environ.get("GH_TOKEN") or "").strip()
-    )
-    if not found:
-        try:
-            found = (data_root() / "github.token").read_text(encoding="utf-8").strip()
-        except OSError:
-            found = ""
-    if not found:
-        gh = shutil.which("gh")
-        if gh:
-            result = procutil.run([gh, "auth", "token"], timeout=8)
-            if result.returncode == 0:
-                found = (result.stdout or "").strip()
-    _token_cache = found
-    return found
 
 
 def is_not_found(exc: BaseException) -> bool:
@@ -157,7 +129,6 @@ def pick_asset(
             return {
                 "name": name or Path(url).name,
                 "url": url,
-                "api_url": str(item.get("url") or ""),
             }
     return None
 
@@ -181,7 +152,6 @@ def parse_release(
         html_url=str(payload.get("html_url") or ""),
         asset_name=picked["name"],
         asset_url=picked["url"],
-        asset_api_url=picked.get("api_url") or "",
     )
 
 
@@ -258,9 +228,6 @@ def _headers(accept: str) -> dict[str, str]:
         "Accept": accept,
         "X-GitHub-Api-Version": "2022-11-28",
     }
-    token = github_token()
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
     return headers
 
 
@@ -287,9 +254,6 @@ def _curl_get(
         "--max-time",
         str(max(30, timeout)),
     ]
-    token = github_token()
-    if token:
-        args.extend(["-H", f"Authorization: Bearer {token}"])
     if sys.platform == "win32":
         args.insert(1, "--ssl-no-revoke")
     if proxy:
@@ -356,10 +320,7 @@ def fetch_latest(
     try:
         payload = _load_release_payload(socks_port=socks_port)
     except Exception as exc:  # noqa: BLE001
-        err = str(exc)[:240]
-        if is_not_found(exc) and not github_token():
-            err = "нет доступа к релизам GitHub (репозиторий закрытый)"
-        return CheckResult(error=err)
+        return CheckResult(error=str(exc)[:240])
     message = str(payload.get("message") or "").strip()
     if message and "assets" not in payload:
         return CheckResult(error=message[:240])
@@ -385,17 +346,7 @@ def download_asset(
     dest = dest_dir / name
     if dest.exists():
         dest.unlink()
-    token = github_token()
-    if token and info.asset_api_url:
-        http_get(
-            info.asset_api_url,
-            dest=dest,
-            socks_port=socks_port,
-            timeout=600,
-            accept=_GITHUB_ASSET,
-        )
-    else:
-        http_get(info.asset_url, dest=dest, socks_port=socks_port, timeout=600)
+    http_get(info.asset_url, dest=dest, socks_port=socks_port, timeout=600)
     if not dest.is_file() or dest.stat().st_size < 1000:
         raise RuntimeError("скачанный файл слишком маленький")
     return dest

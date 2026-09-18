@@ -123,7 +123,6 @@ def _release_from_dict(raw: object) -> ReleaseInfo | None:
         html_url=str(raw.get("html_url") or ""),
         asset_name=str(raw.get("asset_name") or ""),
         asset_url=url,
-        asset_api_url=str(raw.get("asset_api_url") or ""),
     )
 
 

@@ -26,26 +26,26 @@ def _payload(tag: str = "v1.2.7") -> dict:
     ver = tag[1:] if tag.startswith("v") else tag
     return {
         "tag_name": tag,
-        "html_url": f"https://github.com/DohaoSTR/ergoms-secure-connection/releases/tag/{tag}",
+        "html_url": f"https://github.com/ergoms/ergoms-secure-connection/releases/tag/{tag}",
         "assets": [
             {
                 "name": f"ERGOMS-SECURE-CONNECTION-{ver}-windows-x64-setup.exe",
                 "browser_download_url": (
-                    "https://github.com/DohaoSTR/ergoms-secure-connection/releases/"
+                    "https://github.com/ergoms/ergoms-secure-connection/releases/"
                     f"download/{tag}/ERGOMS-SECURE-CONNECTION-{ver}-windows-x64-setup.exe"
                 ),
             },
             {
                 "name": f"ERGOMS-SECURE-CONNECTION-{ver}-linux-x64.tar.gz",
                 "browser_download_url": (
-                    "https://github.com/DohaoSTR/ergoms-secure-connection/releases/"
+                    "https://github.com/ergoms/ergoms-secure-connection/releases/"
                     f"download/{tag}/ERGOMS-SECURE-CONNECTION-{ver}-linux-x64.tar.gz"
                 ),
             },
             {
                 "name": f"ERGOMS-SECURE-CONNECTION-{ver}-windows-x64.zip",
                 "browser_download_url": (
-                    "https://github.com/DohaoSTR/ergoms-secure-connection/releases/"
+                    "https://github.com/ergoms/ergoms-secure-connection/releases/"
                     f"download/{tag}/ERGOMS-SECURE-CONNECTION-{ver}-windows-x64.zip"
                 ),
             },
@@ -161,15 +161,14 @@ def test_fetch_latest_falls_back_to_releases_list(monkeypatch: object) -> None:
     assert result.release.version == "1.2.7"
 
 
-def test_fetch_latest_private_repo_message(monkeypatch: object) -> None:
+def test_fetch_latest_network_error(monkeypatch: object) -> None:
     def _boom(url: str, **kwargs: object) -> bytes:
         raise RuntimeError("HTTP Error 404: Not Found")
 
     monkeypatch.setattr("desktop.update.http_get", _boom)
-    monkeypatch.setattr("desktop.update.github_token", lambda: "")
     result = fetch_latest(current="1.2.6")
     assert result.release is None
-    assert "закрытый" in result.error
+    assert result.error
 
 
 
