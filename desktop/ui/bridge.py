@@ -77,6 +77,22 @@ _C_DANGER = C_DANGER
 
 def _analyze_spec(spec: str) -> dict[str, Any]:
     raw = (spec or "").strip()
+    if raw.startswith("{"):
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            data = {}
+        if not isinstance(data, dict):
+            data = {}
+        kind = str(data.get("kind") or "").lower()
+        if kind == "service":
+            return analyze_service(str(data.get("name") or data.get("display") or ""))
+        return analyze_process(
+            pid=int(data.get("pid") or 0),
+            name=str(data.get("name") or ""),
+            path=str(data.get("path") or ""),
+            display=str(data.get("display") or data.get("name") or ""),
+        )
     if raw.lower().startswith("svc:"):
         return analyze_service(raw)
     if raw.lower().startswith("pid:"):
@@ -229,6 +245,7 @@ class GuiBridge(QObject):
         self._update_retry_on_socks = False
         self._update_socks_seen = False
 
+        self._suspend_autosave = True
         self._settings = QQmlPropertyMap(self)
         for key, value in settings_defaults().items():
             self._settings.insert(key, value)
@@ -256,6 +273,13 @@ class GuiBridge(QObject):
 
         self.loadSettings()
         self._sync_config_ready()
+
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setSingleShot(True)
+        self._autosave_timer.setInterval(350)
+        self._autosave_timer.timeout.connect(self._autosave_settings)
+        self._settings.valueChanged.connect(self._on_setting_changed)
+        self._suspend_autosave = False
 
         self._status_timer = QTimer(self)
         self._status_timer.setSingleShot(True)
@@ -480,13 +504,26 @@ class GuiBridge(QObject):
             return f"{text}. Применится при следующем подключении."
         return text
 
+    def _on_setting_changed(self, _key: str, _value: object) -> None:
+        if self._suspend_autosave or self._closing:
+            return
+        self._autosave_timer.start()
+
+    @Slot()
+    def _autosave_settings(self) -> None:
+        if self._closing or self._suspend_autosave:
+            return
+        try:
+            self._write_settings_to_disk()
+            self._sync_config_ready()
+        except Exception as exc:  # noqa: BLE001
+            self._toast_err(exc)
+
     @Slot()
     def saveExceptions(self) -> None:
         try:
             self._write_settings_to_disk()
             self._enqueue_log("Правила сохранены")
-            if self._active:
-                self.toast.emit(self._saved_message("Сохранено"), "info")
         except Exception as exc:  # noqa: BLE001
             self._toast_err(exc)
 
@@ -530,6 +567,13 @@ class GuiBridge(QObject):
             if self._handoff_if_needed(Action.CONNECT):
                 return
             self._run_bg(self.connection.enable, Action.CONNECT)
+
+    @Slot()
+    def activatePower(self) -> None:
+        if self._can_reconnect:
+            self.reconnectConnection()
+            return
+        self.toggleConnection()
 
     @Slot()
     def enableConnection(self) -> None:
@@ -619,15 +663,20 @@ class GuiBridge(QObject):
             self._toast_err(exc)
 
     def _apply_cfg_to_settings(self, cfg: dict[str, Any]) -> None:
-        self._set_corporate(infer_corporate(cfg))
-        self._mode_label = "Корпоративный" if self._corporate else "VPN"
-        for key, value in cfg_to_settings(cfg).items():
-            self._settings.insert(key, value)
-        loaded = bool(self._settings.value("awgLoaded"))
-        source = self.settings_svc.awg_source_name()
-        if loaded:
-            self._settings.insert("awgSummary", source or "amneziawg.conf")
-        self._sync_config_ready()
+        prev = self._suspend_autosave
+        self._suspend_autosave = True
+        try:
+            self._set_corporate(infer_corporate(cfg))
+            self._mode_label = "Корпоративный" if self._corporate else "VPN"
+            for key, value in cfg_to_settings(cfg).items():
+                self._settings.insert(key, value)
+            loaded = bool(self._settings.value("awgLoaded"))
+            source = self.settings_svc.awg_source_name()
+            if loaded:
+                self._settings.insert("awgSummary", source or "amneziawg.conf")
+            self._sync_config_ready()
+        finally:
+            self._suspend_autosave = prev
 
     def _write_settings_to_disk(self) -> None:
         cfg = self.settings_svc.write_from_map(
@@ -639,12 +688,14 @@ class GuiBridge(QObject):
     def applyCorporateMode(self, on: bool) -> None:
         if self._busy:
             return
-        self._set_corporate(on)
-        apply_mode_to_settings(
-            self._settings.value, self._settings.insert, corporate=on
-        )
-        self._mode_label = "Корпоративный" if on else "VPN"
+        prev = self._suspend_autosave
+        self._suspend_autosave = True
         try:
+            self._set_corporate(on)
+            apply_mode_to_settings(
+                self._settings.value, self._settings.insert, corporate=on
+            )
+            self._mode_label = "Корпоративный" if on else "VPN"
             self._write_settings_to_disk()
             self._enqueue_log(
                 "режим: корпоративный" if on else "режим: обычный VPN"
@@ -653,6 +704,8 @@ class GuiBridge(QObject):
                 self.toast.emit(self._saved_message("Сохранено"), "info")
         except Exception as exc:  # noqa: BLE001
             self._toast_err(exc)
+        finally:
+            self._suspend_autosave = prev
 
     @Slot()
     def importConfigFile(self) -> None:
@@ -770,14 +823,7 @@ class GuiBridge(QObject):
         if self._busy:
             self.toast.emit("Дождитесь окончания операции", "warn")
             return
-        try:
-            self._write_settings_to_disk()
-            self._enqueue_log("Настройки сохранены")
-            self.toast.emit(self._saved_message("Сохранено"), "info")
-            self._sync_config_ready()
-            self._refresh_status(force=True)
-        except Exception as exc:  # noqa: BLE001
-            self._toast_err(exc)
+        self._autosave_settings()
 
     @Slot()
     def copyLog(self) -> None:

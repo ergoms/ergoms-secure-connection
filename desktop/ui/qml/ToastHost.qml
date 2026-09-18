@@ -7,6 +7,7 @@ Item {
     property string kind: "info"
     property bool shown: false
     property bool overlay: true
+    property bool suppressOnLog: true
 
     function show(msg, k) {
         message = msg
@@ -25,7 +26,7 @@ Item {
     anchors.topMargin: overlay ? 58 : 0
     Layout.fillWidth: overlay ? false : true
     height: shown ? box.height : 0
-    visible: shown && bridge.page !== "log"
+    visible: shown && (!suppressOnLog || bridge.page !== "log")
     z: 20
 
     Timer {

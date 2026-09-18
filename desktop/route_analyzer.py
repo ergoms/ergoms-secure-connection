@@ -10,6 +10,7 @@ from desktop.proc_net import (
     Peer,
     collect_peers,
     looks_like_file,
+    resolve_process,
     resolve_service_image,
 )
 from desktop.route_tokens import (
@@ -69,27 +70,28 @@ def analyze_token(query: str) -> dict[str, Any]:
     return payload
 
 
-def analyze_process(*, pid: int = 0, name: str = "", path: str = "") -> dict[str, Any]:
-    label = path or name or (f"pid {pid}" if pid else "")
-    token = f"{PREFIX_EXE}{path or name}" if (path or name) else ""
+def analyze_process(*, pid: int = 0, name: str = "", path: str = "", display: str = "") -> dict[str, Any]:
+    info = resolve_process(pid=pid, name=name, path=path)
+    short = (display or info.name or "").strip() or "программа"
+    token = f"{PREFIX_EXE}{info.path or info.name}" if (info.path or info.name) else ""
     payload: dict[str, Any] = {
-        "query": label,
+        "query": short,
         "kind": KIND_PROCESS,
         "ambiguous": False,
         "token": token,
-        "label": path or name or label,
+        "label": short,
         "ips": [],
         "domains": [],
         "peers": [],
         "warning": "",
-        "shared": is_shared_process(path or name),
+        "shared": is_shared_process(info.path or info.name),
     }
     if payload["shared"]:
         payload["warning"] = (
             "Общий процесс Windows — в маршрут его не ставим, только найденные адреса."
         )
         payload["token"] = ""
-    return _fill_peers(payload, pid=pid, name=name or path)
+    return _fill_peers(payload, pid=info.pid or pid, name=info.name or info.path, path=info.path)
 
 
 def analyze_service(name: str) -> dict[str, Any]:

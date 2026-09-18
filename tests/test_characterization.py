@@ -611,6 +611,7 @@ def test_present_status_all_branches() -> None:
     crash = _present(singbox_running=True, socks_up=False)
     assert crash.title == "Сбой"
     assert crash.can_reconnect is True
+    assert crash.power_text == "Переподключить"
     assert crash.color == C_DANGER
 
     socks_only = _present(singbox_running=True, socks_up=True, tun_running=False)
@@ -622,6 +623,7 @@ def test_present_status_all_branches() -> None:
     sealed = _present(kill_switch_applied=True)
     assert sealed.title == "Нет сети"
     assert sealed.can_reconnect is True
+    assert sealed.power_text == "Переподключить"
     assert sealed.color == C_WARN
 
     no_cfg = _present(_ready=False)

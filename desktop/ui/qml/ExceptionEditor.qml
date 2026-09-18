@@ -49,7 +49,6 @@ Column {
         bridge.settings[root.settingKey] = JSON.stringify(out)
         if (root.settingKey === "routeDirect")
             bridge.settings.proxyBypass = out.join(", ")
-        saveTimer.restart()
     }
 
     function addToken(raw) {
@@ -73,12 +72,6 @@ Column {
     function applyHint(obj) {
         root.hint = obj || {}
         root.analyzing = false
-    }
-
-    Timer {
-        id: saveTimer
-        interval: 350
-        onTriggered: bridge.saveExceptions()
     }
 
     Timer {
@@ -219,24 +212,26 @@ Column {
         width: parent.width
         Repeater {
             model: [
-                { label: "+ exe", kind: "process" },
+                { label: "+ программа", kind: "process" },
                 { label: "+ служба", kind: "service" }
             ]
             delegate: Rectangle {
                 required property var modelData
                 width: (parent.width - 6) / 2
-                height: 32
+                height: 36
                 radius: 9
                 color: mouse.containsMouse ? T.btn : T.surface2
                 border.width: 1
                 border.color: T.hairline
                 Text {
-                    anchors.centerIn: parent
+                    anchors.fill: parent
                     text: modelData.label
                     color: T.text
                     font.pixelSize: 12
                     font.weight: Font.DemiBold
                     font.family: T.fontUi
+                    horizontalAlignment: Text.AlignHCenter
+                    verticalAlignment: Text.AlignVCenter
                 }
                 MouseArea {
                     id: mouse

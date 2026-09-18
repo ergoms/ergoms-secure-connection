@@ -17,6 +17,8 @@ usage() {
 usage: install.sh
 
 Ставит клиент в /opt/ergoms-secure-connection и команду ergoms-sc.
+
+  curl -fsSL https://raw.githubusercontent.com/DohaoSTR/ergoms-secure-connection/main/modes/linux/install.sh | sudo bash
 EOF
 }
 

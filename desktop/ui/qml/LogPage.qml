@@ -109,6 +109,7 @@ Item {
             ToastHost {
                 id: logToast
                 overlay: false
+                suppressOnLog: false
                 Layout.fillWidth: true
                 Layout.leftMargin: 10
                 Layout.rightMargin: 10

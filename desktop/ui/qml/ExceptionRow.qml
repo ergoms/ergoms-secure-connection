@@ -13,7 +13,7 @@ Rectangle {
         if (root.kind === "service")
             return "Служба"
         if (root.kind === "ip")
-            return "IP"
+            return "Адрес"
         return "Домен"
     }
 

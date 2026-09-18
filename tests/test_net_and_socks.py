@@ -645,7 +645,7 @@ def test_present_status_error_offers_reconnect() -> None:
         config_ready=True,
     )
     assert dead_exit.can_reconnect is True
-    assert dead_exit.power_text == "Отключить"
+    assert dead_exit.power_text == "Переподключить"
     assert "Переподключ" in dead_exit.subtitle
 
     sealed = present_status(

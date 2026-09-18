@@ -43,6 +43,8 @@ curl -fsSL https://raw.githubusercontent.com/DohaoSTR/ergoms-secure-connection/m
 curl -fsSL https://raw.githubusercontent.com/DohaoSTR/ergoms-secure-connection/main/modes/linux/install.sh | sudo bash
 ```
 
+Подробности: [`modes/linux/README.md`](modes/linux/README.md).
+
 Или из архива `*-linux-x64.tar.gz`:
 
 ```bash

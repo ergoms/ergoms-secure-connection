@@ -356,13 +356,6 @@ Item {
                     enabled: !bridge.busy
                     onClicked: bridge.exportConfigFile()
                 }
-                PrimaryButton {
-                    Layout.fillWidth: true
-                    text: "Сохранить"
-                    primary: true
-                    enabled: !bridge.busy
-                    onClicked: bridge.saveSettings()
-                }
             }
         }
     }

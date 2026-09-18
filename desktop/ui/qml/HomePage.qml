@@ -33,12 +33,7 @@ Item {
                 ringColor: bridge.statusColor
                 busy: bridge.busy
                 active: bridge.active
-                onClicked: {
-                    if (bridge.canReconnect)
-                        bridge.reconnectConnection()
-                    else
-                        bridge.toggleConnection()
-                }
+                onClicked: bridge.activatePower()
             }
         }
 
@@ -67,23 +62,13 @@ Item {
         }
 
         PrimaryButton {
-            visible: bridge.canReconnect
-            Layout.fillWidth: true
-            Layout.preferredHeight: visible ? 50 : 0
-            text: "Переподключить"
-            primary: true
-            enabled: !bridge.busy
-            onClicked: bridge.reconnectConnection()
-        }
-
-        PrimaryButton {
             Layout.fillWidth: true
             Layout.preferredHeight: 50
             text: bridge.powerText
-            primary: !bridge.active && !bridge.canReconnect
-            danger: bridge.active || bridge.canReconnect
+            primary: !bridge.active || bridge.canReconnect
+            danger: bridge.active && !bridge.canReconnect
             enabled: !bridge.busy
-            onClicked: bridge.toggleConnection()
+            onClicked: bridge.activatePower()
         }
 
         Item { Layout.fillHeight: true }

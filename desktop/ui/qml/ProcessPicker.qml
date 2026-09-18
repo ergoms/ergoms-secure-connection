@@ -140,7 +140,7 @@ Item {
                 width: parent.width
                 Text {
                     width: parent.width - 28
-                    text: root.kind === "service" ? "Службы Windows" : "Процессы"
+                    text: root.kind === "service" ? "Службы Windows" : "Программы"
                     color: T.text
                     font.pixelSize: 14
                     font.weight: Font.DemiBold
@@ -222,8 +222,8 @@ Item {
                         width: parent.width
                         text: {
                             if (modelData.kind === "service")
-                                return (modelData.shared ? "общий процесс · " : "") + (modelData.exe || modelData.name)
-                            return (modelData.pid ? (modelData.pid + " · ") : "") + (modelData.path || modelData.name)
+                                return (modelData.shared ? "общий · " : "") + (modelData.exe || modelData.name)
+                            return modelData.path || modelData.name || ""
                         }
                         color: T.muted
                         font.pixelSize: 10

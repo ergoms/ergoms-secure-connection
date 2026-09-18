@@ -9,21 +9,24 @@ Item {
         var editor = pickerTarget === "routeVpn" ? vpnEd : directEd
         if (!item)
             return
+        editor.analyzing = true
+        editor.hint = {}
         if (item.kind === "service") {
-            if (!item.shared && item.name)
-                editor.addToken("svc:" + item.name)
-            editor.analyzing = true
-            bridge.collectProcessPeers("svc:" + item.name)
+            bridge.collectProcessPeers(JSON.stringify({
+                kind: "service",
+                name: item.name || "",
+                display: item.display || item.name || "",
+                path: item.path || ""
+            }))
             return
         }
-        var token = item.path ? ("exe:" + item.path) : ("exe:" + (item.name || ""))
-        if (!bridge.tokenShared(token) && token !== "exe:")
-            editor.addToken(token)
-        editor.analyzing = true
-        if (item.pid)
-            bridge.collectProcessPeers("pid:" + item.pid)
-        else
-            bridge.collectProcessPeers(token)
+        bridge.collectProcessPeers(JSON.stringify({
+            kind: "process",
+            pid: item.pid || 0,
+            name: item.name || "",
+            path: item.path || "",
+            display: item.display || item.name || ""
+        }))
     }
 
     property string pickerTarget: "routeDirect"

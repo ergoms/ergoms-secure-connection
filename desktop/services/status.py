@@ -121,6 +121,8 @@ def present_status(
         title, sub, color, power = "Нет конфига", "Загрузите конфиг", C_MUTED, "Подключить"
     else:
         title, sub, color, power = "Отключено", "", C_MUTED, "Подключить"
+    if retry:
+        power = "Переподключить"
     sig = (
         f"{singbox}|{tun}|{active}|{socks_up}|{http_up}|{pac_up}|{scope}|{target}"
         f"|{st.get('watchdog_running')}|{st.get('reverse_ssh_running')}"

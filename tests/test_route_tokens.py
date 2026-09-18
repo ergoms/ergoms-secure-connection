@@ -223,3 +223,37 @@ def test_serialize_roundtrip() -> None:
     raw = serialize_list(tokens)
     again = parse_list(raw)
     assert [t.kind for t in again] == [KIND_DOMAIN, KIND_PROCESS, KIND_SERVICE]
+
+
+def test_analyze_process_shows_program_name_not_pid() -> None:
+    from desktop.route_analyzer import analyze_process
+
+    with patch("desktop.route_analyzer.collect_peers", return_value=[]), patch(
+        "desktop.route_analyzer._enrich_peers", return_value=[]
+    ):
+        payload = analyze_process(
+            pid=1264,
+            name="MsSense.exe",
+            path=r"C:\Program Files\Windows Defender Advanced Threat Protection\MsSense.exe",
+        )
+    assert payload["label"] == "MsSense.exe"
+    assert "pid" not in payload["label"].lower()
+    assert payload["token"].endswith("MsSense.exe")
+
+
+def test_analyze_spec_json_process(monkeypatch) -> None:
+    from desktop.ui.bridge import _analyze_spec
+
+    captured: dict[str, object] = {}
+
+    def fake_analyze_process(**kwargs):
+        captured.update(kwargs)
+        return {"kind": "process", "label": kwargs.get("display") or kwargs.get("name"), "peers": []}
+
+    monkeypatch.setattr("desktop.ui.bridge.analyze_process", fake_analyze_process)
+    _analyze_spec(
+        '{"kind":"process","pid":1264,"name":"MsSense.exe","path":"C:\\\\MsSense.exe","display":"MsSense.exe"}'
+    )
+    assert captured["pid"] == 1264
+    assert captured["name"] == "MsSense.exe"
+    assert "pid" not in str(captured.get("display") or "").lower()

@@ -69,6 +69,16 @@ def _basename(path: str) -> str:
     return text.replace("\\", "/").split("/")[-1]
 
 
+def resolve_process(*, pid: int = 0, name: str = "", path: str = "") -> ProcessInfo:
+    exe = (path or "").strip().strip('"')
+    comm = (name or "").strip()
+    if pid > 0 and not exe:
+        exe = _process_path(pid)
+    if not comm and exe:
+        comm = _basename(exe)
+    return ProcessInfo(name=comm, pid=int(pid or 0), path=exe)
+
+
 def _parse_image_path(raw: str) -> str:
     text = (raw or "").strip()
     if not text:
