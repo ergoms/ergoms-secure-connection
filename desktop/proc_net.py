@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ctypes
+import os
 import re
 import sys
 from dataclasses import dataclass
@@ -307,6 +308,49 @@ def _service_image_path(name: str) -> str:
         return ""
 
 
+def _expand_indirect_string(raw: str) -> str:
+    """Resolve `@path,-id` / `@%ENV%\\app.exe,-id` MUI resource strings."""
+    text = (raw or "").strip()
+    if not text.startswith("@"):
+        return text
+    if not _is_windows():
+        return ""
+    candidates = [text]
+    expanded = os.path.expandvars(text)
+    if expanded != text:
+        candidates.append(expanded)
+    try:
+        shlwapi = ctypes.windll.shlwapi  # type: ignore[attr-defined]
+        fn = shlwapi.SHLoadIndirectString
+        fn.argtypes = [
+            ctypes.c_wchar_p,
+            ctypes.c_wchar_p,
+            ctypes.c_uint,
+            ctypes.c_void_p,
+        ]
+        fn.restype = ctypes.HRESULT
+        buf = ctypes.create_unicode_buffer(2048)
+        for source in candidates:
+            if int(fn(source, buf, 2048, None)) != 0:
+                continue
+            value = (buf.value or "").strip()
+            if value and not value.startswith("@"):
+                return value
+    except Exception:  # noqa: BLE001
+        return ""
+    return ""
+
+
+def _friendly_service_display(raw: str, fallback: str = "") -> str:
+    text = (raw or "").strip()
+    name = (fallback or "").strip()
+    if not text:
+        return name
+    if not text.startswith("@"):
+        return text
+    return _expand_indirect_string(text) or name
+
+
 def _service_display_name(name: str) -> str:
     try:
         import winreg
@@ -321,7 +365,7 @@ def _service_display_name(name: str) -> str:
             return ""
         finally:
             key.Close()
-        return str(raw or "").strip()
+        return _friendly_service_display(str(raw or ""), name)
     except OSError:
         return ""
 
@@ -371,7 +415,7 @@ def _list_services_win() -> list[ServiceInfo]:
                 out.append(
                     ServiceInfo(
                         name=name,
-                        display=str(display or name),
+                        display=_friendly_service_display(str(display or ""), name),
                         path=path,
                         exe=exe,
                         shared=is_shared_process(exe or path),

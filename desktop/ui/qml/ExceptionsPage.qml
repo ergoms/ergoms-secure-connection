@@ -49,30 +49,7 @@ Item {
                 spacing: 10
                 topPadding: 10
                 bottomPadding: 16
-                enabled: !bridge.active && !bridge.busy
-
-                Rectangle {
-                    visible: bridge.active || bridge.busy
-                    width: parent.width
-                    height: visible ? bannerText.implicitHeight + 16 : 0
-                    radius: 10
-                    color: T.toastWarn
-                    clip: true
-                    Text {
-                        id: bannerText
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.verticalCenter: parent.verticalCenter
-                        anchors.margins: 10
-                        text: bridge.busy
-                              ? "Дождитесь окончания операции"
-                              : "Отключите VPN, чтобы менять правила"
-                        color: T.warn
-                        font.pixelSize: 12
-                        font.family: T.fontUi
-                        wrapMode: Text.WordWrap
-                    }
-                }
+                enabled: !bridge.busy
 
                 Card {
                     width: parent.width

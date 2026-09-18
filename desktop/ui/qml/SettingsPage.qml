@@ -91,19 +91,7 @@ Item {
                 id: form
                 width: parent.width
                 spacing: 8
-                enabled: !bridge.active && !bridge.busy
-
-                Text {
-                    visible: bridge.active || bridge.busy
-                    width: parent.width
-                    text: bridge.busy
-                          ? "Дождитесь окончания операции"
-                          : "Отключите VPN, чтобы менять настройки"
-                    color: T.warn
-                    font.pixelSize: 12
-                    font.family: T.fontUi
-                    wrapMode: Text.WordWrap
-                }
+                enabled: !bridge.busy
 
                 SectionLabel { text: "РЕЖИМ" }
                 Card {
@@ -359,20 +347,20 @@ Item {
                 PrimaryButton {
                     Layout.fillWidth: true
                     text: "Из файла"
-                    enabled: !bridge.active && !bridge.busy
+                    enabled: !bridge.busy
                     onClicked: bridge.importConfigFile()
                 }
                 PrimaryButton {
                     Layout.fillWidth: true
                     text: "Копировать"
-                    enabled: !bridge.active && !bridge.busy
+                    enabled: !bridge.busy
                     onClicked: bridge.exportConfigFile()
                 }
                 PrimaryButton {
                     Layout.fillWidth: true
                     text: "Сохранить"
                     primary: true
-                    enabled: !bridge.active && !bridge.busy
+                    enabled: !bridge.busy
                     onClicked: bridge.saveSettings()
                 }
             }

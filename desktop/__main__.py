@@ -55,8 +55,10 @@ def _run_connect(argv: list[str], *, via: str = "socks") -> int:
 
 
 def _show_help() -> int:
+    from desktop.branding import CLI_NAME
+
     print(
-        """ERGOMS SECURE CONNECTION — клиент VLESS+Reality (Windows / Linux)
+        f"""ERGOMS SECURE CONNECTION — клиент VLESS+Reality (Windows / Linux)
 
 Конфиг: config.json + amneziawg.conf  (образец: config/config.example.json)
 
@@ -87,7 +89,7 @@ def _show_help() -> int:
 
 Запуск:
   python -m desktop <cmd> …
-  ergoms <cmd> …                                  # Linux (после install.sh)
+  {CLI_NAME} <cmd> …                               # Linux (после install.sh)
   ./ergoms-secure-connection.sh <cmd> …           # Linux (репозиторий)
   .\\ergoms-secure-connection.ps1 <cmd> …         # Windows
 """
@@ -237,7 +239,9 @@ def _run_cli(cmd: str, rest: list[str]) -> int:
             host = rest[0] if rest else ""
             port = int(rest[1]) if len(rest) > 1 else 443
             if not host:
-                print("usage: ergoms-secure-connection probe HOST [PORT]", file=sys.stderr)
+                from desktop.branding import CLI_NAME
+
+                print(f"usage: {CLI_NAME} probe HOST [PORT]", file=sys.stderr)
                 return 2
             return client.probe(host, port)
         elif cmd == "test":

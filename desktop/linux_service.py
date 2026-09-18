@@ -7,7 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from desktop.branding import APP_ID, APP_NAME
+from desktop.branding import APP_ID, APP_NAME, CLI_NAME
 from desktop.paths import linux_data_dir
 
 UNIT_NAME = f"{APP_ID}.service"
@@ -86,7 +86,7 @@ def install() -> int:
         return 1
     if os.geteuid() != 0:
         if not shutil_which("sudo"):
-            print("Нужен root: sudo ergoms install-service", file=sys.stderr)
+            print(f"Нужен root: sudo {CLI_NAME} install-service", file=sys.stderr)
             return 1
         _reexec_root()
         return 1
@@ -104,7 +104,7 @@ def install() -> int:
     if not (data / "config.json").is_file():
         print(
             f"Нет {data / 'config.json'} — сначала импортируйте конфиг "
-            "(ergoms → Настройки → Из файла) или: ergoms init",
+            f"(окно {CLI_NAME} → Настройки → Из файла) или: {CLI_NAME} init",
             file=sys.stderr,
         )
         return 1
@@ -121,7 +121,7 @@ def install() -> int:
     print("Start:     systemctl enable --now ergoms-secure-connection")
     print("Status:    systemctl status ergoms-secure-connection")
     print("Logs:      journalctl -u ergoms-secure-connection -f")
-    print("Remove:    ergoms uninstall-service")
+    print(f"Remove:    {CLI_NAME} uninstall-service")
     subprocess.call(["systemctl", "--no-pager", "--full", "status", UNIT_NAME])
     return 0
 
@@ -132,7 +132,7 @@ def uninstall() -> int:
     if os.geteuid() != 0:
         if shutil_which("sudo"):
             _reexec_root()
-        print("Нужен root: sudo ergoms uninstall-service", file=sys.stderr)
+        print(f"Нужен root: sudo {CLI_NAME} uninstall-service", file=sys.stderr)
         return 1
     if shutil_which("systemctl"):
         for name in (UNIT_NAME, *LEGACY_UNITS):

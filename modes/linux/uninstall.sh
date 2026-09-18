@@ -26,7 +26,7 @@ if command -v systemctl >/dev/null 2>&1; then
   systemctl daemon-reload 2>/dev/null || true
 fi
 
-rm -f "$LINK_DIR/ergoms" "$LINK_DIR/ergoms-secure-connection"
+rm -f "$LINK_DIR/ergoms-sc" "$LINK_DIR/ergoms" "$LINK_DIR/ergoms-secure-connection"
 rm -f "$DESKTOP_DST"
 rm -rf "$INSTALL_DIR"
 
@@ -34,5 +34,5 @@ if command -v update-desktop-database >/dev/null 2>&1; then
   update-desktop-database "$(dirname "$DESKTOP_DST")" 2>/dev/null || true
 fi
 
-echo "Снято: $INSTALL_DIR, $LINK_DIR/ergoms"
+echo "Снято: $INSTALL_DIR, $LINK_DIR/ergoms-sc"
 echo "Конфиг пользователя (~/.local/share/${APP_ID}) не удалялся."

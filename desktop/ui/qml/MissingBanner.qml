@@ -27,7 +27,7 @@ Rectangle {
     }
     MouseArea {
         anchors.fill: parent
-        enabled: !bridge.active && !bridge.busy
+        enabled: !bridge.busy
         cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
         onClicked: root.activated()
     }

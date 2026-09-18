@@ -53,10 +53,10 @@ sudo bash "ERGOMS SECURE CONNECTION/install.sh"
 После этого:
 
 ```bash
-ergoms                 # окно
-ergoms on              # подключить
-ergoms off             # отключить
-ergoms install-service # автозапуск
+ergoms-sc                 # окно
+ergoms-sc on              # подключить
+ergoms-sc off             # отключить
+ergoms-sc install-service # автозапуск
 ```
 
 Конфиг: `~/.local/share/ergoms-secure-connection/config.json`  
@@ -67,8 +67,8 @@ ergoms install-service # автозапуск
 ## 4. Первый запуск
 
 1. Скопируйте `client.json` с VPS (или зашифрованный `share.enc`).
-2. В окне: **Настройки → Из файла**. Либо: `ergoms decrypt share.enc`
-3. **Подключить** / `ergoms on` (спросит пароль sudo: TUN и kill switch).
+2. В окне: **Настройки → Из файла**. Либо: `ergoms-sc decrypt share.enc`
+3. **Подключить** / `ergoms-sc on` (спросит пароль sudo: TUN и kill switch).
 
 Локально после подключения: SOCKS `:1080`, HTTP `:1088`, PAC `:1089`.
 
@@ -76,7 +76,7 @@ ergoms install-service # автозапуск
 
 ## Команды
 
-Одинаковы везде: `ergoms …`, `./ergoms-secure-connection.sh …`, `.\ergoms-secure-connection.ps1 …`, `python -m desktop …`.
+Одинаковы везде: `ergoms-sc …`, `./ergoms-secure-connection.sh …`, `.\ergoms-secure-connection.ps1 …`, `python -m desktop …`.
 
 | Команда | Смысл |
 |---------|--------|
@@ -142,7 +142,7 @@ ergoms install-service # автозапуск
 2. Чужой туннель AmneziaVPN / Tailscale с default `0.0.0.0/0` перехватывает UDP. Если второй VPN нужен — split `/32` на IP VPS.
 3. В панели хостинга открыть **UDP 51820** (не путать с TCP 443).
 
-В журнале при норме: `дом: AmneziaWG UDP :51820`, затем `проверка выхода: OK`. Песочница: `ergoms sandbox` — `AWG CONNECT` + `AWG HTTPS` OK.
+В журнале при норме: `дом: AmneziaWG UDP :51820`, затем `проверка выхода: OK`. Песочница: `ergoms-sc sandbox` — `AWG CONNECT` + `AWG HTTPS` OK.
 
 Служба Amnezia без поднятого туннеля не мешает. Kill switch чужого Amnezia (`WinError 10013`) UDP всё равно может резать.
 

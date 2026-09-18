@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the Linux client to /opt and put `ergoms` on PATH.
+# Install the Linux client to /opt and put `ergoms-sc` on PATH.
 # From a release folder:  sudo bash install.sh
 # One-liner:              curl -fsSL https://raw.githubusercontent.com/DohaoSTR/ergoms-secure-connection/main/modes/linux/install.sh | sudo bash
 set -euo pipefail
@@ -16,7 +16,7 @@ usage() {
   cat <<'EOF'
 usage: install.sh
 
-Ставит клиент в /opt/ergoms-secure-connection и команды ergoms / ergoms-secure-connection.
+Ставит клиент в /opt/ergoms-secure-connection и команду ergoms-sc.
 EOF
 }
 
@@ -125,8 +125,9 @@ if [[ -f "$INSTALL_DIR/uninstall.sh" ]]; then
 fi
 
 mkdir -p "$LINK_DIR"
-ln -sfn "$INSTALL_DIR/$BIN_NAME" "$LINK_DIR/ergoms"
+ln -sfn "$INSTALL_DIR/$BIN_NAME" "$LINK_DIR/ergoms-sc"
 ln -sfn "$INSTALL_DIR/$BIN_NAME" "$LINK_DIR/ergoms-secure-connection"
+rm -f "$LINK_DIR/ergoms"
 
 mkdir -p "$(dirname "$DESKTOP_DST")"
 cat >"$DESKTOP_DST" <<EOF
@@ -149,10 +150,10 @@ cat <<EOF
 
 Готово. Программа: $INSTALL_DIR
 
-  ergoms                 окно
-  ergoms on              подключить
-  ergoms off             отключить
-  ergoms install-service автозапуск (systemd)
+  ergoms-sc                 окно
+  ergoms-sc on              подключить
+  ergoms-sc off             отключить
+  ergoms-sc install-service автозапуск (systemd)
 
 Конфиг: ~/.local/share/${APP_ID}/config.json
 Снять:  sudo bash $INSTALL_DIR/uninstall.sh

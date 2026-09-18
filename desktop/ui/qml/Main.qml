@@ -128,6 +128,14 @@ ApplicationWindow {
                 }
             }
 
+            LockBanner {
+                Layout.fillWidth: true
+                Layout.preferredHeight: visible ? implicitHeight : 0
+                Layout.leftMargin: 14
+                Layout.rightMargin: 14
+                Layout.topMargin: visible ? 10 : 0
+            }
+
             StackLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true

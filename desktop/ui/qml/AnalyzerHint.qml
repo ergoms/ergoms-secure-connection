@@ -73,6 +73,16 @@ Rectangle {
             wrapMode: Text.WordWrap
         }
 
+        Text {
+            width: parent.width
+            visible: !root.busy && (root.kind === "process" || root.kind === "service") && root.label.length > 0
+            text: root.label
+            color: T.text
+            font.pixelSize: 11
+            font.family: T.fontUi
+            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+        }
+
         Flow {
             width: parent.width
             spacing: 6
@@ -98,23 +108,34 @@ Rectangle {
                         for (var d = 0; d < root.domains.length; d++)
                             items.push({ label: root.domains[d], token: root.domains[d] })
                     } else if (root.token && !root.shared) {
-                        items.push({ label: root.label || "Добавить", token: root.token })
+                        var addLabel = "Добавить"
+                        if (root.kind === "service")
+                            addLabel = "Служба"
+                        else if (root.kind === "process")
+                            addLabel = "Программа"
+                        items.push({ label: addLabel, token: root.token })
                     }
                     return items
                 }
                 delegate: Rectangle {
                     required property var modelData
-                    implicitWidth: Math.min(hintTxt.implicitWidth + 16, 180)
-                    implicitHeight: 24
+                    width: Math.max(0, Math.min(hintTxt.implicitWidth + 16, col.width))
+                    height: Math.max(24, hintTxt.implicitHeight + 10)
                     radius: 8
                     color: T.accentSoft
+                    clip: true
                     Text {
                         id: hintTxt
-                        anchors.centerIn: parent
+                        x: 8
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: Math.max(0, Math.min(implicitWidth, col.width - 16))
                         text: modelData.label
                         color: T.accent
                         font.pixelSize: 11
                         font.family: T.fontUi
+                        wrapMode: Text.WrapAnywhere
+                        elide: Text.ElideMiddle
+                        maximumLineCount: 2
                     }
                     MouseArea {
                         anchors.fill: parent

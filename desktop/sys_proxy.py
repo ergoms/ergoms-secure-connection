@@ -1,6 +1,6 @@
 """OS system proxy (PAC): Windows Internet Settings or GNOME gsettings.
 
-Linux SOCKS: also override /etc/environment + profile.d so curl/ergoms
+Linux SOCKS: also override /etc/environment + profile.d so curl/ergoms-sc
 use the local HTTP bridge instead of a corporate Squid from pam_env.
 """
 

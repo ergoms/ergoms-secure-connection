@@ -475,13 +475,18 @@ class GuiBridge(QObject):
         if path:
             self.executablePicked.emit(path)
 
+    def _saved_message(self, text: str) -> str:
+        if self._active:
+            return f"{text}. Применится при следующем подключении."
+        return text
+
     @Slot()
     def saveExceptions(self) -> None:
         try:
             self._write_settings_to_disk()
             self._enqueue_log("Правила сохранены")
             if self._active:
-                self.toast.emit("Сохранено. Применится при следующем подключении.", "info")
+                self.toast.emit(self._saved_message("Сохранено"), "info")
         except Exception as exc:  # noqa: BLE001
             self._toast_err(exc)
 
@@ -597,7 +602,7 @@ class GuiBridge(QObject):
 
     @Slot(bool)
     def setAutostart(self, on: bool) -> None:
-        if self._busy or self._active:
+        if self._busy:
             return
         try:
             if on:
@@ -632,7 +637,7 @@ class GuiBridge(QObject):
 
     @Slot(bool)
     def applyCorporateMode(self, on: bool) -> None:
-        if self._busy or self._active:
+        if self._busy:
             return
         self._set_corporate(on)
         apply_mode_to_settings(
@@ -644,13 +649,15 @@ class GuiBridge(QObject):
             self._enqueue_log(
                 "режим: корпоративный" if on else "режим: обычный VPN"
             )
+            if self._active:
+                self.toast.emit(self._saved_message("Сохранено"), "info")
         except Exception as exc:  # noqa: BLE001
             self._toast_err(exc)
 
     @Slot()
     def importConfigFile(self) -> None:
-        if self._busy or self._active:
-            self.toast.emit("Дождитесь окончания операции или отключите VPN", "warn")
+        if self._busy:
+            self.toast.emit("Дождитесь окончания операции", "warn")
             return
         path, _ = QFileDialog.getOpenFileName(
             None,
@@ -684,18 +691,18 @@ class GuiBridge(QObject):
         if result.kind == "awg":
             self.loadSettings()
             self._enqueue_log("AmneziaWG .conf загружен")
-            self.toast.emit("AmneziaWG .conf загружен", "info")
+            self.toast.emit(self._saved_message("AmneziaWG .conf загружен"), "info")
             self._refresh_status(force=True)
             return
         self.loadSettings()
         self._enqueue_log("Конфиг загружен")
-        self.toast.emit("Конфиг загружен" + result.extra, "info")
+        self.toast.emit(self._saved_message("Конфиг загружен" + result.extra), "info")
         self._refresh_status(force=True)
 
     @Slot()
     def importAwgConfFile(self) -> None:
-        if self._busy or self._active:
-            self.toast.emit("Дождитесь окончания операции или отключите VPN", "warn")
+        if self._busy:
+            self.toast.emit("Дождитесь окончания операции", "warn")
             return
         path, _ = QFileDialog.getOpenFileName(
             None,
@@ -715,7 +722,7 @@ class GuiBridge(QObject):
         self.settings_svc.import_awg_text(text, source_name=source_name)
         self.loadSettings()
         self._enqueue_log("AmneziaWG .conf загружен")
-        self.toast.emit("AmneziaWG .conf загружен", "info")
+        self.toast.emit(self._saved_message("AmneziaWG .conf загружен"), "info")
         self._refresh_status(force=True)
 
     @Slot()
@@ -760,16 +767,13 @@ class GuiBridge(QObject):
 
     @Slot()
     def saveSettings(self) -> None:
-        if self._busy or self._active:
-            self.toast.emit("Дождитесь окончания операции или отключите VPN", "warn")
+        if self._busy:
+            self.toast.emit("Дождитесь окончания операции", "warn")
             return
         try:
             self._write_settings_to_disk()
             self._enqueue_log("Настройки сохранены")
-            self.toast.emit(
-                "Сохранено.\nЕсли туннель был включён — выключите и включите снова.",
-                "info",
-            )
+            self.toast.emit(self._saved_message("Сохранено"), "info")
             self._sync_config_ready()
             self._refresh_status(force=True)
         except Exception as exc:  # noqa: BLE001

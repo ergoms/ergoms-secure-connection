@@ -93,7 +93,7 @@ if [[ -n "$FROZEN_EXE" ]]; then
   DATA_DIR="$XDG_DATA"
   WORK_DIR="$(cd "$(dirname "$FROZEN_EXE")" && pwd)"
   if [[ ! -f "$DATA_DIR/config.json" ]]; then
-    echo "Нет $DATA_DIR/config.json — сначала: ergoms  (Настройки → Из файла) или ergoms init" >&2
+    echo "Нет $DATA_DIR/config.json — сначала: ergoms-sc  (Настройки → Из файла) или ergoms-sc init" >&2
     exit 1
   fi
   systemd_escape() { printf '%s' "$1" | sed 's/ /\\ /g'; }
@@ -174,7 +174,7 @@ echo "Start:     systemctl enable --now ergoms-secure-connection"
 echo "Status:    systemctl status ergoms-secure-connection"
 echo "Logs:      journalctl -u ergoms-secure-connection -f"
 if [[ -n "$FROZEN_EXE" ]]; then
-  echo "Remove:    ergoms uninstall-service"
+  echo "Remove:    ergoms-sc uninstall-service"
 else
   echo "Remove:    ./ergoms-secure-connection.sh uninstall-service"
 fi
