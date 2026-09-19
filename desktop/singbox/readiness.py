@@ -65,6 +65,11 @@ def tun_inbound_ready(
     return bool(probe())
 
 
+# Healthy CreateAdapter is <1s once the name is free. Leftover name reservation
+# logs "take too much time" at ~10s and FATAL already exists at ~15s.
+_LEFTOVER_OPEN_SECS = 2.5
+
+
 def wait_ready(
     *,
     socks_port: int,
@@ -80,6 +85,7 @@ def wait_ready(
     deadline = time.monotonic() + timeout
     interval = 0.05
     socks_ok = False
+    socks_at: float | None = None
     extended = False
     while time.monotonic() < deadline:
         lines = tail(TUN_LOG_SCAN_LINES) if enable_tun else tail(80)
@@ -88,19 +94,23 @@ def wait_ready(
             return False
         if port_open("127.0.0.1", socks_port, timeout=0.08):
             socks_ok = True
+            if socks_at is None:
+                socks_at = time.monotonic()
             if not enable_tun or tun_inbound_ready(lines, platform=platform):
                 kind = "mixed + TUN" if enable_tun else "mixed"
                 log(f"sing-box слушает SOCKS :{socks_port} и HTTP :{http_port} ({kind})")
                 return True
-            if (
-                enable_tun
-                and not extended
-                and tun_still_opening(lines)
-                and not tun_create_conflict(lines)
-            ):
-                deadline = max(deadline, time.monotonic() + 15.0)
-                extended = True
-                log("Wintun ещё создаёт адаптер — жду, процесс не убиваю")
+            hung = (time.monotonic() - socks_at) >= _LEFTOVER_OPEN_SECS
+            opening = tun_still_opening(lines) and not tun_create_conflict(lines)
+            if enable_tun and (opening or hung):
+                iface_up = wait_tun_iface(timeout=0.05)
+                if iface_up and opening and not extended:
+                    deadline = max(deadline, time.monotonic() + 15.0)
+                    extended = True
+                    log("Wintun ещё создаёт адаптер — жду, процесс не убиваю")
+                elif hung and not iface_up:
+                    log("TUN: leftover Wintun — пересоздаю адаптер")
+                    return False
         check = pid or live_pid()
         if check and not procutil.pid_alive(check) and not live_pid():
             if enable_tun:

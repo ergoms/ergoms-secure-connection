@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import os
 import platform
@@ -317,11 +318,17 @@ def _delete_tun_adapter_cmds() -> None:
 def _hidden_tun_remove_ps() -> str:
     safe = TUN_IFACE_NAME.replace("'", "''")
     return (
-        f"$a=Get-NetAdapter -Name '{safe}' -IncludeHidden "
-        "-ErrorAction SilentlyContinue; "
+        f"$n='{safe}'; "
+        "$a=Get-NetAdapter -IncludeHidden -ErrorAction SilentlyContinue | "
+        "Where-Object { $_.Name -eq $n -or $_.Name -like ($n+'*') }; "
         "if(-not $a){ exit 2 }; "
         "$a | Remove-NetAdapter -Confirm:$false"
     )
+
+
+def _powershell_encoded_cmd(script: str) -> str:
+    enc = base64.b64encode(script.encode("utf-16le")).decode("ascii")
+    return f"powershell -NoProfile -NonInteractive -EncodedCommand {enc}"
 
 
 def stale_tun_prelude_cmds() -> list[str]:
@@ -329,6 +336,7 @@ def stale_tun_prelude_cmds() -> list[str]:
 
     Non-admin `remove_stale_tun_adapter` cannot delete an admin-owned NIC;
     these run in the UAC wrapper immediately before `sing-box run`.
+    EncodedCommand avoids cmd.exe treating `|` in the script as a pipe.
     """
     if sys.platform != "win32":
         return []
@@ -336,8 +344,7 @@ def stale_tun_prelude_cmds() -> list[str]:
     return [
         f"netsh interface set interface name={name} admin=disabled",
         f"netsh interface delete interface name={name}",
-        "powershell -NoProfile -NonInteractive -Command "
-        f'"{_hidden_tun_remove_ps()}"',
+        _powershell_encoded_cmd(_hidden_tun_remove_ps()),
     ]
 
 

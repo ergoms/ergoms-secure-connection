@@ -1147,6 +1147,8 @@ class SingboxModeManager:
         self._rotate_log()
         from desktop.singbox.spawn import needs_win_elevation
 
+        # UAC wrapper runs these as admin. Already-admin uses NormalSpawn and
+        # never executes prelude — cleanup above must have been enough.
         tun_clean = (
             stale_tun_prelude_cmds()
             if enable_tun and needs_win_elevation(elevate=need_admin)

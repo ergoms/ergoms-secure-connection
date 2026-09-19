@@ -1,5 +1,5 @@
 #ifndef AppVersion
-#define AppVersion "1.2.10"
+#define AppVersion "1.2.11"
 #endif
 
 #define AppName "ERGOMS SECURE CONNECTION"

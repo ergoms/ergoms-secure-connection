@@ -290,9 +290,12 @@ def test_stale_tun_prelude_cmds_only_our_adapter(monkeypatch: pytest.MonkeyPatch
     joined = "\n".join(cmds)
     assert TUN_IFACE_NAME in joined
     assert "netsh interface delete" in joined
-    assert "Remove-NetAdapter" in joined
-    assert "IncludeHidden" in joined
+    assert "EncodedCommand" in joined
     assert "amnezia" not in joined.lower()
+    encoded = next(c.split()[-1] for c in cmds if "EncodedCommand" in c)
+    script = __import__("base64").b64decode(encoded).decode("utf-16le")
+    assert TUN_IFACE_NAME in script
+    assert "Remove-NetAdapter" in script
 
 
 def test_elevated_wrapper_deletes_tun_before_singbox(
@@ -308,7 +311,7 @@ def test_elevated_wrapper_deletes_tun_before_singbox(
         elevated_wrapper_lines(exe, cfg, stale_tun_prelude_cmds(), [])
     )
     assert text.index(TUN_IFACE_NAME) < text.index("run -c")
-    assert "Remove-NetAdapter" in text.split("run -c")[0]
+    assert "EncodedCommand" in text.split("run -c")[0]
 
 
 def test_remove_hidden_tun_logs_when_access_denied(
@@ -364,7 +367,7 @@ def test_wait_ready_extends_on_slow_wintun_not_leftover(
     monkeypatch.setattr("desktop.singbox.readiness.port_open", lambda *_a, **_k: True)
     monkeypatch.setattr("desktop.singbox.readiness.procutil.pid_alive", lambda _pid: True)
     monkeypatch.setattr(
-        "desktop.singbox.readiness.wait_tun_iface", lambda timeout=0.05: None
+        "desktop.singbox.readiness.wait_tun_iface", lambda timeout=0.05: 28
     )
     mgr.tail_log = lambda n=40: [  # type: ignore[method-assign]
         "WARN inbound/tun[tun-in]: open interface take too much time to finish!"
@@ -372,6 +375,33 @@ def test_wait_ready_extends_on_slow_wintun_not_leftover(
     assert mgr._wait_ready(1080, 1088, enable_tun=True, pid=1, timeout=2.0) is False
     assert any("ещё создаёт адаптер" in msg for msg in logs)
     assert not any("leftover" in msg.lower() for msg in logs)
+
+
+def test_wait_ready_aborts_slow_open_without_iface_as_leftover(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from desktop.singbox_mode import SingboxModeManager
+
+    now = [0.0]
+    monkeypatch.setattr("desktop.singbox.readiness.time.monotonic", lambda: now[0])
+    monkeypatch.setattr(
+        "desktop.singbox.readiness.time.sleep",
+        lambda s: now.__setitem__(0, now[0] + 3.0),
+    )
+    logs: list[str] = []
+    mgr = SingboxModeManager(tmp_path, tmp_path, tmp_path, log=logs.append)
+    monkeypatch.setattr("desktop.singbox.readiness.sys.platform", "win32")
+    monkeypatch.setattr("desktop.singbox.readiness.port_open", lambda *_a, **_k: True)
+    monkeypatch.setattr("desktop.singbox.readiness.procutil.pid_alive", lambda _pid: True)
+    monkeypatch.setattr(
+        "desktop.singbox.readiness.wait_tun_iface", lambda timeout=0.05: None
+    )
+    mgr.tail_log = lambda n=40: [  # type: ignore[method-assign]
+        "WARN inbound/tun[tun-in]: open interface take too much time to finish!"
+    ]
+    assert mgr._wait_ready(1080, 1088, enable_tun=True, pid=1, timeout=22.0) is False
+    assert any("leftover" in msg.lower() or "пересоздаю" in msg for msg in logs)
+    assert not any("ещё создаёт адаптер" in msg for msg in logs)
 
 
 def test_wait_ready_conflict_does_not_extend_slow_wintun_grace(
