@@ -70,7 +70,9 @@ def render_unit(*, exe: Path, data: Path, home: str, user: str) -> str:
         "\n"
         "[Service]\n"
         "Type=simple\n"
-        f"WorkingDirectory={systemd_quote(str(work))}\n"
+        # WorkingDirectory= is a literal path. Quotes are not stripped (unlike
+        # ExecStart=/Environment=) and systemd then reports "not absolute".
+        f"WorkingDirectory={work}\n"
         "Environment=PYTHONUNBUFFERED=1\n"
         f"Environment={systemd_quote(f'ERGOMS_SC_DATA={data}')}\n"
         f"Environment={systemd_quote(f'HOME={home}')}\n"

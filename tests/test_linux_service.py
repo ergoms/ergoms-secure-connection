@@ -36,6 +36,11 @@ def test_render_unit_quotes_exec_start(tmp_path: Path, monkeypatch: object) -> N
     assert start.endswith('" watch')
     stop = next(line for line in text.splitlines() if line.startswith("ExecStop="))
     assert stop.endswith('" off')
+    # WorkingDirectory= is a literal path: quotes become part of the value
+    # and systemd then says "path is not absolute".
+    wd = next(line for line in text.splitlines() if line.startswith("WorkingDirectory="))
+    assert wd == f"WorkingDirectory={exe.parent}"
+    assert not wd.startswith('WorkingDirectory="')
 
 
 def test_service_bin_falls_back_when_no_symlink(tmp_path: Path) -> None:
