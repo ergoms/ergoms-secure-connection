@@ -25,6 +25,7 @@ from desktop.net._impl import (  # noqa: F401
     run_leftover_vpn_default_cmds,
     run_route_cmds,
     stale_default_cmds,
+    stale_tun_prelude_cmds,
     tun_iface_cidr,
     tun_owns_default,
     underlay_ifaces,

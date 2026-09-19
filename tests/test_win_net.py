@@ -280,3 +280,115 @@ def test_tun_inbound_ready_ignores_singbox_started_while_wintun_opens(
     assert mgr._tun_log_started() is False
     assert mgr._tun_still_opening() is True
     assert mgr._tun_inbound_ready() is False
+
+
+def test_stale_tun_prelude_cmds_only_our_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
+    from desktop.net._impl import TUN_IFACE_NAME, stale_tun_prelude_cmds
+
+    monkeypatch.setattr("desktop.net._impl.sys.platform", "win32")
+    cmds = stale_tun_prelude_cmds()
+    joined = "\n".join(cmds)
+    assert TUN_IFACE_NAME in joined
+    assert "netsh interface delete" in joined
+    assert "Remove-NetAdapter" in joined
+    assert "IncludeHidden" in joined
+    assert "amnezia" not in joined.lower()
+
+
+def test_elevated_wrapper_deletes_tun_before_singbox(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from desktop.net._impl import TUN_IFACE_NAME, stale_tun_prelude_cmds
+    from desktop.singbox.spawn import elevated_wrapper_lines
+
+    monkeypatch.setattr("desktop.net._impl.sys.platform", "win32")
+    exe = tmp_path / "sing-box.exe"
+    cfg = tmp_path / "config.json"
+    text = "\n".join(
+        elevated_wrapper_lines(exe, cfg, stale_tun_prelude_cmds(), [])
+    )
+    assert text.index(TUN_IFACE_NAME) < text.index("run -c")
+    assert "Remove-NetAdapter" in text.split("run -c")[0]
+
+
+def test_remove_hidden_tun_logs_when_access_denied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from desktop.tun import remove_stale_tun_adapter
+
+    logs: list[str] = []
+    monkeypatch.setattr("desktop.tun.sys.platform", "win32")
+    monkeypatch.setattr("desktop.tun._win_if_index_by_alias", lambda *_a, **_k: None)
+    monkeypatch.setattr("desktop.tun.netsh_has_interface", lambda _name: False)
+    monkeypatch.setattr(
+        "desktop.tun.procutil.run",
+        lambda args, timeout=4: SimpleNamespace(returncode=1),
+    )
+    assert remove_stale_tun_adapter(log=logs.append, hidden=True) is False
+    assert any("нужны права" in msg for msg in logs)
+
+
+def test_remove_hidden_tun_absent_is_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    from desktop.tun import remove_stale_tun_adapter
+
+    logs: list[str] = []
+    monkeypatch.setattr("desktop.tun.sys.platform", "win32")
+    monkeypatch.setattr("desktop.tun._win_if_index_by_alias", lambda *_a, **_k: None)
+    monkeypatch.setattr("desktop.tun.netsh_has_interface", lambda _name: False)
+    monkeypatch.setattr(
+        "desktop.tun.procutil.run",
+        lambda args, timeout=4: SimpleNamespace(returncode=2),
+    )
+    assert remove_stale_tun_adapter(log=logs.append, hidden=True) is True
+    assert not any("нужны права" in msg for msg in logs)
+
+
+def test_wait_ready_extends_on_slow_wintun_not_leftover(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from desktop.singbox_mode import SingboxModeManager
+
+    now = [0.0]
+    monkeypatch.setattr("desktop.singbox.readiness.time.monotonic", lambda: now[0])
+    monkeypatch.setattr(
+        "desktop.singbox.readiness.time.sleep",
+        lambda s: now.__setitem__(0, now[0] + 5.0),
+    )
+    logs: list[str] = []
+    mgr = SingboxModeManager(tmp_path, tmp_path, tmp_path, log=logs.append)
+    monkeypatch.setattr("desktop.singbox.readiness.sys.platform", "win32")
+    monkeypatch.setattr("desktop.singbox.readiness.port_open", lambda *_a, **_k: True)
+    monkeypatch.setattr("desktop.singbox.readiness.procutil.pid_alive", lambda _pid: True)
+    monkeypatch.setattr(
+        "desktop.singbox.readiness.wait_tun_iface", lambda timeout=0.05: None
+    )
+    mgr.tail_log = lambda n=40: [  # type: ignore[method-assign]
+        "WARN inbound/tun[tun-in]: open interface take too much time to finish!"
+    ]
+    assert mgr._wait_ready(1080, 1088, enable_tun=True, pid=1, timeout=2.0) is False
+    assert any("ещё создаёт адаптер" in msg for msg in logs)
+    assert not any("leftover" in msg.lower() for msg in logs)
+
+
+def test_wait_ready_conflict_does_not_extend_slow_wintun_grace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from desktop.singbox_mode import SingboxModeManager
+
+    logs: list[str] = []
+    mgr = SingboxModeManager(tmp_path, tmp_path, tmp_path, log=logs.append)
+    monkeypatch.setattr("desktop.singbox.readiness.sys.platform", "win32")
+    monkeypatch.setattr("desktop.singbox.readiness.port_open", lambda *_a, **_k: True)
+    monkeypatch.setattr("desktop.singbox.readiness.procutil.pid_alive", lambda _pid: True)
+    mgr.tail_log = lambda n=40: [  # type: ignore[method-assign]
+        "WARN inbound/tun[tun-in]: open interface take too much time to finish!",
+        "FATAL start inbound/tun[tun-in]: configure tun interface: "
+        "Cannot create a file when that file already exists.",
+    ]
+    assert mgr._wait_ready(1080, 1088, enable_tun=True, pid=1, timeout=2.0) is False
+    assert any("leftover" in msg.lower() or "пересоздаю" in msg for msg in logs)
+    assert not any("ещё создаёт адаптер" in msg for msg in logs)

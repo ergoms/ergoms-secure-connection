@@ -38,6 +38,7 @@ from desktop.tun import (
     direct_python_paths,
     iface_ipv4s,
     remove_stale_tun_adapter,
+    stale_tun_prelude_cmds,
     tun_iface_cidr,
     tun_iface_name,
 )
@@ -1144,8 +1145,15 @@ class SingboxModeManager:
             remove_stale_tun_adapter(log=self.log, hidden=True)
 
         self._rotate_log()
+        from desktop.singbox.spawn import needs_win_elevation
+
+        tun_clean = (
+            stale_tun_prelude_cmds()
+            if enable_tun and needs_win_elevation(elevate=need_admin)
+            else []
+        )
         fw = self._firewall_cmds(exe) if need_admin and not procutil.is_admin() else []
-        prelude = [*(prelude_cmds or []), *fw]
+        prelude = [*tun_clean, *(prelude_cmds or []), *fw]
         postlude = [c for c in (postlude_cmds or []) if c]
         pid = self._launch(
             exe, elevate=need_admin, prelude_cmds=prelude, postlude_cmds=postlude
@@ -1170,7 +1178,7 @@ class SingboxModeManager:
             # Same log file still has the previous FATAL "already exists" —
             # wait_ready would abort the retry before the new process writes.
             self._rotate_log()
-            time.sleep(1.0)
+            time.sleep(0.2)
             pid = self._launch(
                 exe, elevate=need_admin, prelude_cmds=prelude, postlude_cmds=postlude
             )

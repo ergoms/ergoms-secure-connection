@@ -314,26 +314,64 @@ def _delete_tun_adapter_cmds() -> None:
             continue
 
 
-def _remove_hidden_tun_adapter(*, log: LogFn = noop) -> bool:
-    """Hidden Wintun is invisible to `netsh ipv4` and still blocks CreateAdapter."""
+def _hidden_tun_remove_ps() -> str:
     safe = TUN_IFACE_NAME.replace("'", "''")
-    ps = (
+    return (
         f"$a=Get-NetAdapter -Name '{safe}' -IncludeHidden "
         "-ErrorAction SilentlyContinue; "
         "if(-not $a){ exit 2 }; "
         "$a | Remove-NetAdapter -Confirm:$false"
     )
+
+
+def stale_tun_prelude_cmds() -> list[str]:
+    """Elevated cmd.exe lines: drop leftover Wintun before CreateAdapter.
+
+    Non-admin `remove_stale_tun_adapter` cannot delete an admin-owned NIC;
+    these run in the UAC wrapper immediately before `sing-box run`.
+    """
+    if sys.platform != "win32":
+        return []
+    name = TUN_IFACE_NAME
+    return [
+        f"netsh interface set interface name={name} admin=disabled",
+        f"netsh interface delete interface name={name}",
+        "powershell -NoProfile -NonInteractive -Command "
+        f'"{_hidden_tun_remove_ps()}"',
+    ]
+
+
+def _remove_hidden_tun_adapter(*, log: LogFn = noop) -> bool:
+    """Hidden Wintun is invisible to `netsh ipv4` and still blocks CreateAdapter.
+
+    True if the adapter is gone (removed or never listed). False if a leftover
+    may still block CreateAdapter (typically Access denied without elevation).
+    """
     try:
         r = procutil.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+            [
+                "powershell",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                _hidden_tun_remove_ps(),
+            ],
             timeout=4,
         )
-    except OSError:
+    except OSError as exc:
+        log(f"не удалось снять скрытый TUN «{TUN_IFACE_NAME}»: {exc}")
         return False
-    if getattr(r, "returncode", 1) != 0:
-        return False
-    log(f"убираю скрытый TUN «{TUN_IFACE_NAME}»")
-    return True
+    rc = int(getattr(r, "returncode", 1) or 0)
+    if rc == 0:
+        log(f"убираю скрытый TUN «{TUN_IFACE_NAME}»")
+        return True
+    if rc == 2:
+        return True
+    log(
+        f"не удалось снять скрытый TUN «{TUN_IFACE_NAME}» "
+        f"(код {rc}) — нужны права"
+    )
+    return False
 
 
 def _linux_tun_iface_present() -> bool:
@@ -374,6 +412,7 @@ def remove_stale_tun_adapter(*, log: LogFn = noop, hidden: bool = False) -> bool
     listed = idx is not None
     if not listed and hidden:
         listed = netsh_has_interface(TUN_IFACE_NAME)
+    hidden_ok = True
     if idx:
         log(f"убираю зависший TUN «{TUN_IFACE_NAME}» if={idx}")
         _delete_tun_adapter_cmds()
@@ -381,7 +420,7 @@ def remove_stale_tun_adapter(*, log: LogFn = noop, hidden: bool = False) -> bool
         log(f"убираю зависший TUN «{TUN_IFACE_NAME}» (без IPv4)")
         _delete_tun_adapter_cmds()
     elif hidden:
-        _remove_hidden_tun_adapter(log=log)
+        hidden_ok = _remove_hidden_tun_adapter(log=log)
     else:
         return False
     deadline = time.monotonic() + 8.0
@@ -391,11 +430,16 @@ def remove_stale_tun_adapter(*, log: LogFn = noop, hidden: bool = False) -> bool
         time.sleep(0.15)
     still = _win_if_index_by_alias(TUN_IFACE_NAME, require_up=False) is not None
     if hidden and still:
-        _remove_hidden_tun_adapter(log=log)
+        hidden_ok = _remove_hidden_tun_adapter(log=log)
         still = _win_if_index_by_alias(TUN_IFACE_NAME, require_up=False) is not None
     if still:
         log(f"TUN «{TUN_IFACE_NAME}» ещё в системе — CreateAdapter может не успеть")
-    return not still
+    elif not hidden_ok:
+        log(
+            f"скрытый TUN «{TUN_IFACE_NAME}» не снят — "
+            "CreateAdapter может не успеть"
+        )
+    return not still and hidden_ok
 
 
 def underlay_ifaces() -> list[tuple[int, int, str]]:

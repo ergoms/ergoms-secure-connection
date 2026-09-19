@@ -170,6 +170,7 @@ def test_kill_switch_already_applied_skips_ipv6_and_leak(
     logs: list[str] = []
     called: list[str] = []
     monkeypatch.setattr("desktop.killswitch._impl.is_applied", lambda force=False: True)
+    monkeypatch.setattr("desktop.killswitch._impl.is_sealed", lambda force=False: True)
     monkeypatch.setattr("desktop.killswitch._impl.underlay_gateway", lambda _ip: "192.168.0.1")
     monkeypatch.setattr("desktop.killswitch._impl._iface_index_win", lambda _ip: 19)
     monkeypatch.setattr("desktop.killswitch._impl._update_state", lambda *_a, **_k: {})
@@ -192,6 +193,42 @@ def test_kill_switch_already_applied_skips_ipv6_and_leak(
     assert any("leftover чёрные /1" in msg for msg in logs)
     assert any("маршруты уже стоят" in msg for msg in logs)
     assert called == []
+
+
+def test_kill_switch_leftover_blackhole_skips_reinstall_when_vps_pinned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from desktop.kill_switch import apply
+
+    logs: list[str] = []
+    called: list[str] = []
+    monkeypatch.setattr("desktop.killswitch._impl.is_applied", lambda force=False: False)
+    monkeypatch.setattr("desktop.killswitch._impl.is_sealed", lambda force=False: True)
+    monkeypatch.setattr(
+        "desktop.killswitch._impl._hosts_in_route_table", lambda hosts, text=None: True
+    )
+    monkeypatch.setattr("desktop.killswitch._impl.underlay_gateway", lambda _ip: "192.168.0.1")
+    monkeypatch.setattr("desktop.killswitch._impl._iface_index_win", lambda _ip: 19)
+    monkeypatch.setattr("desktop.killswitch._impl._update_state", lambda *_a, **_k: {})
+    monkeypatch.setattr("desktop.killswitch._impl.forget_host_commands", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        "desktop.killswitch._impl._host_open",
+        lambda *_a, **_k: called.append("host_open") or True,
+    )
+    monkeypatch.setattr(
+        "desktop.killswitch._impl.install_commands",
+        lambda *_a, **_k: called.append("install") or [],
+    )
+    monkeypatch.setattr(
+        "desktop.killswitch._impl.lift_ipv4_blackholes",
+        lambda **_k: called.append("lift"),
+    )
+    apply(["203.0.113.10"], var_dir=tmp_path, log=logs.append, blackhole=False)
+    assert "lift" in called
+    assert "host_open" not in called
+    assert "install" not in called
+    assert any("leftover чёрные /1" in msg for msg in logs)
+    assert any("полный reinstall не нужен" in msg for msg in logs)
 
 
 def test_choose_dial_defaults_and_office_choice() -> None:

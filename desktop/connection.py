@@ -230,9 +230,6 @@ class ConnectionOps:
             suppress_underlay_ipv6(
                 var_dir=self.paths.var_dir, tun_idx=idx, log=self.log
             )
-        pin_kill_switch_underlay(
-            allow, var_dir=self.paths.var_dir, log=self.log, elevate=False
-        )
         from desktop.leak_shield import apply as apply_leak_shield
 
         try:

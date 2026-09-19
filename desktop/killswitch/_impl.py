@@ -150,6 +150,13 @@ def _route_table_text() -> str:
     return _linux_route_text()
 
 
+def _hosts_in_route_table(hosts: list[str], text: str | None = None) -> bool:
+    if not hosts:
+        return False
+    blob = text if text is not None else _route_table_text()
+    return any(ip in blob for ip in hosts)
+
+
 def _gateway_win(dest: str) -> str | None:
     text = _route_print_win()
     if not text:
@@ -704,10 +711,14 @@ def apply(
     """Pin VPS/Squid. IPv4 loopback /1 only when blackhole=True (fail-closed)."""
     unique = list(dict.fromkeys(allow))
     drop = list(dict.fromkeys(ip for ip in (forget or []) if ip and ip not in unique))
-    if not blackhole and is_applied():
+    if not blackhole and is_sealed():
         log("kill switch: leftover чёрные /1 — снимаю, чтобы TUN владел default")
         lift_ipv4_blackholes(log=log)
-    if is_applied() and not blackhole:
+    applied = False if blackhole else is_applied()
+    host_ok = (not blackhole) and (not applied) and bool(unique) and _hosts_in_route_table(
+        unique
+    )
+    if not blackhole and (applied or host_ok):
         hop = underlay_gateway(unique[0]) if unique else underlay_gateway("")
         idx = _iface_index_win(unique[0]) if sys.platform == "win32" and unique else None
         _update_state(
@@ -720,7 +731,10 @@ def apply(
                 _run_lines_now(drop_cmds, ignore_fail=True)
             else:
                 _run_privileged_lines(drop_cmds, log=log, ignore_fail=True)
-        log("kill switch: маршруты уже стоят")
+        if applied:
+            log("kill switch: маршруты уже стоят")
+        else:
+            log("kill switch: VPS /32 на месте — полный reinstall не нужен")
         return True
     gw = underlay_gateway(unique[0]) if unique else underlay_gateway("")
     idx = _iface_index_win(unique[0]) if sys.platform == "win32" and unique else None

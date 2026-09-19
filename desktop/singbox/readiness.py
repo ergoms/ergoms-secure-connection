@@ -92,7 +92,12 @@ def wait_ready(
                 kind = "mixed + TUN" if enable_tun else "mixed"
                 log(f"sing-box слушает SOCKS :{socks_port} и HTTP :{http_port} ({kind})")
                 return True
-            if enable_tun and not extended and tun_still_opening(lines):
+            if (
+                enable_tun
+                and not extended
+                and tun_still_opening(lines)
+                and not tun_create_conflict(lines)
+            ):
                 deadline = max(deadline, time.monotonic() + 15.0)
                 extended = True
                 log("Wintun ещё создаёт адаптер — жду, процесс не убиваю")

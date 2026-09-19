@@ -295,7 +295,7 @@ class ProbeOps:
             self.log("TUN владеет default: " + " | ".join(rows[:2]))
             return
         if procutil.is_admin():
-            self.log("TUN auto_route не поставил /1 — ставлю сам")
+            self.log("TUN /1 пропал после kill switch — ставлю снова")
             reclaim_tun_default()
             rows = tun_split_rows()
             if tun_owns_default(rows):

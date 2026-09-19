@@ -68,6 +68,22 @@ class NormalSpawn:
         return int(proc.pid)
 
 
+def elevated_wrapper_lines(
+    exe: Path, config: Path, prelude: list[str], postlude: list[str]
+) -> list[str]:
+    """cmd.exe lines for UAC: prelude (incl. leftover TUN delete) then sing-box."""
+    lines = ["@echo off"]
+    for cmd in prelude:
+        lines.append(f"{cmd} 2>nul")
+    if postlude:
+        delayed = "timeout /t 2 /nobreak >nul"
+        for cmd in postlude:
+            delayed += f" & {cmd} 2>nul"
+        lines.append(f'start "ergoms-pin" /b cmd /c "{delayed}"')
+    lines.append(f'"{exe}" run -c "{config}"')
+    return lines
+
+
 class WinElevatedSpawn:
     def start(
         self,
@@ -82,15 +98,7 @@ class WinElevatedSpawn:
 
         if prelude or postlude:
             wrapper = var_dir / "sing-box-elevated.cmd"
-            lines = ["@echo off"]
-            for cmd in prelude:
-                lines.append(f"{cmd} 2>nul")
-            if postlude:
-                delayed = "timeout /t 2 /nobreak >nul"
-                for cmd in postlude:
-                    delayed += f" & {cmd} 2>nul"
-                lines.append(f'start "ergoms-pin" /b cmd /c "{delayed}"')
-            lines.append(f'"{exe}" run -c "{config}"')
+            lines = elevated_wrapper_lines(exe, config, prelude, postlude)
             wrapper.write_text("\r\n".join(lines) + "\r\n", encoding="utf-8")
             file, params, cwd = str(wrapper), "", str(var_dir)
         else:
