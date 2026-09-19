@@ -326,7 +326,7 @@ def _remove_hidden_tun_adapter(*, log: LogFn = noop) -> bool:
     try:
         r = procutil.run(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
-            timeout=12,
+            timeout=4,
         )
     except OSError:
         return False
@@ -389,9 +389,10 @@ def remove_stale_tun_adapter(*, log: LogFn = noop, hidden: bool = False) -> bool
         if _win_if_index_by_alias(TUN_IFACE_NAME, require_up=False) is None:
             break
         time.sleep(0.15)
-    if hidden:
-        _remove_hidden_tun_adapter(log=log)
     still = _win_if_index_by_alias(TUN_IFACE_NAME, require_up=False) is not None
+    if hidden and still:
+        _remove_hidden_tun_adapter(log=log)
+        still = _win_if_index_by_alias(TUN_IFACE_NAME, require_up=False) is not None
     if still:
         log(f"TUN «{TUN_IFACE_NAME}» ещё в системе — CreateAdapter может не успеть")
     return not still

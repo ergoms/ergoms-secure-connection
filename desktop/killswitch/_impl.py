@@ -524,12 +524,12 @@ def _set_ipv6_binding(
                     "-Command",
                     f"{verb} -Name {joined} -ComponentID ms_tcpip6",
                 ],
-                timeout=15,
+                timeout=8,
             )
         except OSError:
             for name in clean:
                 try:
-                    procutil.run(_ipv6_binding_args(name, enable=enable), timeout=15)
+                    procutil.run(_ipv6_binding_args(name, enable=enable), timeout=8)
                 except OSError:
                     continue
         return
@@ -541,9 +541,10 @@ def _set_ipv6_binding(
 
 
 def suppress_underlay_ipv6(
-    *, var_dir: Path, tun_idx: int = 0, log: LogFn = noop
+    *, var_dir: Path, tun_idx: int = 0, log: LogFn = noop, underlay: bool = False
 ) -> None:
-    """Unbind IPv6 on Ethernet and TUN. netsh admin=disabled is not valid here.
+    """Unbind IPv6 on TUN. Underlay NIC stays up — Disable-NetAdapterBinding
+    on Ethernet freezes the whole desktop while the stack rebinds.
 
     TUN IPv6 metric 5 + fec0:: DNS made Windows resolve over a dead IPv6 stack
     while YouTube/Google return AAAA. Chrome waited on that timeout.
@@ -558,10 +559,11 @@ def suppress_underlay_ipv6(
     )
 
     names: list[str] = []
-    for _idx, _met, name in underlay_ifaces():
-        if is_virtual_underlay(name):
-            continue
-        names.append(name)
+    if underlay:
+        for _idx, _met, name in underlay_ifaces():
+            if is_virtual_underlay(name):
+                continue
+            names.append(name)
     tun = int(tun_idx or 0) or int(win_if_index_by_alias(TUN_IFACE_NAME) or 0)
     if tun and TUN_IFACE_NAME not in names:
         names.append(TUN_IFACE_NAME)
@@ -576,8 +578,9 @@ def suppress_underlay_ipv6(
     ]
     if to_disable:
         _set_ipv6_binding(to_disable, enable=False, log=log)
-    st["ipv6_disabled_names"] = [n for n in names if n != TUN_IFACE_NAME]
-    _save_state(var_dir, st)
+    if underlay:
+        st["ipv6_disabled_names"] = [n for n in names if n != TUN_IFACE_NAME]
+        _save_state(var_dir, st)
     if to_disable:
         log("kill switch: IPv6 выкл на " + ", ".join(to_disable))
 

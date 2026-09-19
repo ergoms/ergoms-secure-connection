@@ -478,6 +478,8 @@ def test_settings_defaults_match_template_ports() -> None:
     assert defaults["serverSocks"] == str(tmpl["server"]["local_socks_port"])
     assert defaults["trDial"] == normalize_dial(tmpl["transport"]["dial"])
     assert defaults["awgPort"] == str(tmpl["transport"]["amneziawg"]["port"])
+    assert defaults["directRu"] is False
+    assert tmpl["direct_ru"] is False
 
 
 def test_settings_map_roundtrip_preserves_transport() -> None:

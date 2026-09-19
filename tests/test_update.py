@@ -207,4 +207,4 @@ def test_apply_downloaded_windows_setup(tmp_path: Path, monkeypatch: object) -> 
     assert called
     assert called[0][0] == str(setup)
     assert "/SILENT" in called[0]
-    assert "/MERGETASKS=removeold,!wipeconfigs" in called[0]
+    assert "/MERGETASKS=!wipeconfigs" in called[0]

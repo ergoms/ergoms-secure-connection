@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from desktop.config_io import (
+    effective_proxy_bypass,
     get_http_bridge_port,
     get_kill_switch,
     get_local_socks_port,
@@ -92,7 +93,7 @@ def resolve_connect_plan(
     tun_deferred = False
     start_tun = enable_tun
     start_ks = ks and not ks_deferred
-    bypass = [str(h) for h in cfg.get("proxy_bypass") or [] if h]
+    bypass = effective_proxy_bypass(cfg)
     if not bypass:
         bypass = ["*.local", "*.lan"]
     vpn_hosts = [str(h) for h in cfg.get("blocked_hosts") or [] if h]

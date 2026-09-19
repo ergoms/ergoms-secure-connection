@@ -136,6 +136,24 @@ def test_resolve_connect_plan_six_combos(
     assert plan.tun_wanted is (tun or ks)
 
 
+def test_resolve_connect_plan_direct_ru_appends_star_ru(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "desktop.lifecycle.plan.kill_switch_allow_ips",
+        lambda *hosts: [str(h) for h in hosts],
+    )
+    cfg = _cfg(office=False, dial="amneziawg", tun=True, ks=True)
+    off = resolve_connect_plan(cfg, platform="win32")
+    assert "*.ru" not in off.bypass
+    cfg["direct_ru"] = True
+    on = resolve_connect_plan(cfg, platform="win32")
+    assert on.bypass[-1] == "*.ru"
+    cfg["proxy_bypass"] = ["*.local", "*.ru"]
+    again = resolve_connect_plan(cfg, platform="win32")
+    assert again.bypass.count("*.ru") == 1
+
+
 class _FakeSingbox:
     def __init__(self) -> None:
         self.alive = False

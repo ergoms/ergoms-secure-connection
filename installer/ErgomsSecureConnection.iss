@@ -1,5 +1,5 @@
 #ifndef AppVersion
-#define AppVersion "1.2.9"
+#define AppVersion "1.2.10"
 #endif
 
 #define AppName "ERGOMS SECURE CONNECTION"
@@ -37,7 +37,6 @@ Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "removeold"; Description: "Удалить предыдущую версию"; GroupDescription: "Обновление:"; Flags: checkedonce; Check: HasPreviousInstall
 Name: "wipeconfigs"; Description: "Удалить сохранённые конфиги"; GroupDescription: "Обновление:"; Flags: unchecked; Check: HasUserData
 Name: "desktopicon"; Description: "Ярлык на рабочем столе"; GroupDescription: "Дополнительно:"; Flags: checkedonce
 Name: "autostart"; Description: "Автозапуск при входе в Windows"; GroupDescription: "Дополнительно:"; Flags: unchecked
@@ -291,7 +290,7 @@ end;
 
 function WantRemoveOld(): Boolean;
 begin
-  Result := WizardIsTaskSelected('removeold') and HasPreviousInstall();
+  Result := HasPreviousInstall();
 end;
 
 function WantWipeConfigs(): Boolean;
@@ -363,9 +362,7 @@ begin
   Result := '';
   if WantRemoveOld() then
     Result := Result + 'Удаление предыдущей версии' + NewLine +
-      Space + 'Сначала в этом окне пойдёт удаление, затем установка.' + NewLine + NewLine
-  else if GetUninstallString() <> '' then
-    Result := Result + 'Предыдущая версия не удаляется — файлы будут обновлены.' + NewLine + NewLine;
+      Space + 'Сначала в этом окне пойдёт удаление, затем установка.' + NewLine + NewLine;
   if WantWipeConfigs() then
     Result := Result + 'Сохранённые конфиги будут удалены.' + NewLine + NewLine
   else if HasUserData() then

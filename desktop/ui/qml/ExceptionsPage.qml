@@ -56,6 +56,31 @@ Item {
 
                 Card {
                     width: parent.width
+                    implicitHeight: ruBox.implicitHeight + 28
+                    Column {
+                        id: ruBox
+                        width: parent.width - 28
+                        x: 14
+                        y: 14
+                        spacing: 6
+                        BoolSegmented {
+                            label: "Все .ru без VPN"
+                            on: Boolean(bridge.settings.directRu)
+                            onToggled: (v) => { bridge.settings.directRu = v }
+                        }
+                        Text {
+                            width: parent.width
+                            text: "Сайты в зоне .ru идут мимо туннеля. По умолчанию выключено."
+                            color: T.muted
+                            font.pixelSize: 11
+                            font.family: T.fontUi
+                            wrapMode: Text.WordWrap
+                        }
+                    }
+                }
+
+                Card {
+                    width: parent.width
                     implicitHeight: directEd.implicitHeight + 28
                     ExceptionEditor {
                         id: directEd

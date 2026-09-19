@@ -35,6 +35,7 @@ def settings_defaults() -> dict[str, Any]:
         "socksScope": app.socks_scope,
         "tunAuto": app.tun.enabled,
         "killSwitch": app.kill_switch,
+        "directRu": app.direct_ru,
         "rustdesk": app.rustdesk,
         "gitProxy": app.git_proxy,
         "gitVia": app.git_via,
@@ -94,6 +95,7 @@ def cfg_to_settings(cfg: dict[str, Any]) -> dict[str, Any]:
             "socksScope": str(cfg.get("socks_scope") or "full"),
             "tunAuto": bool(tun.get("enabled")),
             "killSwitch": bool(cfg.get("kill_switch", True)),
+            "directRu": bool(cfg.get("direct_ru", False)),
             "rustdesk": bool(cfg.get("rustdesk", False)),
             "gitProxy": True,
             "gitVia": "tun",
@@ -254,6 +256,7 @@ def apply_settings_to_cfg(
     if corporate:
         cfg["proxy_bypass_via"] = "direct"
     cfg["kill_switch"] = bool(get("killSwitch"))
+    cfg["direct_ru"] = bool(get("directRu"))
     cfg["rustdesk"] = bool(get("rustdesk"))
     cfg["git_proxy"] = True
     cfg["git_via"] = "tun"

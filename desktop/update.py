@@ -22,7 +22,7 @@ from desktop.paths import gui_command, is_frozen
 DEFAULT_GITHUB_REPO = "ergoms/ergoms-secure-connection"
 WIN_ASSET_SUFFIX = "windows-x64-setup.exe"
 LINUX_ASSET_SUFFIX = "linux-x64.tar.gz"
-INNO_SILENT_ARGS = ("/SILENT", "/NORESTART", "/MERGETASKS=removeold,!wipeconfigs")
+INNO_SILENT_ARGS = ("/SILENT", "/NORESTART", "/MERGETASKS=!wipeconfigs")
 _GITHUB_JSON = "application/vnd.github+json"
 
 

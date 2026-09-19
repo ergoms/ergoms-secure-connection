@@ -119,6 +119,7 @@ nano ~/.local/share/ergoms-secure-connection/config.json
 | `socks_scope` | `full` или `github` (область PAC) |
 | `tun.enabled` / `tun.elevate` | TUN вместе с `on` (по умолчанию вкл.), запрос прав |
 | `kill_switch` | при обрыве резать интернет (по умолчанию вкл.; нужен TUN) |
+| `direct_ru` | все сайты `.ru` мимо VPN (по умолчанию выкл.) |
 | `git_proxy` / `git_via` | git через VPN: выкл / `http` (мост :1088) / `tun`. В корпоративном пресете вкл. и `tun` |
 | `docker_proxy` | проксировать Docker Desktop / CLI через VPN (в корпоративном пресете вкл., иначе выкл.) |
 | `corporate_proxy` | корпоративный Squid |

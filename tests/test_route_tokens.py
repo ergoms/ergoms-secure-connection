@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from desktop.config.model import default_config_template
+from desktop.config_io import default_config_template, effective_proxy_bypass
 from desktop.route_analyzer import analyze_token
 from desktop.route_tokens import (
     KIND_DOMAIN,
@@ -124,6 +124,20 @@ def test_settings_route_json_roundtrip() -> None:
     out = apply_settings_to_cfg(default_config_template(), get, corporate=False)
     assert "exe:slack.exe" in out["proxy_bypass"]
     assert "1.1.1.1" in out["blocked_hosts"]
+    assert out["direct_ru"] is False
+    settings["directRu"] = True
+    ru = apply_settings_to_cfg(default_config_template(), get, corporate=False)
+    assert ru["direct_ru"] is True
+    assert "*.ru" not in ru["proxy_bypass"]
+
+
+def test_effective_proxy_bypass_direct_ru_default_off() -> None:
+    cfg = default_config_template()
+    assert effective_proxy_bypass(cfg) == list(cfg["proxy_bypass"])
+    cfg["direct_ru"] = True
+    assert effective_proxy_bypass(cfg)[-1] == "*.ru"
+    cfg["proxy_bypass"] = ["*.local", "*.ru"]
+    assert effective_proxy_bypass(cfg) == ["*.local", "*.ru"]
 
 
 def test_tokens_json_empty() -> None:

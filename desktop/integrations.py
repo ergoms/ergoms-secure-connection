@@ -11,6 +11,7 @@ from typing import Any
 from desktop import procutil
 from desktop.client_util import find_pythonw, pid_from_file, wait_port
 from desktop.config_io import (
+    effective_proxy_bypass,
     get_docker_proxy_enabled,
     get_git_proxy_enabled,
     get_kill_switch,
@@ -48,7 +49,7 @@ class IntegrationOps:
         seen: set[str] = set()
         from desktop.route_tokens import is_host_pattern
 
-        for h in cfg.get("proxy_bypass") or []:
+        for h in effective_proxy_bypass(cfg):
             if not h or not is_host_pattern(str(h)):
                 continue
             k = str(h).lower()
@@ -110,7 +111,7 @@ class IntegrationOps:
         enable_browser_pac(
             http_port,
             self._pac_mode(cfg),
-            len(cfg.get("proxy_bypass") or []),
+            len(effective_proxy_bypass(cfg)),
             self.paths.proxy_backup,
             log=self.log,
             pac_url=pac_url,
@@ -317,7 +318,7 @@ class IntegrationOps:
         http_port = get_http_bridge_port()
         from desktop.route_tokens import host_patterns
 
-        bypass = host_patterns(cfg.get("proxy_bypass") or [])
+        bypass = host_patterns(effective_proxy_bypass(cfg))
         override = proxy_override_list(bypass)
         if static_proxy_active(http_port, override):
             return
@@ -507,7 +508,7 @@ class IntegrationOps:
             self.stop_pac_server()
             from desktop.route_tokens import host_patterns
 
-            bypass = host_patterns(cfg.get("proxy_bypass") or [])
+            bypass = host_patterns(effective_proxy_bypass(cfg))
             enable_browser_static_proxy(
                 http_port,
                 bypass,

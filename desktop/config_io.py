@@ -18,6 +18,7 @@ from desktop.config.constants import (
     AWG_DEFAULT_PORT,
     CORPORATE_BYPASS_PRESET,
     CORPORATE_PROXY_PRESET,
+    DIRECT_RU_TOKEN,
     REALITY_DEFAULT_SNI,
     STANDARD_BYPASS_PRESET,
     TUN_MTU_MAX,
@@ -540,6 +541,7 @@ def apply_corporate_profile(cfg: dict[str, Any]) -> dict[str, Any]:
     if not out.get("proxy_bypass"):
         out["proxy_bypass"] = list(CORPORATE_BYPASS_PRESET)
     out.setdefault("proxy_bypass_via", "direct")
+    out.setdefault("direct_ru", False)
     return out
 
 
@@ -552,6 +554,7 @@ def apply_standard_profile(cfg: dict[str, Any]) -> dict[str, Any]:
     if not out.get("proxy_bypass"):
         out["proxy_bypass"] = list(STANDARD_BYPASS_PRESET)
     out.setdefault("proxy_bypass_via", "direct")
+    out.setdefault("direct_ru", False)
     return out
 
 
@@ -754,6 +757,26 @@ def get_tun_enabled(cfg: dict[str, Any] | None = None) -> bool:
 
 def get_kill_switch(cfg: dict[str, Any] | None = None) -> bool:
     return _app(cfg).kill_switch
+
+
+def get_direct_ru(cfg: dict[str, Any] | None = None) -> bool:
+    return _app(cfg).direct_ru
+
+
+def _has_all_ru(items: list[str]) -> bool:
+    return any(str(raw).strip().lower() in ("*.ru", ".ru") for raw in items)
+
+
+def effective_proxy_bypass(cfg: dict[str, Any] | None = None) -> list[str]:
+    """proxy_bypass plus optional `*.ru` when direct_ru is on (default off)."""
+    items = [
+        str(h).strip()
+        for h in ((cfg or {}).get("proxy_bypass") or [])
+        if str(h).strip()
+    ]
+    if not get_direct_ru(cfg) or _has_all_ru(items):
+        return items
+    return [*items, DIRECT_RU_TOKEN]
 
 
 def get_rustdesk_enabled(cfg: dict[str, Any] | None = None) -> bool:

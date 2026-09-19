@@ -21,6 +21,8 @@ ergoms-sc install-service # автозапуск (systemd)
 nano ~/.local/share/ergoms-secure-connection/config.json
 ```
 
+`direct_ru` (по умолчанию `false`): все сайты в зоне `.ru` мимо VPN.
+
 `ergoms-sc` запускайте без sudo — иначе файл появится у root.
 
 Снять:

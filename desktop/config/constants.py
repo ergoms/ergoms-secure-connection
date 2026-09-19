@@ -5,6 +5,7 @@ from __future__ import annotations
 CORPORATE_PROXY_PRESET = ""
 CORPORATE_BYPASS_PRESET = ["*.local", "*.lan"]
 STANDARD_BYPASS_PRESET = ["*.local", "*.lan"]
+DIRECT_RU_TOKEN = "*.ru"
 
 REALITY_DEFAULT_SNI = "www.cloudflare.com"
 AWG_DEFAULT_PORT = 51820

@@ -273,6 +273,7 @@ class AppConfig:
     watchdog_interval: int = WATCHDOG_INTERVAL
     watchdog_max_retries: int = WATCHDOG_MAX_RETRIES
     kill_switch: bool = True
+    direct_ru: bool = False
     rustdesk: bool = False
     git_proxy: bool = True
     git_via: str = "tun"
@@ -305,6 +306,7 @@ class AppConfig:
         self.watchdog_interval = max(5, as_int(self.watchdog_interval, WATCHDOG_INTERVAL))
         self.watchdog_max_retries = max(0, as_int(self.watchdog_max_retries, WATCHDOG_MAX_RETRIES))
         self.kill_switch = as_bool(self.kill_switch, True)
+        self.direct_ru = as_bool(self.direct_ru, False)
         self.rustdesk = as_bool(self.rustdesk, False)
         self.git_proxy = as_bool(self.git_proxy, True)
         self.git_via = normalize_git_via(self.git_via) if self.git_via else "tun"
@@ -339,6 +341,7 @@ class AppConfig:
             watchdog_interval=as_int(data.get("watchdog_interval"), WATCHDOG_INTERVAL),
             watchdog_max_retries=as_int(data.get("watchdog_max_retries"), WATCHDOG_MAX_RETRIES),
             kill_switch=as_bool(data.get("kill_switch"), True),
+            direct_ru=as_bool(data.get("direct_ru"), False),
             rustdesk=as_bool(data.get("rustdesk"), False) if "rustdesk" in data else False,
             git_proxy=as_bool(data.get("git_proxy"), True) if git_present else True,
             git_via=normalize_git_via(data.get("git_via")) if git_via_present else "tun",

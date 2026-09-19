@@ -110,7 +110,30 @@ def test_ipv6_suppress_includes_tun() -> None:
     assert "Enable-NetAdapterBinding" in enable[-1]
     import inspect
 
-    assert "tun_idx" in inspect.signature(suppress_underlay_ipv6).parameters
+    sig = inspect.signature(suppress_underlay_ipv6)
+    assert "tun_idx" in sig.parameters
+    assert sig.parameters["underlay"].default is False
+
+
+def test_ipv6_suppress_skips_ethernet_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from desktop.kill_switch import suppress_underlay_ipv6
+    from desktop.tun import TUN_IFACE_NAME
+
+    called: list[list[str]] = []
+    monkeypatch.setattr("desktop.killswitch._impl.sys.platform", "win32")
+    monkeypatch.setattr(
+        "desktop.killswitch._impl._set_ipv6_binding",
+        lambda names, enable=False, log=None: called.append(list(names)),
+    )
+    monkeypatch.setattr("desktop.tun.win_if_index_by_alias", lambda *_a, **_k: 39)
+    monkeypatch.setattr(
+        "desktop.tun.underlay_ifaces", lambda: [(19, 25, "Ethernet 2")]
+    )
+    monkeypatch.setattr("desktop.tun.is_virtual_underlay", lambda _n: False)
+    suppress_underlay_ipv6(var_dir=tmp_path, tun_idx=39, log=lambda _m: None)
+    assert called == [[TUN_IFACE_NAME]]
 
 
 def test_win_kill_switch_blackhole_is_onlink_loopback() -> None:
