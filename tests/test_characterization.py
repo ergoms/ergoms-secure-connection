@@ -171,7 +171,13 @@ def test_build_config_office_vless_via_squid() -> None:
     rules = box["route"]["rules"]
     priv = next(i for i, r in enumerate(rules) if r.get("ip_is_private"))
     hijack = next(i for i, r in enumerate(rules) if r.get("action") == "hijack-dns")
-    assert priv < hijack
+    assert hijack < priv
+    assert box["dns"]["final"] == "dns-local"
+    assert any(
+        r.get("server") == "dns-proxy" and "github.com" in (r.get("domain") or [])
+        for r in box["dns"]["rules"]
+    )
+    assert any(r.get("domain_regex") == "^[^.]+$" for r in box["dns"]["rules"])
 
 
 def test_office_tun_mtu_and_sniff_are_ssh_friendly() -> None:
@@ -200,6 +206,7 @@ def test_build_config_home_vless_with_tun() -> None:
     types = [ob["type"] for ob in box["outbounds"]]
     assert "vless" in types
     assert "http" not in types
+    assert box["dns"]["final"] == "dns-proxy"
     rustdesk = _rustdesk_rules(box)
     assert rustdesk
     sniff_idx = next(

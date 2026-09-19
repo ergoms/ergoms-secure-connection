@@ -16,6 +16,7 @@ from desktop.config.constants import (
     AWG_DEFAULT_ADDRESS,
     AWG_DEFAULT_MTU,
     AWG_DEFAULT_PORT,
+    BLOCKED_HOSTS,
     REALITY_DEFAULT_SNI,
     TUN_DEFAULT_MTU,
     TUN_MTU_MAX,
@@ -26,6 +27,7 @@ from desktop.logutil import noop
 from desktop.net_host import resolve_host
 from desktop.proc_net import resolve_service_image
 from desktop.route_tokens import parse_routes, process_matchers
+from lib.pac import bypass_to_singbox
 from desktop.rustdesk_opt import rustdesk_tun_lan_reject_rules
 from desktop.singbox.binaries import SingboxBinaries
 from desktop.sys.constants import SINGBOX_PROCESS_NAMES
@@ -41,7 +43,6 @@ from desktop.tun import (
 )
 
 _direct_python_paths = direct_python_paths
-from lib.pac import bypass_to_singbox
 
 LogFn = Callable[[str], None]
 
@@ -162,13 +163,14 @@ def dial_label(dial: str) -> str:
     return "VLESS+Reality"
 
 
-def _dns_v12(
+def _dns_lookup_rules(
     *,
     docker_wsl_procs: list[str] | None = None,
     bypass_suffixes: list[str] | None = None,
     bypass_domains: list[str] | None = None,
-) -> dict[str, Any]:
-    """sing-box 1.12+ DNS (AWG fork). Official 1.11 still uses address: https://..."""
+    vpn_suffixes: list[str] | None = None,
+    vpn_domains: list[str] | None = None,
+) -> list[dict[str, Any]]:
     rules: list[dict[str, Any]] = []
     if docker_wsl_procs:
         rules.append({"process_name": docker_wsl_procs, "server": "dns-local"})
@@ -182,6 +184,25 @@ def _dns_v12(
             "server": "dns-local",
         }
     )
+    # Host aliases like `lab` must not go to public DoH (Remote-SSH).
+    rules.append({"domain_regex": "^[^.]+$", "server": "dns-local"})
+    if vpn_suffixes:
+        rules.append({"domain_suffix": vpn_suffixes, "server": "dns-proxy"})
+    if vpn_domains:
+        rules.append({"domain": vpn_domains, "server": "dns-proxy"})
+    return rules
+
+
+def _dns_v12(
+    *,
+    docker_wsl_procs: list[str] | None = None,
+    bypass_suffixes: list[str] | None = None,
+    bypass_domains: list[str] | None = None,
+    vpn_suffixes: list[str] | None = None,
+    vpn_domains: list[str] | None = None,
+    local_final: bool = False,
+) -> dict[str, Any]:
+    """sing-box 1.12+ DNS (AWG fork). Official 1.11 still uses address: https://..."""
     return {
         "servers": [
             {
@@ -197,8 +218,14 @@ def _dns_v12(
                 "detour": "direct",
             },
         ],
-        "rules": rules,
-        "final": "dns-proxy",
+        "rules": _dns_lookup_rules(
+            docker_wsl_procs=docker_wsl_procs,
+            bypass_suffixes=bypass_suffixes,
+            bypass_domains=bypass_domains,
+            vpn_suffixes=vpn_suffixes,
+            vpn_domains=vpn_domains,
+        ),
+        "final": "dns-local" if local_final else "dns-proxy",
         "strategy": "ipv4_only",
     }
 
@@ -235,6 +262,9 @@ def dns_block(
     docker_wsl_procs: list[str] | None = None,
     bypass_suffixes: list[str] | None = None,
     bypass_domains: list[str] | None = None,
+    vpn_suffixes: list[str] | None = None,
+    vpn_domains: list[str] | None = None,
+    local_final: bool = False,
 ) -> dict[str, Any]:
     """sing-box 1.11 `address` DNS vs 1.12+ typed servers (AWG fork)."""
     if schema == "v12":
@@ -242,6 +272,9 @@ def dns_block(
             docker_wsl_procs=docker_wsl_procs,
             bypass_suffixes=bypass_suffixes,
             bypass_domains=bypass_domains,
+            vpn_suffixes=vpn_suffixes,
+            vpn_domains=vpn_domains,
+            local_final=local_final,
         )
     if simple:
         return {
@@ -269,28 +302,14 @@ def dns_block(
             },
             {"tag": "dns-local", "address": "local", "detour": "direct"},
         ],
-        "rules": [
-            *(
-                [{"process_name": docker_wsl_procs, "server": "dns-local"}]
-                if docker_wsl_procs
-                else []
-            ),
-            *(
-                [{"domain_suffix": bypass_suffixes, "server": "dns-local"}]
-                if bypass_suffixes
-                else []
-            ),
-            *(
-                [{"domain": bypass_domains, "server": "dns-local"}]
-                if bypass_domains
-                else []
-            ),
-            {
-                "domain_suffix": [".local", ".lan", ".internal", ".localhost"],
-                "server": "dns-local",
-            },
-        ],
-        "final": "dns-proxy",
+        "rules": _dns_lookup_rules(
+            docker_wsl_procs=docker_wsl_procs,
+            bypass_suffixes=bypass_suffixes,
+            bypass_domains=bypass_domains,
+            vpn_suffixes=vpn_suffixes,
+            vpn_domains=vpn_domains,
+        ),
+        "final": "dns-local" if local_final else "dns-proxy",
         "strategy": "ipv4_only",
     }
 
@@ -693,10 +712,11 @@ def _build_route_rules(
     bypass_suffixes, bypass_domains = bypass_to_singbox(bypass_hosts)
     rules.extend(_token_host_rules(direct_parsed, "direct"))
     rules.extend(_token_process_rules(direct_parsed, "direct"))
-    # Office DNS (10.16.0.9) is private. Hijack-before-private sent every
-    # Chrome lookup through VLESS→DoH (~200ms) and YouTube crawled.
-    rules.append({"ip_is_private": True, "outbound": "direct"})
+    # Hijack DNS first. Office resolvers are RFC1918; private-first left
+    # git/Cursor with corporate AAAA (and often NXDOMAIN for GitHub).
+    # LAN names stay dns-local; GitHub/Cursor go DoH ipv4_only.
     rules.append({"port": 53, "action": "hijack-dns"})
+    rules.append({"ip_is_private": True, "outbound": "direct"})
     if via_proxy:
         # Chrome HTTP/3 over VLESS→Squid CONNECT stalls for seconds, then
         # falls back to TCP. Fail QUIC immediately so the tab does not lag.
@@ -931,17 +951,23 @@ class SingboxModeManager:
             if rustdesk
             else []
         )
+        vpn_suffixes, vpn_domains = bypass_to_singbox(
+            [*(vpn_hosts or []), *BLOCKED_HOSTS]
+        )
+        dns_kw = {
+            "docker_wsl_procs": _DOCKER_WSL_PROCS,
+            "bypass_suffixes": bypass_suffixes,
+            "bypass_domains": bypass_domains,
+            "vpn_suffixes": vpn_suffixes,
+            "vpn_domains": vpn_domains,
+            "local_final": bool(use_office_proxy),
+        }
         box: dict[str, Any] = {
             **config_skeleton(
                 log_path=self.log_path,
                 socks_port=socks_port,
                 http_port=http_port,
-                dns=dns_block(
-                    schema="v11",
-                    docker_wsl_procs=_DOCKER_WSL_PROCS,
-                    bypass_suffixes=bypass_suffixes,
-                    bypass_domains=bypass_domains,
-                ),
+                dns=dns_block(schema="v11", **dns_kw),
             ),
             "inbounds": inbounds,
             "outbounds": outbounds,
@@ -953,12 +979,7 @@ class SingboxModeManager:
             },
         }
         if awg:
-            box["dns"] = dns_block(
-                schema="v12",
-                docker_wsl_procs=_DOCKER_WSL_PROCS,
-                bypass_suffixes=bypass_suffixes,
-                bypass_domains=bypass_domains,
-            )
+            box["dns"] = dns_block(schema="v12", **dns_kw)
             box["endpoints"] = [awg_endpoint(server_host, awg, bind_iface=bind_iface)]
             box["route"]["default_domain_resolver"] = "dns-local"
         return box
