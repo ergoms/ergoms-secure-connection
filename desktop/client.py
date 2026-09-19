@@ -477,7 +477,7 @@ class OpsClient(ConnectionOps, ProbeOps, IntegrationOps):
         except Exception:  # noqa: BLE001
             socks_port = 1080
         info["socks_port"] = socks_port
-        listening = procutil.pids_listening_on_many(
+        listening = procutil.listen_ports_open(
             [socks_port, int(info["http_port"]), int(info["pac_port"])]
         )
         info["socks_up"] = bool(listening.get(socks_port))

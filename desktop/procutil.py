@@ -612,6 +612,39 @@ def pids_listening_on_many(
     return out
 
 
+def listen_ports_open(
+    ports: Sequence[int], host: str = "127.0.0.1", *, cache: bool = True
+) -> dict[int, bool]:
+    """True if TCP LISTEN exists — even when `ss -p` hides a root-owned pid."""
+    wanted = [int(p) for p in ports if int(p) > 0]
+    open_map = {p: False for p in wanted}
+    if not wanted:
+        return open_map
+    for port, pids in pids_listening_on_many(wanted, host=host, cache=cache).items():
+        if pids:
+            open_map[port] = True
+    missing = [p for p in wanted if not open_map[p]]
+    if missing and sys.platform != "win32":
+        for port in missing:
+            open_map[port] = _linux_ss_listen(port)
+    return open_map
+
+
+def _linux_ss_listen(port: int) -> bool:
+    """`ss -ltn` lists other users' sockets; `-p` (pid) often does not."""
+    r = run(["ss", "-ltn", f"sport = :{port}"])
+    for line in (r.stdout or "").splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        head = text.split(None, 1)[0].lower()
+        if head in ("state", "netid"):
+            continue
+        if "listen" in text.lower():
+            return True
+    return False
+
+
 def pids_cmdline_match(substr: str, *, cache: bool = True) -> list[int]:
     """PIDs whose command line contains substr (case-insensitive on Windows)."""
     if not substr:
