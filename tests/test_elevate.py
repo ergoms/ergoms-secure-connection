@@ -5,6 +5,34 @@ from __future__ import annotations
 from desktop.procutil import linux_root_env, relaunch_as_admin
 
 
+def test_linux_data_dir_uses_sudo_user_not_root(monkeypatch: object) -> None:
+    import sys
+    import types
+
+    from desktop.paths import linux_data_dir
+
+    monkeypatch.setenv("SUDO_USER", "administrator")
+    monkeypatch.setenv("HOME", "/root")
+    monkeypatch.setenv("XDG_DATA_HOME", "/root/.local/share")
+    monkeypatch.setattr("desktop.paths.os.geteuid", lambda: 0, raising=False)
+    fake_pwd = types.SimpleNamespace(
+        getpwnam=lambda _name: types.SimpleNamespace(pw_dir="/home/administrator")
+    )
+    monkeypatch.setitem(sys.modules, "pwd", fake_pwd)
+    got = linux_data_dir()
+    assert got.as_posix().endswith("/home/administrator/.local/share/ergoms-secure-connection")
+
+
+def test_linux_data_dir_xdg_without_sudo(monkeypatch: object) -> None:
+    from desktop.paths import linux_data_dir
+
+    monkeypatch.delenv("SUDO_USER", raising=False)
+    monkeypatch.setenv("XDG_DATA_HOME", "/custom/xdg")
+    monkeypatch.setattr("desktop.paths.os.geteuid", lambda: 1000, raising=False)
+    got = linux_data_dir()
+    assert got.as_posix().endswith("/custom/xdg/ergoms-secure-connection")
+
+
 def test_linux_root_env_keeps_home_and_data(monkeypatch: object) -> None:
     monkeypatch.setenv("HOME", "/home/administrator")
     monkeypatch.setenv("USER", "administrator")

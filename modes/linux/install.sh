@@ -114,7 +114,30 @@ if [[ ! -x "$SRC/$BIN_NAME" ]]; then
   exit 1
 fi
 
+stop_running_client() {
+  echo "==> Останавливаю старый клиент"
+  if command -v systemctl >/dev/null 2>&1; then
+    systemctl disable --now ergoms-secure-connection 2>/dev/null || true
+    systemctl disable --now ergoms-vpn 2>/dev/null || true
+  fi
+  # TUN держит старое дерево. rm -rf без этого оставляет процесс, который off не добивает.
+  if command -v pkill >/dev/null 2>&1; then
+    pkill -9 -x sing-box 2>/dev/null || true
+    pkill -9 -x sing-box-awg 2>/dev/null || true
+  elif command -v killall >/dev/null 2>&1; then
+    killall -9 sing-box 2>/dev/null || true
+    killall -9 sing-box-awg 2>/dev/null || true
+  fi
+  if [[ -d "$INSTALL_DIR" ]] && command -v fuser >/dev/null 2>&1; then
+    fuser -k -9 "$INSTALL_DIR/_internal/tools/sing-box" 2>/dev/null || true
+    fuser -k -9 "$INSTALL_DIR/_internal/tools/sing-box-awg" 2>/dev/null || true
+  fi
+  ip link delete ergoms-tun 2>/dev/null || true
+  sleep 0.4
+}
+
 echo "==> Копирую в $INSTALL_DIR"
+stop_running_client
 rm -rf "$INSTALL_DIR"
 mkdir -p "$INSTALL_DIR"
 cp -a "$SRC"/. "$INSTALL_DIR"/

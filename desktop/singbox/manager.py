@@ -1290,6 +1290,8 @@ class SingboxModeManager:
             return
 
         self.log(f"остановка sing-box pid={','.join(str(p) for p in targets)}")
+        if sys.platform != "win32":
+            remove_stale_tun_adapter(log=self.log, hidden=True)
         died = procutil.kill_pids(targets)
         leftover = procutil.tun_bin_pids()
         if leftover:

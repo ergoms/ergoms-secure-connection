@@ -336,14 +336,40 @@ def _remove_hidden_tun_adapter(*, log: LogFn = noop) -> bool:
     return True
 
 
-def remove_stale_tun_adapter(*, log: LogFn = noop, hidden: bool = False) -> bool:
-    """Drop a leftover Wintun NIC so the next start can create TUN.
+def _linux_tun_iface_present() -> bool:
+    try:
+        r = procutil.run(["ip", "link", "show", "dev", LINUX_TUN_IFACE_NAME], timeout=3)
+    except (OSError, FileNotFoundError):
+        return False
+    return getattr(r, "returncode", 1) == 0
 
-    `hidden=True` also looks at the L2 table and Get-NetAdapter -IncludeHidden.
-    A leftover name blocks Wintun CreateAdapter even when ipv4 netsh is empty.
+
+def _linux_drop_tun_adapter(*, log: LogFn = noop) -> bool:
+    """Drop leftover `ergoms-tun` so a stuck sing-box can exit (D-state)."""
+    if not _linux_tun_iface_present():
+        return True
+    log(f"убираю зависший TUN «{LINUX_TUN_IFACE_NAME}»")
+    try:
+        r = procutil.run(
+            ["ip", "link", "delete", "dev", LINUX_TUN_IFACE_NAME], timeout=8
+        )
+    except (OSError, FileNotFoundError) as exc:
+        log(f"не удалось снять TUN «{LINUX_TUN_IFACE_NAME}»: {exc}")
+        return False
+    gone = not _linux_tun_iface_present()
+    if not gone:
+        log(f"TUN «{LINUX_TUN_IFACE_NAME}» ещё в системе")
+    return gone or getattr(r, "returncode", 1) == 0
+
+
+def remove_stale_tun_adapter(*, log: LogFn = noop, hidden: bool = False) -> bool:
+    """Drop a leftover TUN so the next start can create it.
+
+    Windows: Wintun NIC (optionally hidden). Linux: `ip link delete ergoms-tun`.
+    A leftover name blocks CreateAdapter / keeps sing-box in D-state.
     """
     if sys.platform != "win32":
-        return False
+        return _linux_drop_tun_adapter(log=log)
     idx = _win_if_index_by_alias(TUN_IFACE_NAME, require_up=False)
     listed = idx is not None
     if not listed and hidden:

@@ -48,13 +48,31 @@ def _under_program_files(path: Path) -> bool:
     return False
 
 
+def _invoking_linux_home() -> Path | None:
+    """Home of the user who ran sudo, so `sudo ergoms-sc` does not use /root."""
+    user = (os.environ.get("SUDO_USER") or "").strip()
+    if not user or user == "root":
+        return None
+    geteuid = getattr(os, "geteuid", None)
+    if geteuid is None or geteuid() != 0:
+        return None
+    try:
+        import pwd
+
+        return Path(pwd.getpwnam(user).pw_dir)
+    except (ImportError, KeyError, OSError):
+        return None
+
+
 def linux_data_dir(home: Path | None = None) -> Path:
     """XDG data dir for the frozen Linux client (does not create it)."""
     if home is None:
+        sudo_home = _invoking_linux_home()
         xdg = (os.environ.get("XDG_DATA_HOME") or "").strip()
-        if xdg:
+        # sudo typically points XDG at /root — keep the real user's tree.
+        if xdg and not sudo_home:
             return Path(xdg).expanduser() / APP_ID
-        home = Path.home()
+        home = sudo_home or Path.home()
     return Path(home) / ".local" / "share" / APP_ID
 
 

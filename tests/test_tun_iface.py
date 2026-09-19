@@ -38,3 +38,28 @@ def test_linux_install_tun_split_uses_ip_route(monkeypatch: object) -> None:
     assert "ip route replace 0.0.0.0/1 dev ergoms-tun" in joined
     assert "ip route replace 128.0.0.0/1 dev ergoms-tun" in joined
     assert "route add" not in joined
+
+
+def test_linux_remove_stale_tun_deletes_iface(monkeypatch: object) -> None:
+    from desktop.net._impl import LINUX_TUN_IFACE_NAME, remove_stale_tun_adapter
+
+    calls: list[list[str]] = []
+    shown = {"n": 0}
+
+    class _R:
+        def __init__(self, code: int) -> None:
+            self.returncode = code
+
+    def run(args: list[str], timeout: float = 3) -> _R:
+        calls.append(list(args))
+        if "show" in args:
+            shown["n"] += 1
+            return _R(0 if shown["n"] == 1 else 1)
+        return _R(0)
+
+    monkeypatch.setattr("desktop.net._impl.sys.platform", "linux")
+    monkeypatch.setattr("desktop.net._impl.procutil.run", run)
+    assert remove_stale_tun_adapter() is True
+    joined = [" ".join(args) for args in calls]
+    assert any(row.startswith("ip link show dev " + LINUX_TUN_IFACE_NAME) for row in joined)
+    assert any(row.startswith("ip link delete dev " + LINUX_TUN_IFACE_NAME) for row in joined)

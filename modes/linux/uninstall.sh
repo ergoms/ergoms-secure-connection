@@ -26,6 +26,12 @@ if command -v systemctl >/dev/null 2>&1; then
   systemctl daemon-reload 2>/dev/null || true
 fi
 
+if command -v pkill >/dev/null 2>&1; then
+  pkill -9 -x sing-box 2>/dev/null || true
+  pkill -9 -x sing-box-awg 2>/dev/null || true
+fi
+ip link delete ergoms-tun 2>/dev/null || true
+
 rm -f "$LINK_DIR/ergoms-sc" "$LINK_DIR/ergoms" "$LINK_DIR/ergoms-secure-connection"
 rm -f "$DESKTOP_DST"
 rm -rf "$INSTALL_DIR"

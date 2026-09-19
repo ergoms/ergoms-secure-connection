@@ -236,6 +236,20 @@ def popen(
     return subprocess.Popen(**kw)
 
 
+def _linux_proc_state(pid: int) -> str:
+    """Linux /proc/pid/stat state: R/S/D/Z/X, or empty if unknown."""
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8", errors="replace") as fh:
+            raw = fh.read()
+    except OSError:
+        return ""
+    rp = raw.rfind(")")
+    if rp < 0:
+        return ""
+    parts = raw[rp + 1 :].split()
+    return parts[0] if parts else ""
+
+
 def process_basename(pid: int) -> str:
     """Lowercase executable filename for pid, or empty if unknown."""
     if pid <= 0:
@@ -293,8 +307,14 @@ def pids_named(*names: str) -> list[int]:
                 comm = fh.read().strip().lower()
         except OSError:
             continue
-        if comm in want:
-            found.append(int(name))
+        pid = int(name)
+        if pid == os.getpid():
+            continue
+        if comm not in want:
+            continue
+        if _linux_proc_state(pid) in {"Z", "X"}:
+            continue
+        found.append(pid)
     return found
 
 
@@ -358,7 +378,14 @@ def pid_alive(pid: int, *, names: Sequence[str] | None = None) -> bool:
         try:
             os.kill(pid, 0)
             alive = True
+        except ProcessLookupError:
+            alive = False
+        except PermissionError:
+            # EPERM: the process exists (often root-owned TUN) but we cannot signal it.
+            alive = True
         except OSError:
+            alive = False
+        if alive and _linux_proc_state(pid) in {"Z", "X"}:
             alive = False
     if not alive:
         return False
@@ -434,7 +461,7 @@ def _terminate_win(pid: int) -> bool:
 
 def kill_pid(pid: int) -> bool:
     """Best-effort kill. Returns True if the process is gone."""
-    if pid <= 0:
+    if pid <= 0 or pid == os.getpid():
         return True
     invalidate_proc_cache()
     if sys.platform == "win32":
@@ -449,11 +476,16 @@ def kill_pid(pid: int) -> bool:
         pass
     if _wait_pid_dead(pid, timeout=1.2):
         return True
+    _linux_drop_tun_dev()
     try:
         os.kill(pid, 9)
     except OSError:
         pass
-    return _wait_pid_dead(pid, timeout=1.0)
+    try:
+        os.killpg(pid, 9)
+    except OSError:
+        pass
+    return _wait_pid_dead(pid, timeout=3.0)
 
 
 def elevate_kill_pids(pids: Sequence[int]) -> bool:
@@ -802,6 +834,30 @@ def tun_bin_pids() -> list[int]:
     return pids_named(*_TUN_BIN_NAMES)
 
 
+def _linux_drop_tun_dev() -> None:
+    """Delete the TUN iface so a D-state sing-box can die after SIGKILL."""
+    if sys.platform == "win32":
+        return
+    try:
+        from desktop.net._impl import LINUX_TUN_IFACE_NAME as name
+    except Exception:  # noqa: BLE001
+        name = "ergoms-tun"
+    try:
+        run(["ip", "link", "delete", "dev", name], timeout=8)
+    except (OSError, FileNotFoundError):
+        pass
+
+
+def _linux_pkill_tun() -> None:
+    if sys.platform == "win32":
+        return
+    for name in ("sing-box", "sing-box-awg", "ergoms-tun", "ergoms-tun-awg"):
+        try:
+            run(["pkill", "-9", "-x", name], timeout=5)
+        except (OSError, FileNotFoundError):
+            continue
+
+
 def _taskkill_images() -> None:
     if sys.platform != "win32":
         return
@@ -824,12 +880,26 @@ def kill_tun_binaries(*, elevate_if_needed: bool = False) -> bool:
         if leftover and elevate_if_needed and not is_admin():
             return _elevate_kill_tun_win()
         return not tun_bin_pids()
+    _linux_drop_tun_dev()
     leftover = tun_bin_pids()
     for pid in leftover:
         kill_pid(pid)
     leftover = [p for p in leftover if pid_alive(p)]
+    if leftover:
+        _linux_pkill_tun()
+        leftover = [p for p in tun_bin_pids() if pid_alive(p)]
     if leftover and elevate_if_needed and not is_admin():
         return elevate_kill_pids(leftover)
+    leftover = [p for p in tun_bin_pids() if pid_alive(p)]
+    if leftover:
+        _linux_drop_tun_dev()
+        time.sleep(0.3)
+        leftover = [p for p in tun_bin_pids() if pid_alive(p)]
+        for pid in leftover:
+            try:
+                os.kill(pid, 9)
+            except OSError:
+                pass
     return not tun_bin_pids()
 
 
@@ -869,7 +939,7 @@ def kill_pids(
     targeted: list[int] = []
     seen: set[int] = set()
     for pid in pids:
-        if pid <= 0 or pid == exclude or pid in seen:
+        if pid <= 0 or pid == exclude or pid == os.getpid() or pid in seen:
             continue
         seen.add(pid)
         if pid_alive(pid):
