@@ -13,6 +13,9 @@ from lib.netutil import port_open
 
 LogFn = Callable[[str], None]
 
+# PAC/browser traffic drowns Wintun FATAL if we only keep the last 80 lines.
+TUN_LOG_SCAN_LINES = 4000
+
 
 def tun_create_conflict(lines: list[str]) -> bool:
     """Wintun leftover: CreateAdapter fails after ~15s if we wait it out."""
@@ -79,12 +82,12 @@ def wait_ready(
     socks_ok = False
     extended = False
     while time.monotonic() < deadline:
+        lines = tail(TUN_LOG_SCAN_LINES) if enable_tun else tail(80)
+        if enable_tun and tun_create_conflict(lines) and not tun_log_started(lines):
+            log("TUN: leftover Wintun — пересоздаю адаптер")
+            return False
         if port_open("127.0.0.1", socks_port, timeout=0.08):
             socks_ok = True
-            lines = tail(80)
-            if enable_tun and tun_create_conflict(lines) and not tun_log_started(lines):
-                log("TUN: leftover Wintun — пересоздаю адаптер")
-                return False
             if not enable_tun or tun_inbound_ready(lines, platform=platform):
                 kind = "mixed + TUN" if enable_tun else "mixed"
                 log(f"sing-box слушает SOCKS :{socks_port} и HTTP :{http_port} ({kind})")
@@ -95,6 +98,8 @@ def wait_ready(
                 log("Wintun ещё создаёт адаптер — жду, процесс не убиваю")
         check = pid or live_pid()
         if check and not procutil.pid_alive(check) and not live_pid():
+            if enable_tun:
+                log("TUN: sing-box умер — пересоздаю адаптер")
             return False
         time.sleep(interval)
         interval = min(interval * 1.3, 0.2)

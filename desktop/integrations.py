@@ -13,6 +13,7 @@ from desktop.client_util import find_pythonw, pid_from_file, wait_port
 from desktop.config_io import (
     get_docker_proxy_enabled,
     get_git_proxy_enabled,
+    get_kill_switch,
     get_rustdesk_enabled,
     get_http_bridge_port,
     resolve_git_integration,
@@ -472,14 +473,16 @@ class IntegrationOps:
             except Exception as exc:  # noqa: BLE001
                 self.log(f"docker proxy off: {exc}")
 
+        tun_wanted = bool(get_tun_enabled(cfg) or get_kill_switch(cfg))
         tun_live = False
         if sys.platform == "win32":
             tun_live = bool(wait_tun_iface(timeout=0.05))
-        elif get_tun_enabled(cfg):
+        elif tun_wanted:
             tun_live = True
         office = bool(resolve_corporate_proxy(cfg))
-        # Home+TUN: WinINET DIRECT. Office: static 127.0.0.1:1088 (no PAC).
-        if tun_live and not office:
+        # Home+TUN: WinINET DIRECT. Do not PAC while TUN is the destination —
+        # SOCKS flood hid Wintun leftover FATAL for 15–25s.
+        if (tun_live or tun_wanted) and not office:
             self.stop_pac_server()
             try:
                 force_direct_browser_proxy(self.paths.proxy_backup, log=self.log)

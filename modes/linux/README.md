@@ -15,7 +15,13 @@ ergoms-sc off             # отключить
 ergoms-sc install-service # автозапуск (systemd)
 ```
 
-Конфиг: `~/.local/share/ergoms-secure-connection/config.json`
+Конфиг в домашнем каталоге, sudo не нужен:
+
+```bash
+nano ~/.local/share/ergoms-secure-connection/config.json
+```
+
+`ergoms-sc` запускайте без sudo — иначе файл появится у root.
 
 Снять:
 

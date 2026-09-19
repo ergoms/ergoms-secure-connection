@@ -139,6 +139,31 @@ def test_win_kill_switch_remove_drops_tun_split() -> None:
     assert "ip route del 0.0.0.0/1 dev lo" in linux
 
 
+def test_kill_switch_already_applied_skips_ipv6_and_leak(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from desktop.kill_switch import apply
+
+    logs: list[str] = []
+    called: list[str] = []
+    monkeypatch.setattr("desktop.killswitch._impl.is_applied", lambda force=False: True)
+    monkeypatch.setattr("desktop.killswitch._impl.underlay_gateway", lambda _ip: "192.168.0.1")
+    monkeypatch.setattr("desktop.killswitch._impl._iface_index_win", lambda _ip: 19)
+    monkeypatch.setattr("desktop.killswitch._impl._update_state", lambda *_a, **_k: {})
+    monkeypatch.setattr("desktop.killswitch._impl.forget_host_commands", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        "desktop.killswitch._impl.suppress_underlay_ipv6",
+        lambda **_k: called.append("ipv6"),
+    )
+    monkeypatch.setattr(
+        "desktop.killswitch._impl._apply_leak_shield",
+        lambda **_k: called.append("leak"),
+    )
+    apply(["203.0.113.10"], var_dir=tmp_path, log=logs.append, blackhole=False)
+    assert any("маршруты уже стоят" in msg for msg in logs)
+    assert called == []
+
+
 def test_choose_dial_defaults_and_office_choice() -> None:
     assert choose_dial({}, office=False) == "amneziawg"
     assert choose_dial({}, office=True) == "vless-reality"

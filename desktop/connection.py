@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import sys
 import time
@@ -12,7 +11,6 @@ from desktop import procutil
 from desktop.client_util import HELPER_CMDLINE, pid_from_file
 from desktop.config_io import (
     get_http_bridge_port,
-    get_kill_switch,
     get_local_socks_port,
     get_pac_listen_port,
     get_tun_mtu,
@@ -22,11 +20,9 @@ from desktop.kill_switch import apply as apply_kill_switch
 from desktop.kill_switch import install_commands as kill_switch_install_cmds
 from desktop.kill_switch import is_applied as kill_switch_is_applied
 from desktop.kill_switch import pin_underlay as pin_kill_switch_underlay
-from desktop.kill_switch import planned_pin_commands as kill_switch_pin_cmds
 from desktop.kill_switch import prefer_tun_ipv4, suppress_underlay_ipv6
 from desktop.kill_switch import remember_plan as remember_kill_switch_plan
 from desktop.lifecycle.actions import Action
-from desktop.lifecycle.snapshot import Phase
 from desktop.singbox_mode import (
     amneziawg_opts,
     choose_dial,
@@ -194,75 +190,6 @@ class ConnectionOps:
         killed = procutil.kill_pids(targets, exclude=os.getpid())
         for pid in killed:
             self.log(f"helper pid={pid} stopped")
-
-    def _upgrade_awg_to_tun(self) -> None:
-        """After AWG handshake, restart sing-box with TUN + routes."""
-        kw = getattr(self, "_awg_tun_kwargs", None)
-        self._awg_tun_kwargs = None
-        self.session.update(pending_awg_tun=False)
-        if not kw:
-            return
-        self.session.transition(Phase.UPGRADING_AWG, "handshake есть — поднимаю TUN")
-        self.log("AmneziaWG: handshake есть — поднимаю TUN")
-        cfg = self.config()
-        allow = list(self.session.snapshot.pending_allow)
-        kill_switch = bool(kw.pop("kill_switch", get_kill_switch()))
-        start_ks = kill_switch and not self.session.snapshot.defer_win_ks
-        prelude: list[str] = []
-        if start_ks:
-            prelude = self._ensure_kill_switch(cfg)
-        elif allow:
-            remember_kill_switch_plan(self.paths.var_dir, allow)
-        postlude = kill_switch_pin_cmds(self.paths.var_dir, allow) if allow else []
-        try:
-            self.singbox.start(
-                enable_tun=True,
-                force_restart=True,
-                kill_switch=start_ks,
-                prelude_cmds=prelude,
-                postlude_cmds=postlude,
-                **kw,
-            )
-        except Exception:
-            self.log("AmneziaWG: TUN не поднялся — оставляю подключение без него")
-            self.singbox.start(
-                enable_tun=False,
-                force_restart=True,
-                kill_switch=False,
-                prelude_cmds=[],
-                postlude_cmds=[],
-                **kw,
-            )
-            raise
-        if self.paths.state_path.is_file():
-            try:
-                state = json.loads(self.paths.state_path.read_text(encoding="utf-8"))
-                if isinstance(state, dict):
-                    state["tun"] = True
-                    self.paths.state_path.write_text(
-                        json.dumps(state, indent=2), encoding="utf-8"
-                    )
-            except (OSError, json.JSONDecodeError, TypeError):
-                pass
-        pending_win = bool(procutil.is_admin() and sys.platform == "win32")
-        self.session.update(pending_win_tun=pending_win, tun_running=True)
-        if pending_win and allow:
-            try:
-                if self._install_win_tun_routes(allow):
-                    self.session.update(pending_win_tun=False, tun_ready=True)
-            except Exception as exc:  # noqa: BLE001
-                self.log(f"TUN после AWG: {exc}")
-        if self.session.snapshot.defer_win_ks and kill_switch:
-            try:
-                apply_kill_switch(
-                    allow,
-                    var_dir=self.paths.var_dir,
-                    log=self.log,
-                    blackhole=False,
-                )
-            except Exception as exc:  # noqa: BLE001
-                self.log(f"kill switch после AWG: {exc}")
-            self.session.update(defer_win_ks=False)
 
     def _install_win_tun_routes(self, allow: list[str], *, strict: bool = True) -> bool:
         """After TUN adapter exists: steal traffic without auto_route."""

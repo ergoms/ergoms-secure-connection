@@ -92,7 +92,6 @@ class OpsClient(ConnectionOps, ProbeOps, IntegrationOps):
         self.pipeline = ConnectionPipeline(self)
         self._atexit_done = False
         self._teardown_lock = threading.Lock()
-        self._awg_tun_kwargs: dict[str, Any] | None = None
         atexit.register(self._atexit_teardown)
         if startup_cleanup:
             try:

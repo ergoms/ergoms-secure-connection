@@ -255,13 +255,6 @@ class ProbeOps:
             fail_closed=False,
         )
         self.log(f"проверка выхода: OK (HTTPS {probe_host} через SOCKS)")
-        if self.session.snapshot.pending_awg_tun:
-            try:
-                self._upgrade_awg_to_tun()
-            except Exception as exc:  # noqa: BLE001
-                self.log(f"AmneziaWG TUN после handshake: {exc}")
-                self.session.update(pending_awg_tun=False)
-                self._awg_tun_kwargs = None
         if self.session.snapshot.pending_win_tun:
             allow = list(self.session.snapshot.pending_allow)
             self.log("выход живой — ставлю TUN split default")

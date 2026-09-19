@@ -306,7 +306,7 @@ def _elevate_cli_if_needed(client: object, action: str, rest: list[str]) -> bool
     ok = elev.relaunch(args, cwd=str(client.paths.root))  # type: ignore[attr-defined]
     if not ok:
         print(
-            "[ERGOMS SECURE CONNECTION] нужны права администратора (TUN / kill switch)",
+            "[ERGOMS SECURE CONNECTION] нужны права sudo (TUN / kill switch)",
             file=sys.stderr,
         )
         raise SystemExit(1)

@@ -84,28 +84,87 @@ def win_quote(arg: str) -> str:
     return arg
 
 
+def linux_root_env() -> list[str]:
+    """HOME / data dir of the invoking user — sudo otherwise switches to /root."""
+    from desktop.paths import data_root
+
+    home = (os.environ.get("HOME") or "").strip() or str(Path.home())
+    user = (
+        (os.environ.get("SUDO_USER") or "").strip()
+        or (os.environ.get("USER") or "").strip()
+        or (os.environ.get("LOGNAME") or "").strip()
+    )
+    data = (os.environ.get("ERGOMS_SC_DATA") or "").strip() or str(data_root())
+    pairs = [f"HOME={home}", f"ERGOMS_SC_DATA={data}"]
+    if user:
+        pairs.append(f"USER={user}")
+        pairs.append(f"LOGNAME={user}")
+    for key in (
+        "DISPLAY",
+        "WAYLAND_DISPLAY",
+        "XAUTHORITY",
+        "XDG_RUNTIME_DIR",
+        "DBUS_SESSION_BUS_ADDRESS",
+    ):
+        val = (os.environ.get(key) or "").strip()
+        if val:
+            pairs.append(f"{key}={val}")
+    return pairs
+
+
 def relaunch_as_admin(
     args: Sequence[str],
     *,
     cwd: str | None = None,
     show: int = 1,
 ) -> bool:
-    """Start *args* with a single UAC prompt. Caller should exit on True."""
+    """Start *args* elevated. Caller should exit on True (Windows). Linux execs."""
     if not args:
         return False
-    if sys.platform != "win32":
+    if is_admin():
         return False
-    import ctypes
+    if sys.platform == "win32":
+        import ctypes
 
-    file = str(args[0])
-    params = " ".join(win_quote(str(a)) for a in args[1:])
-    directory = cwd or os.getcwd()
-    rc = int(
-        ctypes.windll.shell32.ShellExecuteW(  # type: ignore[attr-defined]
-            None, "runas", file, params, directory, int(show)
+        file = str(args[0])
+        params = " ".join(win_quote(str(a)) for a in args[1:])
+        directory = cwd or os.getcwd()
+        rc = int(
+            ctypes.windll.shell32.ShellExecuteW(  # type: ignore[attr-defined]
+                None, "runas", file, params, directory, int(show)
+            )
         )
-    )
-    return rc > 32
+        return rc > 32
+    return _relaunch_as_root_linux([str(a) for a in args], cwd=cwd)
+
+
+def _relaunch_as_root_linux(args: list[str], *, cwd: str | None) -> bool:
+    if cwd:
+        try:
+            os.chdir(cwd)
+        except OSError:
+            pass
+    launched = ["env", *linux_root_env(), *args]
+    sudo = shutil.which("sudo")
+    pkexec = shutil.which("pkexec")
+    tty = False
+    try:
+        tty = bool(sys.stdin.isatty())
+    except Exception:  # noqa: BLE001
+        tty = False
+    wrappers: list[tuple[str, list[str]]] = []
+    if sudo and tty:
+        wrappers.append((sudo, [sudo, *launched]))
+    if pkexec:
+        wrappers.append((pkexec, [pkexec, *launched]))
+    if sudo and not tty:
+        wrappers.append((sudo, [sudo, *launched]))
+    for file, argv in wrappers:
+        try:
+            os.execvp(file, argv)
+        except OSError:
+            continue
+    return False
 
 
 def invalidate_proc_cache() -> None:

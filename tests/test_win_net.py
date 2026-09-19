@@ -191,6 +191,45 @@ def test_wait_ready_accepts_tun_started_after_leftover_fatal(
     assert mgr._wait_ready(1080, 1088, enable_tun=True, pid=1, timeout=0.3) is True
 
 
+def test_wait_ready_aborts_on_leftover_buried_in_socks_flood(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from desktop.singbox_mode import SingboxModeManager
+
+    fatal = (
+        "FATAL start inbound/tun[tun-in]: configure tun interface: "
+        "Cannot create a file when that file already exists."
+    )
+    flood = [fatal] + [f"INFO inbound/socks connection {i}" for i in range(120)]
+    logs: list[str] = []
+    mgr = SingboxModeManager(tmp_path, tmp_path, tmp_path, log=logs.append)
+    monkeypatch.setattr("desktop.singbox.readiness.sys.platform", "win32")
+    monkeypatch.setattr("desktop.singbox.readiness.port_open", lambda *_a, **_k: True)
+    monkeypatch.setattr("desktop.singbox.readiness.procutil.pid_alive", lambda _pid: True)
+    mgr.tail_log = lambda n=40, _lines=flood: _lines[-n:]  # type: ignore[method-assign]
+    assert mgr._wait_ready(1080, 1088, enable_tun=True, pid=1, timeout=2.0) is False
+    assert any("leftover" in msg.lower() or "пересоздаю" in msg for msg in logs)
+
+
+def test_wait_ready_retries_when_process_dies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from desktop.singbox_mode import SingboxModeManager
+
+    logs: list[str] = []
+    mgr = SingboxModeManager(tmp_path, tmp_path, tmp_path, log=logs.append)
+    monkeypatch.setattr("desktop.singbox.readiness.sys.platform", "win32")
+    monkeypatch.setattr("desktop.singbox.readiness.port_open", lambda *_a, **_k: True)
+    monkeypatch.setattr("desktop.singbox.readiness.procutil.pid_alive", lambda _pid: False)
+    monkeypatch.setattr(mgr, "pid", lambda: None)
+    monkeypatch.setattr(
+        "desktop.singbox.readiness.wait_tun_iface", lambda timeout=0.05: None
+    )
+    mgr.tail_log = lambda n=40: []  # type: ignore[method-assign]
+    assert mgr._wait_ready(1080, 1088, enable_tun=True, pid=1, timeout=2.0) is False
+    assert any("умер" in msg for msg in logs)
+
+
 def test_netsh_has_interface_reads_l2_table(monkeypatch: pytest.MonkeyPatch) -> None:
     from desktop.sys import win_net
 

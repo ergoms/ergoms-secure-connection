@@ -121,7 +121,17 @@ def _is_tun_iface(name: str) -> bool:
     return low.startswith(("ops-content", "ergoms-secure-connection", "ergoms"))
 
 
-TUN_IFACE_NAME = "ergoms-secure-connection-tun"
+# Linux IFNAMSIZ is 16 (15 usable chars). The Windows alias can be longer.
+WIN_TUN_IFACE_NAME = "ergoms-secure-connection-tun"
+LINUX_TUN_IFACE_NAME = "ergoms-tun"
+
+
+def tun_iface_name(*, platform: str | None = None) -> str:
+    plat = sys.platform if platform is None else platform
+    return WIN_TUN_IFACE_NAME if plat == "win32" else LINUX_TUN_IFACE_NAME
+
+
+TUN_IFACE_NAME = tun_iface_name()
 TUN_ADDR_PREFIX = "172.19."
 TUN_LAN_CIDR = "172.19.0.0/16"
 
@@ -272,13 +282,23 @@ def apply_tun_iface_mtu(if_idx: int, mtu: int, *, log: LogFn = noop) -> None:
 
 def wait_tun_iface(*, timeout: float = 20.0) -> int | None:
     """Interface index of this app's TUN, or None if it never appeared."""
-    if sys.platform != "win32":
+    if sys.platform == "win32":
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            idx = _win_if_index_by_alias(TUN_IFACE_NAME, require_up=True)
+            if idx:
+                return idx
+            time.sleep(0.25)
         return None
+    name = tun_iface_name()
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        idx = _win_if_index_by_alias(TUN_IFACE_NAME, require_up=True)
-        if idx:
-            return idx
+        try:
+            r = procutil.run(["ip", "-o", "link", "show", "dev", name], timeout=2)
+        except (OSError, FileNotFoundError):
+            return None
+        if int(getattr(r, "returncode", 1) or 1) == 0 and name in (r.stdout or ""):
+            return 1
         time.sleep(0.25)
     return None
 
@@ -338,12 +358,17 @@ def remove_stale_tun_adapter(*, log: LogFn = noop, hidden: bool = False) -> bool
         _remove_hidden_tun_adapter(log=log)
     else:
         return False
-    deadline = time.monotonic() + 2.0
+    deadline = time.monotonic() + 8.0
     while time.monotonic() < deadline:
-        if not _win_if_index_by_alias(TUN_IFACE_NAME, require_up=False):
-            return True
+        if _win_if_index_by_alias(TUN_IFACE_NAME, require_up=False) is None:
+            break
         time.sleep(0.15)
-    return _win_if_index_by_alias(TUN_IFACE_NAME, require_up=False) is None
+    if hidden:
+        _remove_hidden_tun_adapter(log=log)
+    still = _win_if_index_by_alias(TUN_IFACE_NAME, require_up=False) is not None
+    if still:
+        log(f"TUN «{TUN_IFACE_NAME}» ещё в системе — CreateAdapter может не успеть")
+    return not still
 
 
 def underlay_ifaces() -> list[tuple[int, int, str]]:

@@ -86,9 +86,12 @@ def resolve_connect_plan(
     udp_dial = dial == "amneziawg"
     defer_win = plat == "win32" and (not bool(office_proxy) or udp_dial)
     ks_deferred = bool(defer_win and ks and udp_dial)
-    tun_deferred = bool(awg and enable_tun)
-    start_tun = enable_tun and not tun_deferred
-    start_ks = ks and not ks_deferred and not tun_deferred
+    # TUN inbound starts with AWG. OS /1 + KS still wait for handshake
+    # (probes skip _claim_default_route for UDP). Restarting sing-box just
+    # to add the adapter raced Wintun CreateAdapter for 15–25s.
+    tun_deferred = False
+    start_tun = enable_tun
+    start_ks = ks and not ks_deferred
     bypass = [str(h) for h in cfg.get("proxy_bypass") or [] if h]
     if not bypass:
         bypass = ["*.local", "*.lan"]

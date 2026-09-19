@@ -32,12 +32,12 @@ from desktop.sys.constants import SINGBOX_PROCESS_NAMES
 from desktop.tun import (
     RUSTDESK_HBBR_PORTS,
     RUSTDESK_HBBS_PORTS,
-    TUN_IFACE_NAME,
     detect_bind_interface,
     direct_python_paths,
     iface_ipv4s,
     remove_stale_tun_adapter,
     tun_iface_cidr,
+    tun_iface_name,
 )
 
 _direct_python_paths = direct_python_paths
@@ -473,7 +473,7 @@ def _tun_inbound(mtu: int, *, kill_switch: bool, route_exclude: list[str]) -> di
     return {
         "type": "tun",
         "tag": "tun-in",
-        "interface_name": TUN_IFACE_NAME,
+        "interface_name": tun_iface_name(),
         "address": [tun_iface_cidr()],
         "mtu": effective_tun_mtu(mtu),
         "auto_route": sys.platform != "win32",
@@ -1178,8 +1178,9 @@ class SingboxModeManager:
         try:
             size = self.log_path.stat().st_size
             with self.log_path.open("rb") as fh:
-                if size > 65536:
-                    fh.seek(size - 65536)
+                # Keep enough prefix to see leftover FATAL under SOCKS flood.
+                if size > 262144:
+                    fh.seek(size - 262144)
                 raw = fh.read().decode("utf-8", errors="replace")
         except OSError:
             return []
@@ -1200,9 +1201,9 @@ class SingboxModeManager:
             pass
 
     def _tun_adapter_busy(self) -> bool:
-        from desktop.singbox.readiness import tun_adapter_busy
+        from desktop.singbox.readiness import TUN_LOG_SCAN_LINES, tun_adapter_busy
 
-        return tun_adapter_busy(self.tail_log(40))
+        return tun_adapter_busy(self.tail_log(TUN_LOG_SCAN_LINES))
 
     def _tun_log_started(self) -> bool:
         from desktop.singbox.readiness import tun_log_started
@@ -1264,7 +1265,7 @@ class SingboxModeManager:
         if not targets:
             self.log("sing-box уже не запущен")
             self.pid_path.unlink(missing_ok=True)
-            remove_stale_tun_adapter(log=self.log)
+            remove_stale_tun_adapter(log=self.log, hidden=True)
             return
 
         self.log(f"остановка sing-box pid={','.join(str(p) for p in targets)}")
@@ -1291,7 +1292,7 @@ class SingboxModeManager:
         self._pid_scan_at = 0.0
         self._pid_scan_result = None
         self.pid_path.unlink(missing_ok=True)
-        remove_stale_tun_adapter(log=self.log)
+        remove_stale_tun_adapter(log=self.log, hidden=True)
 
     def _launch(
         self,

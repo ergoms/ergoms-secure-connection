@@ -101,9 +101,9 @@ def _cfg(*, office: bool, dial: str, tun: bool, ks: bool) -> dict[str, Any]:
     [
         (True, "vless-reality", True, True, True, True, False, False),
         (True, "vless-reality", False, False, False, False, False, False),
-        (False, "amneziawg", True, True, False, False, True, True),
+        (False, "amneziawg", True, True, True, False, False, True),
         (False, "amneziawg", False, False, False, False, False, False),
-        (True, "amneziawg", True, True, False, False, True, True),
+        (True, "amneziawg", True, True, True, False, False, True),
         (False, "vless-reality", True, True, True, True, False, False),
     ],
 )
@@ -155,6 +155,9 @@ class _FakeSingbox:
         self.alive = False
 
     def find_sing_box(self, _path: str = "") -> object:
+        return True
+
+    def find_awg_sing_box(self) -> object:
         return True
 
     def tail_log(self, _n: int = 20) -> list[str]:
@@ -287,6 +290,62 @@ def test_pipeline_connect_reaches_up(monkeypatch: pytest.MonkeyPatch) -> None:
     assert client.session.snapshot.phase is Phase.UP
     assert client._probed is True
     assert client.singbox.alive is True
+
+
+def test_pipeline_awg_starts_tun_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    from desktop.lifecycle.plan import ConnectPlan
+
+    plan = ConnectPlan(
+        host="203.0.113.10",
+        port=51821,
+        dial="amneziawg",
+        awg={"port": 51821, "private_key": "p", "peer_public_key": "k"},
+        office_proxy="",
+        transport={"type": "amneziawg", "amneziawg": {}},
+        socks_port=1080,
+        http_port=1088,
+        sing_box_path="",
+        bypass=["*.local"],
+        vpn_hosts=[],
+        mtu=1400,
+        vps_proxy_ports=[22],
+        elevate=False,
+        scope="full",
+        tun_wanted=True,
+        tun_deferred=False,
+        start_tun=True,
+        ks_wanted=True,
+        ks_deferred=True,
+        start_ks=False,
+        allow=["203.0.113.10"],
+    )
+    monkeypatch.setattr(
+        "desktop.lifecycle.pipeline.resolve_connect_plan", lambda _cfg: plan
+    )
+    monkeypatch.setattr("desktop.lifecycle.pipeline.port_open", lambda *_a, **_k: False)
+    monkeypatch.setattr("desktop.lifecycle.pipeline.procutil.is_admin", lambda: False)
+    monkeypatch.setattr(
+        "desktop.lifecycle.pipeline.kill_switch_is_applied", lambda force=False: False
+    )
+    monkeypatch.setattr(
+        "desktop.lifecycle.pipeline.kill_switch_pin_cmds", lambda *_a, **_k: []
+    )
+    monkeypatch.setattr(
+        "desktop.lifecycle.pipeline.remember_kill_switch_plan", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(
+        "desktop.lifecycle.pipeline.remove_stale_tun_adapter", lambda **_k: True
+    )
+    monkeypatch.setattr("desktop.lifecycle.pipeline.sys.platform", "win32")
+    client = _FakeClient()
+    client.tun.awg_version_ok.return_value = True
+    client.pipeline.connect(spawn_watchdog=False)
+    assert len(client.singbox.starts) == 1
+    assert client.singbox.starts[0]["enable_tun"] is True
+    assert any("TUN inbound сразу" in ln for ln in client.logs)
+    assert not any("handshake без TUN" in ln for ln in client.logs)
+    assert client.session.snapshot.pending_awg_tun is False
+    assert client.session.snapshot.phase is Phase.UP
 
 
 def test_pipeline_disconnect_returns_idle(monkeypatch: pytest.MonkeyPatch) -> None:

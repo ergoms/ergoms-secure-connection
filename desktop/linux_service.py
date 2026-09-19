@@ -29,8 +29,27 @@ def _real_user() -> tuple[str, str]:
     return user, home
 
 
-def _escape_exec(path: str) -> str:
-    return path.replace("\\", "\\\\").replace(" ", "\\ ").replace('"', '\\"')
+def systemd_quote(value: str) -> str:
+    """Quote a word for a systemd unit (spaces cannot be backslash-escaped)."""
+    return '"' + str(value).replace("\\", "\\\\").replace('"', r"\"") + '"'
+
+
+def systemd_exec(path: str | Path, *args: str) -> str:
+    line = systemd_quote(str(path))
+    if args:
+        line += " " + " ".join(args)
+    return line
+
+
+def service_bin(exe: Path) -> Path:
+    """Prefer /usr/local/bin/ergoms-sc — systemd rejects spaces in the executable name."""
+    link = Path("/usr/local/bin") / CLI_NAME
+    try:
+        if link.exists() and link.resolve() == Path(exe).resolve():
+            return link
+    except OSError:
+        pass
+    return Path(exe)
 
 
 def _reexec_root() -> None:
@@ -38,11 +57,12 @@ def _reexec_root() -> None:
     os.execvp("sudo", ["sudo", "--preserve-env=PATH", exe, *sys.argv[1:]])
 
 
-def _write_unit(*, exe: Path, data: Path, home: str, user: str) -> None:
-    start = f"{_escape_exec(str(exe))} watch"
-    stop = f"{_escape_exec(str(exe))} off"
+def render_unit(*, exe: Path, data: Path, home: str, user: str) -> str:
+    bin_path = service_bin(exe)
     work = exe.parent
-    UNIT_DST.write_text(
+    start = systemd_exec(bin_path, "watch")
+    stop = systemd_exec(bin_path, "off")
+    return (
         "[Unit]\n"
         f"Description={APP_NAME} (VLESS+Reality)\n"
         "After=network-online.target\n"
@@ -50,11 +70,11 @@ def _write_unit(*, exe: Path, data: Path, home: str, user: str) -> None:
         "\n"
         "[Service]\n"
         "Type=simple\n"
-        f"WorkingDirectory={work}\n"
+        f"WorkingDirectory={systemd_quote(str(work))}\n"
         "Environment=PYTHONUNBUFFERED=1\n"
-        f"Environment=ERGOMS_SC_DATA={data}\n"
-        f"Environment=HOME={home}\n"
-        f"Environment=USER={user}\n"
+        f"Environment={systemd_quote(f'ERGOMS_SC_DATA={data}')}\n"
+        f"Environment={systemd_quote(f'HOME={home}')}\n"
+        f"Environment={systemd_quote(f'USER={user}')}\n"
         "Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
         f"ExecStart={start}\n"
         f"ExecStop={stop}\n"
@@ -66,7 +86,13 @@ def _write_unit(*, exe: Path, data: Path, home: str, user: str) -> None:
         "Nice=-5\n"
         "\n"
         "[Install]\n"
-        "WantedBy=multi-user.target\n",
+        "WantedBy=multi-user.target\n"
+    )
+
+
+def _write_unit(*, exe: Path, data: Path, home: str, user: str) -> None:
+    UNIT_DST.write_text(
+        render_unit(exe=exe, data=data, home=home, user=user),
         encoding="utf-8",
     )
     UNIT_DST.chmod(0o644)
@@ -116,7 +142,12 @@ def install() -> int:
 
     _write_unit(exe=exe, data=data, home=home, user=user)
     subprocess.check_call(["systemctl", "daemon-reload"])
-    subprocess.check_call(["systemctl", "enable", "--now", UNIT_NAME])
+    try:
+        subprocess.check_call(["systemctl", "enable", "--now", UNIT_NAME])
+    except subprocess.CalledProcessError:
+        print(f"не удалось запустить {UNIT_NAME} — смотрите systemctl status", file=sys.stderr)
+        subprocess.call(["systemctl", "--no-pager", "--full", "status", UNIT_NAME])
+        return 1
     print(f"Installed: {UNIT_DST}")
     print("Start:     systemctl enable --now ergoms-secure-connection")
     print("Status:    systemctl status ergoms-secure-connection")

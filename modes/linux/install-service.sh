@@ -96,9 +96,13 @@ if [[ -n "$FROZEN_EXE" ]]; then
     echo "Нет $DATA_DIR/config.json — сначала: ergoms-sc  (Настройки → Из файла) или ergoms-sc init" >&2
     exit 1
   fi
-  systemd_escape() { printf '%s' "$1" | sed 's/ /\\ /g'; }
-  EXEC_START="$(systemd_escape "$FROZEN_EXE") watch"
-  EXEC_STOP="$(systemd_escape "$FROZEN_EXE") off"
+  if [[ -x /usr/local/bin/ergoms-sc ]]; then
+    EXEC_START="/usr/local/bin/ergoms-sc watch"
+    EXEC_STOP="/usr/local/bin/ergoms-sc off"
+  else
+    EXEC_START="\"${FROZEN_EXE}\" watch"
+    EXEC_STOP="\"${FROZEN_EXE}\" off"
+  fi
   "$FROZEN_EXE" off >/dev/null 2>&1 || true
 else
   if [[ ! -f "$ROOT/config.json" ]]; then

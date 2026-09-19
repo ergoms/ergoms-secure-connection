@@ -545,10 +545,11 @@ class GuiBridge(QObject):
         )
         if ok:
             os._exit(0)
-        self.toast.emit(
-            "Нужны права администратора один раз — потом окна Windows больше не появятся.",
-            "error",
-        )
+        if os.name == "nt":
+            msg = "Нужны права администратора один раз — потом окна Windows больше не появятся."
+        else:
+            msg = "Нужен пароль sudo (TUN / kill switch)."
+        self.toast.emit(msg, "error")
         return True
 
     @Slot()

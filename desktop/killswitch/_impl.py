@@ -136,6 +136,20 @@ def _route_print_win(*, force: bool = False) -> str:
     return text
 
 
+def _linux_route_text() -> str:
+    try:
+        r = procutil.run(["ip", "-4", "route"], timeout=3)
+    except (OSError, FileNotFoundError):
+        return ""
+    return r.stdout or ""
+
+
+def _route_table_text() -> str:
+    if sys.platform == "win32":
+        return _route_print_win(force=True)
+    return _linux_route_text()
+
+
 def _gateway_win(dest: str) -> str | None:
     text = _route_print_win()
     if not text:
@@ -486,11 +500,27 @@ def _set_ipv6_binding(
     if not clean:
         return
     if procutil.is_admin():
-        for name in clean:
-            try:
-                procutil.run(_ipv6_binding_args(name, enable=enable), timeout=15)
-            except OSError:
-                continue
+        joined = ",".join(
+            f"'{name.replace(chr(39), chr(39) * 2)}'" for name in clean
+        )
+        verb = "Enable-NetAdapterBinding" if enable else "Disable-NetAdapterBinding"
+        try:
+            procutil.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    f"{verb} -Name {joined} -ComponentID ms_tcpip6",
+                ],
+                timeout=15,
+            )
+        except OSError:
+            for name in clean:
+                try:
+                    procutil.run(_ipv6_binding_args(name, enable=enable), timeout=15)
+                except OSError:
+                    continue
         return
     _run_privileged_lines(
         [_ipv6_binding_line(n, enable=enable) for n in clean],
@@ -674,8 +704,6 @@ def apply(
             else:
                 _run_privileged_lines(drop_cmds, log=log, ignore_fail=True)
         log("kill switch: маршруты уже стоят")
-        suppress_underlay_ipv6(var_dir=var_dir, log=log)
-        _apply_leak_shield(var_dir=var_dir, log=log)
         return True
     gw = underlay_gateway(unique[0]) if unique else underlay_gateway("")
     idx = _iface_index_win(unique[0]) if sys.platform == "win32" and unique else None
@@ -698,7 +726,7 @@ def apply(
     _update_state(
         var_dir, allow=unique, forget=drop, gw=gw, if_idx=idx, applied=present
     )
-    text = _route_print_win(force=True) if sys.platform == "win32" else ""
+    text = _route_table_text()
     for ip in unique:
         hit = [ln.strip() for ln in text.splitlines() if ip in ln]
         if hit:

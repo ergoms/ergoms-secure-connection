@@ -256,23 +256,8 @@ class ConnectionPipeline:
             if plan.start_tun
             else []
         )
-        client._awg_tun_kwargs = None
-        if plan.tun_deferred:
-            client._awg_tun_kwargs = {
-                "server_host": plan.host,
-                "transport": plan.transport,
-                "corporate_proxy": plan.office_proxy,
-                "socks_port": plan.socks_port,
-                "http_port": plan.http_port,
-                "sing_box_path": sing_box_path,
-                "elevate": plan.elevate,
-                "bypass_hosts": plan.bypass,
-                "vpn_hosts": plan.vpn_hosts,
-                "mtu": plan.mtu,
-                "vps_proxy_ports": plan.vps_proxy_ports,
-                "kill_switch": plan.ks_wanted,
-            }
-            client.log("AmneziaWG: сначала handshake без TUN")
+        if plan.awg and plan.start_tun:
+            client.log("AmneziaWG: TUN inbound сразу, split /1 после handshake")
         if stale_tun is not None:
             stale_tun.join(timeout=8.0)
         self.session.transition(Phase.LAUNCHING, "запуск sing-box")

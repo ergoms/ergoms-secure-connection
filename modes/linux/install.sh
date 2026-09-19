@@ -157,7 +157,7 @@ cat <<EOF
   ergoms-sc off             отключить
   ergoms-sc install-service автозапуск (systemd)
 
-Конфиг: ~/.local/share/${APP_ID}/config.json
+Конфиг (без sudo): ~/.local/share/${APP_ID}/config.json
 Снять:  sudo bash $INSTALL_DIR/uninstall.sh
         или: curl …/modes/linux/uninstall.sh | sudo bash
 EOF

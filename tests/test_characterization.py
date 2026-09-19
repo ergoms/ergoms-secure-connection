@@ -656,16 +656,15 @@ def implicit_connect_plan(
     udp_dial = awg
     defer_win = platform == "win32" and (not office or udp_dial)
     defer_win_ks = bool(defer_win and kill_switch and udp_dial)
-    awg_defer_tun = bool(awg and enable_tun)
     return {
         "dial": dial,
         "awg": awg,
         "tun_wanted": enable_tun,
-        "tun_deferred": awg_defer_tun,
-        "start_tun": enable_tun and not awg_defer_tun,
+        "tun_deferred": False,
+        "start_tun": enable_tun,
         "ks_wanted": kill_switch,
         "ks_deferred": defer_win_ks,
-        "start_ks": kill_switch and not defer_win_ks and not awg_defer_tun,
+        "start_ks": kill_switch and not defer_win_ks,
     }
 
 
@@ -688,9 +687,9 @@ def test_implicit_connect_plan_six_combos() -> None:
     home_awg_tun = implicit_connect_plan(
         office=False, dial="amneziawg", tun_enabled=True, kill_switch=True
     )
-    assert home_awg_tun["tun_deferred"] is True
+    assert home_awg_tun["tun_deferred"] is False
     assert home_awg_tun["ks_deferred"] is True
-    assert home_awg_tun["start_tun"] is False
+    assert home_awg_tun["start_tun"] is True
     assert home_awg_tun["start_ks"] is False
     assert home_awg_tun["tun_wanted"] is True
 
@@ -703,9 +702,9 @@ def test_implicit_connect_plan_six_combos() -> None:
     office_awg_tun = implicit_connect_plan(
         office=True, dial="amneziawg", tun_enabled=True, kill_switch=True
     )
-    assert office_awg_tun["tun_deferred"] is True
+    assert office_awg_tun["tun_deferred"] is False
     assert office_awg_tun["ks_deferred"] is True
-    assert office_awg_tun["start_tun"] is False
+    assert office_awg_tun["start_tun"] is True
     assert office_awg_tun["start_ks"] is False
 
     home_vless_tun = implicit_connect_plan(
