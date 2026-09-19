@@ -7,6 +7,7 @@ from desktop.killswitch._impl import (  # noqa: F401
     install_commands,
     is_applied,
     is_sealed,
+    lift_ipv4_blackhole_commands,
     lift_ipv4_blackholes,
     pin_underlay,
     planned_pin_commands,

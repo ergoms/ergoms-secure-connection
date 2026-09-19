@@ -11,8 +11,9 @@ from desktop.ui.theme import THEME_ERGOMS, icon_path
 
 
 def run_gui() -> None:
+    os.environ.setdefault("QT_LOGGING_RULES", "qt.qpa.mime=false")
     try:
-        from PySide6.QtCore import QUrl
+        from PySide6.QtCore import QUrl, QtMsgType, qInstallMessageHandler
         from PySide6.QtGui import QIcon, QSurfaceFormat
         from PySide6.QtQml import QQmlApplicationEngine
         from PySide6.QtQuick import QQuickWindow
@@ -36,6 +37,15 @@ def run_gui() -> None:
         QQuickStyle.setStyle("Material")
     except Exception:
         pass
+
+    def _qt_message(mode: object, _ctx: object, message: str) -> None:
+        text = str(message)
+        if "clipboard" in text.lower() or text.startswith("qt.qpa.mime"):
+            return
+        if mode in (QtMsgType.QtCriticalMsg, QtMsgType.QtFatalMsg):
+            print(text, file=sys.stderr)
+
+    qInstallMessageHandler(_qt_message)
 
     fmt = QSurfaceFormat()
     fmt.setAlphaBufferSize(8)

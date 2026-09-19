@@ -827,13 +827,13 @@ class GuiBridge(QObject):
 
     @Slot()
     def copyLog(self) -> None:
+        from desktop.ui.clipboard import copy_text
+
         text = "\n".join(self._log_lines)
-        clipboard = QGuiApplication.clipboard()
-        if clipboard is None:
-            self.toast.emit("Буфер обмена недоступен", "error")
+        if copy_text(text):
+            self.toast.emit("Журнал скопирован", "info")
             return
-        clipboard.setText(text)
-        self.toast.emit("Журнал скопирован", "info")
+        self.toast.emit("Буфер обмена занят — повторите копирование", "error")
 
     @Slot()
     def checkForUpdate(self) -> None:

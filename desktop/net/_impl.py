@@ -297,7 +297,7 @@ def wait_tun_iface(*, timeout: float = 20.0) -> int | None:
             r = procutil.run(["ip", "-o", "link", "show", "dev", name], timeout=2)
         except (OSError, FileNotFoundError):
             return None
-        if int(getattr(r, "returncode", 1) or 1) == 0 and name in (r.stdout or ""):
+        if getattr(r, "returncode", 1) == 0 and name in (r.stdout or ""):
             return 1
         time.sleep(0.25)
     return None
@@ -330,7 +330,7 @@ def _remove_hidden_tun_adapter(*, log: LogFn = noop) -> bool:
         )
     except OSError:
         return False
-    if int(getattr(r, "returncode", 1) or 1) != 0:
+    if getattr(r, "returncode", 1) != 0:
         return False
     log(f"убираю скрытый TUN «{TUN_IFACE_NAME}»")
     return True
@@ -611,10 +611,10 @@ def _linux_tun_split_rows() -> list[str]:
 def _linux_split_to_row(raw: str) -> str | None:
     """Map `ip route` /1 line to the 5-field Windows-style row."""
     line = (raw or "").strip()
-    m = re.match(r"^(0\.0\.0\.0/1|128\.0\.0\.0/1)\s+(.*)$", line)
+    m = re.match(r"^(0\.0\.0\.0/1|0/1|128\.0\.0\.0/1)\s+(.*)$", line)
     if not m:
         return None
-    dest = m.group(1).split("/")[0]
+    dest = "0.0.0.0" if m.group(1) in {"0.0.0.0/1", "0/1"} else "128.0.0.0"
     via = ""
     dev = ""
     metric = 0
@@ -657,6 +657,17 @@ def _parse_split_row(row: str) -> tuple[str, str, str, str, int] | None:
     except ValueError:
         metric = 9999
     return dest, mask, hop, iface, metric
+
+
+def split_row_is_loopback(row: str) -> bool:
+    """True if a /1 split row is the kill-switch loopback blackhole."""
+    parsed = _parse_split_row(row)
+    if parsed:
+        _dest, _mask, hop, iface, _metric = parsed
+        if hop.startswith("127.") or iface.startswith("127.") or iface == "lo":
+            return True
+    padded = f" {row} "
+    return "127.0.0.1" in row or " lo " in padded
 
 
 def tun_owns_default(rows: list[str] | None = None) -> bool:
@@ -713,8 +724,14 @@ def run_leftover_vpn_default_cmds() -> list[str]:
 
 def reclaim_tun_default(if_idx: int | None = None) -> bool:
     """Strip foreign defaults and reinstall our /1 split. True if TUN owns default."""
+    from desktop.kill_switch import lift_ipv4_blackhole_commands
+
     run_leftover_vpn_default_cmds()
+    run_route_lines(lift_ipv4_blackhole_commands())
     idx = if_idx or wait_tun_iface(timeout=2.0)
+    if idx is None and sys.platform != "win32":
+        # Linux install uses the iface name; index is only a presence check.
+        idx = 1
     if idx:
         ensure_tun_split_default(idx)
     return tun_owns_default()

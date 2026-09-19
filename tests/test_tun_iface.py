@@ -29,6 +29,17 @@ def test_linux_split_route_lines() -> None:
     assert _linux_split_to_row("default via 10.17.0.1 dev enp4s0") is None
 
 
+def test_linux_loopback_split_is_not_tun_owned() -> None:
+    from desktop.net._impl import _linux_split_to_row, split_row_is_loopback, tun_owns_default
+
+    lo = _linux_split_to_row("0.0.0.0/1 dev lo scope link metric 512")
+    hi = _linux_split_to_row("128.0.0.0/1 dev lo scope link metric 512")
+    assert lo is not None and hi is not None
+    assert split_row_is_loopback(lo)
+    assert split_row_is_loopback(hi)
+    assert tun_owns_default([lo, hi]) is False
+
+
 def test_linux_install_tun_split_uses_ip_route(monkeypatch: object) -> None:
     from desktop.tun import install_tun_split_default
 
@@ -63,3 +74,25 @@ def test_linux_remove_stale_tun_deletes_iface(monkeypatch: object) -> None:
     joined = [" ".join(args) for args in calls]
     assert any(row.startswith("ip link show dev " + LINUX_TUN_IFACE_NAME) for row in joined)
     assert any(row.startswith("ip link delete dev " + LINUX_TUN_IFACE_NAME) for row in joined)
+
+
+def test_wait_tun_iface_linux_accepts_returncode_zero(monkeypatch: object) -> None:
+    from desktop.net._impl import wait_tun_iface
+
+    class _R:
+        returncode = 0
+        stdout = "2: ergoms-tun: <UP>"
+
+    monkeypatch.setattr("desktop.net._impl.sys.platform", "linux")
+    monkeypatch.setattr("desktop.net._impl.procutil.run", lambda *_a, **_k: _R())
+    assert wait_tun_iface(timeout=0.2) == 1
+
+
+def test_linux_lift_blackhole_commands(monkeypatch: object) -> None:
+    from desktop.kill_switch import lift_ipv4_blackhole_commands
+
+    monkeypatch.setattr("desktop.killswitch._impl.sys.platform", "linux")
+    cmds = lift_ipv4_blackhole_commands()
+    assert "ip route del 0.0.0.0/1 dev lo" in cmds
+    assert "ip route del 128.0.0.0/1 dev lo" in cmds
+    assert not any(c.startswith("route delete") for c in cmds)

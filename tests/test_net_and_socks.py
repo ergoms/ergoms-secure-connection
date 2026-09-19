@@ -159,7 +159,14 @@ def test_kill_switch_already_applied_skips_ipv6_and_leak(
         "desktop.killswitch._impl._apply_leak_shield",
         lambda **_k: called.append("leak"),
     )
+    lifted: list[str] = []
+    monkeypatch.setattr(
+        "desktop.killswitch._impl.lift_ipv4_blackholes",
+        lambda **_k: lifted.append("lift"),
+    )
     apply(["203.0.113.10"], var_dir=tmp_path, log=logs.append, blackhole=False)
+    assert lifted == ["lift"]
+    assert any("leftover чёрные /1" in msg for msg in logs)
     assert any("маршруты уже стоят" in msg for msg in logs)
     assert called == []
 

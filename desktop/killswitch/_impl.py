@@ -241,6 +241,11 @@ def _win_loopback_index() -> int:
 
 def lift_ipv4_blackhole_commands() -> list[str]:
     """Drop loopback /1 so TUN /1 can own the default without a blackhole race."""
+    if sys.platform != "win32":
+        return [
+            "ip route del 0.0.0.0/1 dev lo",
+            "ip route del 128.0.0.0/1 dev lo",
+        ]
     cmds: list[str] = []
     for dest, mask in BLACKHOLE_V4:
         cmds.append(f"route delete {dest} mask {mask} 127.0.0.1")
@@ -696,6 +701,9 @@ def apply(
     """Pin VPS/Squid. IPv4 loopback /1 only when blackhole=True (fail-closed)."""
     unique = list(dict.fromkeys(allow))
     drop = list(dict.fromkeys(ip for ip in (forget or []) if ip and ip not in unique))
+    if not blackhole and is_applied():
+        log("kill switch: leftover чёрные /1 — снимаю, чтобы TUN владел default")
+        lift_ipv4_blackholes(log=log)
     if is_applied() and not blackhole:
         hop = underlay_gateway(unique[0]) if unique else underlay_gateway("")
         idx = _iface_index_win(unique[0]) if sys.platform == "win32" and unique else None
