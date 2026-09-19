@@ -481,6 +481,12 @@ def install_tun_split_default(
 ) -> list[str]:
     """Send 0.0.0.0/1 + 128.0.0.0/1 into our TUN (same hop as the working build)."""
     gw = hop or "172.19.0.1"
+    if sys.platform != "win32":
+        name = tun_iface_name()
+        return [
+            f"ip route replace 0.0.0.0/1 dev {name}",
+            f"ip route replace 128.0.0.0/1 dev {name}",
+        ]
     return [
         f"route delete 0.0.0.0 mask 128.0.0.0 if {if_idx}",
         f"route delete 128.0.0.0 mask 128.0.0.0 if {if_idx}",
@@ -539,6 +545,9 @@ def remove_tun_split_default(*, windows: bool | None = None) -> list[str]:
     for hop in hops:
         cmds.append(f"ip route del 0.0.0.0/1 via {hop}")
         cmds.append(f"ip route del 128.0.0.0/1 via {hop}")
+    name = tun_iface_name()
+    cmds.append(f"ip route del 0.0.0.0/1 dev {name}")
+    cmds.append(f"ip route del 128.0.0.0/1 dev {name}")
     return cmds
 
 
@@ -551,13 +560,65 @@ def our_tun_split_leftover() -> bool:
 
 def tun_split_rows() -> list[str]:
     """IPv4 /1 rows that steal default (TUN or leftover)."""
-    if sys.platform != "win32":
+    if sys.platform == "win32":
+        out: list[str] = []
+        for raw in route_print_v4().splitlines():
+            if re.match(r"^\s*(0\.0\.0\.0|128\.0\.0\.0)\s+128\.0\.0\.0\s+", raw):
+                out.append(" ".join(raw.split()))
+        return out
+    return _linux_tun_split_rows()
+
+
+def _linux_tun_split_rows() -> list[str]:
+    try:
+        r = procutil.run(["ip", "-4", "route"], timeout=3)
+    except (OSError, FileNotFoundError):
         return []
     out: list[str] = []
-    for raw in route_print_v4().splitlines():
-        if re.match(r"^\s*(0\.0\.0\.0|128\.0\.0\.0)\s+128\.0\.0\.0\s+", raw):
-            out.append(" ".join(raw.split()))
+    for raw in (r.stdout or "").splitlines():
+        row = _linux_split_to_row(raw)
+        if row:
+            out.append(row)
     return out
+
+
+def _linux_split_to_row(raw: str) -> str | None:
+    """Map `ip route` /1 line to the 5-field Windows-style row."""
+    line = (raw or "").strip()
+    m = re.match(r"^(0\.0\.0\.0/1|128\.0\.0\.0/1)\s+(.*)$", line)
+    if not m:
+        return None
+    dest = m.group(1).split("/")[0]
+    via = ""
+    dev = ""
+    metric = 0
+    parts = m.group(2).split()
+    i = 0
+    while i < len(parts):
+        tok = parts[i]
+        nxt = parts[i + 1] if i + 1 < len(parts) else ""
+        if tok == "via" and nxt:
+            via = nxt
+            i += 2
+            continue
+        if tok == "dev" and nxt:
+            dev = nxt
+            i += 2
+            continue
+        if tok == "metric" and nxt:
+            try:
+                metric = int(nxt)
+            except ValueError:
+                metric = 0
+            i += 2
+            continue
+        i += 1
+    hop = via
+    if not hop and _is_tun_iface(dev):
+        hop = tun_split_hops()[0]
+    hop = hop or "0.0.0.0"
+    iface = dev or hop
+    return f"{dest} 128.0.0.0 {hop} {iface} {metric}"
 
 
 def _parse_split_row(row: str) -> tuple[str, str, str, str, int] | None:
@@ -575,8 +636,6 @@ def _parse_split_row(row: str) -> tuple[str, str, str, str, int] | None:
 def tun_owns_default(rows: list[str] | None = None) -> bool:
     """True if both /1 halves go via our TUN and no foreign /1 has a better metric."""
     if rows is None:
-        if sys.platform != "win32":
-            return False
         rows = tun_split_rows()
     have_lo = have_hi = False
     our_metrics: list[int] = []
@@ -588,8 +647,13 @@ def tun_owns_default(rows: list[str] | None = None) -> bool:
         dest, mask, hop, iface, metric = parsed
         if mask != "128.0.0.0":
             continue
-        ours = hop.startswith(TUN_ADDR_PREFIX) or iface.startswith(TUN_ADDR_PREFIX)
-        loop = hop.startswith("127.") or iface.startswith("127.")
+        ours = (
+            hop.startswith(TUN_ADDR_PREFIX)
+            or iface.startswith(TUN_ADDR_PREFIX)
+            or _is_tun_iface(hop)
+            or _is_tun_iface(iface)
+        )
+        loop = hop.startswith("127.") or iface.startswith("127.") or iface == "lo"
         if ours:
             if dest == "0.0.0.0":
                 have_lo = True
@@ -643,6 +707,7 @@ def tun_split_installed(if_idx: int) -> bool:
         ours = (
             hop.startswith(TUN_ADDR_PREFIX)
             or iface.startswith(TUN_ADDR_PREFIX)
+            or _is_tun_iface(iface)
             or iface == token
             or row.endswith(f" {token}")
         )

@@ -283,20 +283,25 @@ class ProbeOps:
     def _check_tun_owns_default(self) -> None:
         """Loopback /1 next to TUN /1 blackholes the browser. TUN must win."""
         from desktop.kill_switch import lift_ipv4_blackholes
-        from desktop.tun import tun_owns_default, tun_split_rows
+        from desktop.tun import reclaim_tun_default, tun_owns_default, tun_split_rows
 
         rows = tun_split_rows()
-        loop = [r for r in rows if "127.0.0.1" in r]
-        tun = [r for r in rows if "172.19." in r]
+        loop = [r for r in rows if "127.0.0.1" in r or " lo " in f" {r} "]
         if loop:
             self.log("чёрные /1 на loopback мешают TUN — снимаю, чтобы браузер шёл в VPN")
             lift_ipv4_blackholes(log=self.log)
             rows = tun_split_rows()
-            tun = [r for r in rows if "172.19." in r]
         if tun_owns_default(rows):
-            self.log("TUN владеет default: " + " | ".join(tun[:2]))
-        else:
-            self.log("TUN не владеет 0.0.0.0/1 — браузер пойдёт мимо VPN")
+            self.log("TUN владеет default: " + " | ".join(rows[:2]))
+            return
+        if procutil.is_admin():
+            self.log("TUN auto_route не поставил /1 — ставлю сам")
+            reclaim_tun_default()
+            rows = tun_split_rows()
+            if tun_owns_default(rows):
+                self.log("TUN владеет default: " + " | ".join(rows[:2]))
+                return
+        self.log("TUN не владеет 0.0.0.0/1 — браузер пойдёт мимо VPN")
 
 
     def _seal_on_dead_exit(self) -> None:

@@ -28,6 +28,7 @@ from desktop.git_proxy import (
     set_git_http_proxy,
     write_cli_env,
 )
+from desktop.cursor_proxy import clear_cursor_http_proxy, set_cursor_http_proxy
 from desktop.paths import is_frozen, self_command
 from desktop.sys_proxy import (
     disable_browser_proxy,
@@ -378,6 +379,13 @@ class IntegrationOps:
                 disable_linux_env_proxy(self.paths.env_proxy_backup, log=self.log)
             except Exception as exc:  # noqa: BLE001
                 self.log(f"env proxy off: {exc}")
+            try:
+                clear_cursor_http_proxy(
+                    log=self.log,
+                    backup_path=self.paths.cursor_proxy_backup,
+                )
+            except Exception as exc:  # noqa: BLE001
+                self.log(f"Cursor proxy off: {exc}")
             git_marked = (
                 self.paths.git_proxy_backup.is_file()
                 or self.paths.cli_env.is_file()
@@ -511,6 +519,14 @@ class IntegrationOps:
                 self.paths.env_proxy_backup,
                 log=self.log,
             )
+            try:
+                set_cursor_http_proxy(
+                    f"http://127.0.0.1:{http_port}",
+                    log=self.log,
+                    backup_path=self.paths.cursor_proxy_backup,
+                )
+            except Exception as exc:  # noqa: BLE001
+                self.log(f"Cursor proxy: {exc}")
             self._enable_rustdesk_guards(cfg)
             return
         pac_url = self.start_pac_server(cfg, proxy_port=http_port)

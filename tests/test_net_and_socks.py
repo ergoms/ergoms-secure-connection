@@ -859,6 +859,87 @@ def test_git_and_docker_default_to_tun() -> None:
     assert resolve_git_integration(tun_cfg) == "off"
 
 
+def test_linux_office_git_uses_http_bridge(monkeypatch) -> None:
+    office = {
+        "corporate": True,
+        "corporate_proxy": "10.16.0.8:3128",
+        "tun": {"enabled": True},
+    }
+    monkeypatch.setattr("desktop.config_io.sys.platform", "linux")
+    assert resolve_git_integration(office) == "http"
+    monkeypatch.setattr("desktop.config_io.sys.platform", "win32")
+    assert resolve_git_integration(office) == "tun"
+    monkeypatch.setattr("desktop.config_io.sys.platform", "linux")
+    home = {"corporate": False, "tun": {"enabled": True}}
+    assert resolve_git_integration(home) == "tun"
+
+
+def test_linux_office_static_proxy_is_manual_not_pac(monkeypatch, tmp_path) -> None:
+    from types import SimpleNamespace
+
+    from desktop.sys_proxy import enable_browser_static_proxy
+
+    monkeypatch.setattr("desktop.sys_proxy.sys.platform", "linux")
+    calls: list[list[str]] = []
+
+    def fake_run(args, **_kw):
+        calls.append(list(args))
+        return SimpleNamespace(returncode=0, stdout="'none'\n", stderr="")
+
+    monkeypatch.setattr("desktop.sys_proxy.procutil.run", fake_run)
+    enable_browser_static_proxy(1088, ["*.lan"], tmp_path / "proxy.bak")
+    joined = [" ".join(c) for c in calls]
+    assert any("mode manual" in j for j in joined)
+    assert any("host 127.0.0.1" in j for j in joined)
+    assert any("port 1088" in j for j in joined)
+    assert not any("mode auto" in j for j in joined)
+    assert not any("proxy.pac" in j for j in joined)
+
+
+def test_linux_gsettings_no_schemas_is_skipped(monkeypatch, tmp_path) -> None:
+    from types import SimpleNamespace
+
+    from desktop.sys_proxy import enable_browser_static_proxy
+
+    monkeypatch.setattr("desktop.sys_proxy.sys.platform", "linux")
+    logs: list[str] = []
+
+    def fake_run(args, **_kw):
+        return SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="No schemas installed\n",
+        )
+
+    monkeypatch.setattr("desktop.sys_proxy.procutil.run", fake_run)
+    enable_browser_static_proxy(1088, [], tmp_path / "proxy.bak", log=logs.append)
+    assert logs == []
+
+
+def test_cursor_http_proxy_upsert_and_restore(tmp_path, monkeypatch) -> None:
+    from desktop.cursor_proxy import (
+        clear_cursor_http_proxy,
+        set_cursor_http_proxy,
+        upsert_http_proxy,
+    )
+
+    monkeypatch.setattr("desktop.cursor_proxy.sys.platform", "linux")
+    settings = tmp_path / ".config" / "Cursor" / "User" / "settings.json"
+    settings.parent.mkdir(parents=True)
+    settings.write_text('{\n    "editor.fontSize": 14\n}\n', encoding="utf-8")
+    monkeypatch.setattr(
+        "desktop.cursor_proxy.cursor_settings_path", lambda: settings
+    )
+    bak = tmp_path / "cursor.bak.json"
+    set_cursor_http_proxy("http://127.0.0.1:1088", backup_path=bak)
+    text = settings.read_text(encoding="utf-8")
+    assert "127.0.0.1:1088" in text
+    assert "editor.fontSize" in text
+    clear_cursor_http_proxy(backup_path=bak)
+    assert settings.read_text(encoding="utf-8") == '{\n    "editor.fontSize": 14\n}\n'
+    assert upsert_http_proxy("{}\n", "http://127.0.0.1:1088").count("http.proxy") == 1
+
+
 def test_write_cli_env_tun_unsets_proxy(tmp_path, monkeypatch) -> None:
     from desktop.git_proxy import write_cli_env
 
@@ -1096,6 +1177,11 @@ def test_tun_owns_default_from_rows() -> None:
         "128.0.0.0 128.0.0.0 172.19.0.1 172.19.0.2 1",
     ]
     assert tun_owns_default(ours) is True
+    linux = [
+        "0.0.0.0 128.0.0.0 172.19.3.1 ergoms-tun 0",
+        "128.0.0.0 128.0.0.0 172.19.3.1 ergoms-tun 0",
+    ]
+    assert tun_owns_default(linux) is True
     loop = [
         "0.0.0.0 128.0.0.0 0.0.0.0 127.0.0.1 512",
         "128.0.0.0 128.0.0.0 0.0.0.0 127.0.0.1 512",

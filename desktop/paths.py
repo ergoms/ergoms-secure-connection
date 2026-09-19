@@ -188,6 +188,7 @@ class Paths:
         self.docker_run_sh = self.var_dir / "docker-run.sh"
         self.docker_proxy_backup = self.var_dir / "docker-proxy.bak.json"
         self.git_proxy_backup = self.var_dir / "gitproxy.bak.json"
+        self.cursor_proxy_backup = self.var_dir / "cursorproxy.bak.json"
         self.rustdesk_opt_backup = self.var_dir / "rustdesk-opt.bak.json"
         self.watchdog_pid = self.var_dir / "watchdog.pid"
 

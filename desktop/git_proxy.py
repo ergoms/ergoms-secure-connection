@@ -70,6 +70,8 @@ def _gitconfig_looks_dirty() -> bool:
         if not text:
             continue
         low = text.lower()
+        if re.search(r"(?im)^\s*proxy\s*=\s*$", text):
+            return True
         if any(f":{port}" in low for port in _BRIDGE_PORTS) and (
             "127.0.0.1" in low or "localhost" in low or "[::1]" in low
         ):
@@ -266,7 +268,7 @@ def _keys_to_clear(pairs: list[tuple[str, str]], *, keep_restored_proxy: bool) -
         low = key.lower()
         drop = False
         if low in ("http.proxy", "https.proxy"):
-            drop = _is_local_bridge_proxy(val)
+            drop = _is_local_bridge_proxy(val) or not (val or "").strip()
         elif "proxy" in low and _is_local_bridge_proxy(val):
             drop = True
         elif "insteadof" in low and instead_re.search(f"{key} {val}"):

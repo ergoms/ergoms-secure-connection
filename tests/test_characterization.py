@@ -507,6 +507,8 @@ def test_linux_kill_switch_install_blackhole() -> None:
     cmds = _cmds_linux_install(["203.0.113.10"], "10.193.0.1", blackhole=True)
     assert "ip route replace 0.0.0.0/1 dev lo metric 512" in cmds
     assert "ip route replace 203.0.113.10/32 via 10.193.0.1" in cmds
+    assert "ip -6 route replace unreachable ::/1 metric 512" in cmds
+    assert "ip -6 route replace ::/1 dev lo metric 512" not in cmds
 
 
 def test_build_pac_full_and_github() -> None:
@@ -722,8 +724,11 @@ def test_linux_kill_switch_install_and_remove_are_stable() -> None:
     install = _cmds_linux_install(["203.0.113.10"], "10.193.0.1", blackhole=False)
     assert "ip route del 0.0.0.0/1 dev lo" in install
     assert "ip route replace 203.0.113.10/32 via 10.193.0.1" in install
+    assert "ip -6 route replace unreachable ::/1 metric 512" in install
+    assert "ip -6 route replace ::/1 dev lo metric 512" not in install
     remove = _cmds_linux_remove(["203.0.113.10"], "10.193.0.1")
     assert "ip route del 203.0.113.10/32" in remove
+    assert "ip -6 route del ::/1" in remove
     assert "ip -6 route del ::/1 dev lo" in remove
 
 

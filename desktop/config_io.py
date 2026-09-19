@@ -7,6 +7,7 @@ import binascii
 import json
 import os
 import shutil
+import sys
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Callable
@@ -772,10 +773,17 @@ def get_git_via(cfg: dict[str, Any] | None = None) -> str:
 
 
 def resolve_git_integration(cfg: dict[str, Any] | None = None) -> str:
-    """Git follows TUN. HTTP-bridge mode is no longer offered in the UI."""
-    if get_tun_enabled(cfg):
-        return "tun"
-    return "off"
+    """Git follows TUN, except office Linux where CLI already uses :1088.
+
+    Empty git ``http.proxy`` overrides ``http_proxy`` from /etc/environment, so
+    HTTPS git skips the local bridge. Office DNS then returns AAAA and the
+    IPv6 /1→lo pin blackholes GitHub while curl via :1088 still works.
+    """
+    if not get_tun_enabled(cfg):
+        return "off"
+    if sys.platform != "win32" and resolve_corporate_proxy(cfg):
+        return "http"
+    return "tun"
 
 
 def get_docker_proxy_enabled(cfg: dict[str, Any] | None = None) -> bool:

@@ -232,6 +232,85 @@ def disable_linux_env_proxy(backup_path: Path, log: LogFn = noop) -> None:
     log("Системный proxy восстановлен (/etc/environment, profile.d удалён)")
 
 
+def _session_user() -> str:
+    user = (
+        (os.environ.get("SUDO_USER") or "").strip()
+        or (os.environ.get("USER") or "").strip()
+        or (os.environ.get("LOGNAME") or "").strip()
+    )
+    return user
+
+
+def _gsettings_prefix() -> list[str]:
+    """Talk to the desktop user's dconf, not root's, when we run via sudo."""
+    if not hasattr(os, "geteuid") or os.geteuid() != 0:
+        return ["gsettings"]
+    user = _session_user()
+    if not user or user == "root":
+        return ["gsettings"]
+    try:
+        import pwd
+
+        info = pwd.getpwnam(user)
+    except (ImportError, KeyError):
+        return ["gsettings"]
+    runtime = (os.environ.get("XDG_RUNTIME_DIR") or "").strip() or f"/run/user/{info.pw_uid}"
+    dbus = (os.environ.get("DBUS_SESSION_BUS_ADDRESS") or "").strip() or (
+        f"unix:path={runtime}/bus"
+    )
+    return [
+        "sudo",
+        "-u",
+        user,
+        "env",
+        f"HOME={info.pw_dir}",
+        f"XDG_RUNTIME_DIR={runtime}",
+        f"DBUS_SESSION_BUS_ADDRESS={dbus}",
+        "gsettings",
+    ]
+
+
+def _gsettings(*args: str):
+    return procutil.run([*_gsettings_prefix(), *args])
+
+
+def _gsettings_get(schema: str, key: str) -> str:
+    r = _gsettings("get", schema, key)
+    if r.returncode != 0 or not r.stdout:
+        return ""
+    return r.stdout.strip().strip("'\"")
+
+
+def _gnome_ignore_hosts(bypass_hosts: list[str] | None) -> str:
+    items = ["localhost", "127.0.0.1", "::1"]
+    seen = {x.lower() for x in items}
+    for raw in bypass_hosts or []:
+        host = str(raw).strip()
+        if not host or host.lower() in seen:
+            continue
+        seen.add(host.lower())
+        items.append(host)
+    inner = ", ".join("'" + h.replace("'", r"\'") + "'" for h in items)
+    return f"[{inner}]"
+
+
+def _backup_gnome_proxy(backup_path: Path) -> None:
+    if backup_path.is_file():
+        return
+    snap = {
+        "mode": _gsettings_get("org.gnome.system.proxy", "mode") or "none",
+        "autoconfig_url": _gsettings_get("org.gnome.system.proxy", "autoconfig-url"),
+        "use_same_proxy": _gsettings_get("org.gnome.system.proxy", "use-same-proxy"),
+        "ignore_hosts": _gsettings_get("org.gnome.system.proxy", "ignore-hosts"),
+        "http_host": _gsettings_get("org.gnome.system.proxy.http", "host"),
+        "http_port": _gsettings_get("org.gnome.system.proxy.http", "port"),
+        "https_host": _gsettings_get("org.gnome.system.proxy.https", "host"),
+        "https_port": _gsettings_get("org.gnome.system.proxy.https", "port"),
+    }
+    backup_path.parent.mkdir(parents=True, exist_ok=True)
+    backup_path.write_text(json.dumps(snap, indent=2), encoding="utf-8")
+
+
 def force_direct_browser_proxy(backup_path: Path, log: LogFn = noop) -> None:
     if sys.platform == "win32":
         from desktop.win_proxy import force_wininet_direct
@@ -247,18 +326,34 @@ def enable_browser_static_proxy(
     backup_path: Path,
     log: LogFn = noop,
 ) -> None:
+    """Office: fixed 127.0.0.1:port — no PAC. Cursor/Chrome read GNOME live."""
     if sys.platform == "win32":
         from desktop.win_proxy import enable_browser_static_proxy as win_enable
 
         win_enable(http_port, bypass_hosts, backup_path, log=log)
         return
-    enable_browser_pac(
-        http_port,
-        "full",
-        len(bypass_hosts or []),
-        backup_path,
-        log=log,
+    _backup_gnome_proxy(backup_path)
+    port = str(int(http_port))
+    r = _gsettings("set", "org.gnome.system.proxy", "mode", "manual")
+    if r.returncode != 0:
+        err = f"{getattr(r, 'stderr', '') or ''} {getattr(r, 'stdout', '') or ''}".lower()
+        if "no schemas" not in err:
+            log("gsettings недоступен — Cursor: http.proxy = 127.0.0.1:" + port)
+        return
+    _gsettings("set", "org.gnome.system.proxy", "autoconfig-url", "")
+    _gsettings("set", "org.gnome.system.proxy", "use-same-proxy", "true")
+    for proto in ("http", "https"):
+        schema = f"org.gnome.system.proxy.{proto}"
+        _gsettings("set", schema, "host", "127.0.0.1")
+        _gsettings("set", schema, "port", port)
+    _gsettings("set", "org.gnome.system.proxy.http", "enabled", "true")
+    _gsettings(
+        "set",
+        "org.gnome.system.proxy",
+        "ignore-hosts",
+        _gnome_ignore_hosts(bypass_hosts),
     )
+    log(f"GNOME прокси 127.0.0.1:{port} (manual, без PAC)")
 
 
 def enable_browser_pac(
@@ -284,37 +379,12 @@ def enable_browser_pac(
         return
 
     pac_url = (pac_url or "").strip() or f"http://127.0.0.1:{http_port}/proxy.pac"
-    # Backup previous GNOME mode if any
-    if not backup_path.is_file():
-        mode = "none"
-        old_url = ""
-        r = procutil.run(["gsettings", "get", "org.gnome.system.proxy", "mode"])
-        if r.returncode == 0 and r.stdout:
-            mode = r.stdout.strip().strip("'\"")
-        r2 = procutil.run(
-            ["gsettings", "get", "org.gnome.system.proxy", "autoconfig-url"]
-        )
-        if r2.returncode == 0 and r2.stdout:
-            old_url = r2.stdout.strip().strip("'\"")
-        backup_path.parent.mkdir(parents=True, exist_ok=True)
-        backup_path.write_text(
-            json.dumps({"mode": mode, "autoconfig_url": old_url}, indent=2),
-            encoding="utf-8",
-        )
-
-    r = procutil.run(["gsettings", "set", "org.gnome.system.proxy", "mode", "auto"])
+    _backup_gnome_proxy(backup_path)
+    r = _gsettings("set", "org.gnome.system.proxy", "mode", "auto")
     if r.returncode != 0:
         log("gsettings недоступен — только CLI: source ./var/cli.env")
         return
-    procutil.run(
-        [
-            "gsettings",
-            "set",
-            "org.gnome.system.proxy",
-            "autoconfig-url",
-            pac_url,
-        ]
-    )
+    _gsettings("set", "org.gnome.system.proxy", "autoconfig-url", pac_url)
     if scope == "full":
         log(f"GNOME PAC FULL = {pac_url} (bypass={bypass_count})")
     else:
@@ -333,22 +403,56 @@ def disable_browser_proxy(backup_path: Path, log: LogFn = noop) -> None:
             b = json.loads(backup_path.read_text(encoding="utf-8-sig"))
             mode = str(b.get("mode") or "none")
             url = str(b.get("autoconfig_url") or "")
-            procutil.run(["gsettings", "set", "org.gnome.system.proxy", "mode", mode])
+            _gsettings("set", "org.gnome.system.proxy", "mode", mode)
             if url:
-                procutil.run(
-                    [
-                        "gsettings",
-                        "set",
-                        "org.gnome.system.proxy",
-                        "autoconfig-url",
-                        url,
-                    ]
+                _gsettings("set", "org.gnome.system.proxy", "autoconfig-url", url)
+            if b.get("http_host"):
+                _gsettings(
+                    "set",
+                    "org.gnome.system.proxy.http",
+                    "host",
+                    str(b.get("http_host") or ""),
+                )
+            if b.get("http_port"):
+                _gsettings(
+                    "set",
+                    "org.gnome.system.proxy.http",
+                    "port",
+                    str(b.get("http_port") or "0"),
+                )
+            if b.get("https_host"):
+                _gsettings(
+                    "set",
+                    "org.gnome.system.proxy.https",
+                    "host",
+                    str(b.get("https_host") or ""),
+                )
+            if b.get("https_port"):
+                _gsettings(
+                    "set",
+                    "org.gnome.system.proxy.https",
+                    "port",
+                    str(b.get("https_port") or "0"),
+                )
+            if b.get("use_same_proxy"):
+                _gsettings(
+                    "set",
+                    "org.gnome.system.proxy",
+                    "use-same-proxy",
+                    str(b.get("use_same_proxy") or "false"),
+                )
+            if b.get("ignore_hosts"):
+                _gsettings(
+                    "set",
+                    "org.gnome.system.proxy",
+                    "ignore-hosts",
+                    str(b.get("ignore_hosts")),
                 )
             backup_path.unlink(missing_ok=True)
             log("GNOME proxy restored from backup")
             return
         except Exception:  # noqa: BLE001
             pass
-    procutil.run(["gsettings", "set", "org.gnome.system.proxy", "mode", "none"])
+    _gsettings("set", "org.gnome.system.proxy", "mode", "none")
     backup_path.unlink(missing_ok=True)
     log("GNOME proxy disabled")

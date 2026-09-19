@@ -309,9 +309,13 @@ def _cmds_win_remove(allow: list[str], gw: str | None) -> list[str]:
 def _cmds_linux_install(
     allow: list[str], gw: str | None, *, blackhole: bool = False
 ) -> list[str]:
+    # unreachable (not lo): Happy Eyeballs fails over to IPv4 immediately.
+    # ``dev lo`` accepted IPv6 and hung git/ssh to GitHub.
     cmds = [
-        "ip -6 route replace ::/1 dev lo metric 512",
-        "ip -6 route replace 8000::/1 dev lo metric 512",
+        "ip -6 route del ::/1 dev lo",
+        "ip -6 route del 8000::/1 dev lo",
+        "ip -6 route replace unreachable ::/1 metric 512",
+        "ip -6 route replace unreachable 8000::/1 metric 512",
     ]
     if blackhole:
         cmds[0:0] = [
@@ -336,6 +340,8 @@ def _cmds_linux_remove(allow: list[str], gw: str | None) -> list[str]:
     cmds = [
         "ip route del 0.0.0.0/1 dev lo",
         "ip route del 128.0.0.0/1 dev lo",
+        "ip -6 route del ::/1",
+        "ip -6 route del 8000::/1",
         "ip -6 route del ::/1 dev lo",
         "ip -6 route del 8000::/1 dev lo",
     ]

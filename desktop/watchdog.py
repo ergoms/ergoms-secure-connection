@@ -474,8 +474,6 @@ class TunnelWatchdog:
             self.log(f"watchdog: reverse-ssh: {exc}")
 
     def _ensure_tun_default(self) -> None:
-        if sys.platform != "win32":
-            return
         if not (get_tun_enabled() or get_kill_switch()):
             return
         from desktop.config_io import get_server_host, resolve_corporate_proxy
