@@ -12,6 +12,7 @@ curl -fsSL https://raw.githubusercontent.com/ergoms/ergoms-secure-connection/mai
 ergoms-sc                 # окно
 ergoms-sc on              # подключить
 ergoms-sc off             # отключить
+ergoms-sc version         # номер сборки
 ergoms-sc install-service # автозапуск (systemd)
 ```
 

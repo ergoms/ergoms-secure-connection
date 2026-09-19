@@ -178,6 +178,7 @@ cat <<EOF
   ergoms-sc                 окно
   ergoms-sc on              подключить
   ergoms-sc off             отключить
+  ergoms-sc version         номер сборки
   ergoms-sc install-service автозапуск (systemd)
 
 Конфиг (без sudo): ~/.local/share/${APP_ID}/config.json

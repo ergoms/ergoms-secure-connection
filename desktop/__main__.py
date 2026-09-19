@@ -39,6 +39,7 @@ COMMANDS = (
     "decrypt",
     "gui",
     "help",
+    "version",
 )
 
 
@@ -52,6 +53,13 @@ def _run_connect(argv: list[str], *, via: str = "socks") -> int:
     from lib.connect import main as connect_main
 
     return int(connect_main(argv, via=via))
+
+
+def _show_version() -> int:
+    from desktop import __version__
+
+    print(f"ERGOMS SECURE CONNECTION {__version__}")
+    return 0
 
 
 def _show_help() -> int:
@@ -84,6 +92,7 @@ def _show_help() -> int:
   decrypt [IN]         расшифровать в config.json
   gui                  окно Qt Quick (нужен дисплей, poetry install --extras gui)
   help
+  version              номер сборки
 
 Транспорт: офис — VLESS+Reality через Squid; дом — AmneziaWG
 
@@ -285,6 +294,8 @@ def _run_cli(cmd: str, rest: list[str]) -> int:
             return run_watch_forever(client, log=log, daemon=daemon)
         elif cmd in ("help", "-h", "--help"):
             return _show_help()
+        elif cmd in ("version", "-v", "--version"):
+            return _show_version()
         else:
             print(f"unknown command: {cmd}", file=sys.stderr)
             return _show_help() or 2
@@ -398,6 +409,8 @@ def main(argv: list[str] | None = None) -> int:
         return int(pac_main(argv[1:]))
     if head in ("help", "-h", "--help"):
         return _show_help()
+    if head in ("version", "-v", "--version"):
+        return _show_version()
     if head == "gui":
         return _run_gui()
     if head in COMMANDS or head in ("download-sing-box", "sing-box"):

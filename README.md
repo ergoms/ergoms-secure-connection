@@ -58,6 +58,7 @@ sudo bash "ERGOMS SECURE CONNECTION/install.sh"
 ergoms-sc                 # окно
 ergoms-sc on              # подключить
 ergoms-sc off             # отключить
+ergoms-sc version         # номер сборки
 ergoms-sc install-service # автозапуск
 ```
 
@@ -102,6 +103,7 @@ nano ~/.local/share/ergoms-secure-connection/config.json
 | `install-service` / `uninstall-service` | служба VPN (Windows / Linux) |
 | `gui` | Окно |
 | `help` | Справка |
+| `version` | Номер сборки |
 
 Из репозитория (разработка): `./ergoms-secure-connection.sh …` / `.\ergoms-secure-connection.ps1 …`. Служба: `install-service`. VPS: `./deploy.sh`.
 
